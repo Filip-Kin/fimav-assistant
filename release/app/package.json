@@ -34,6 +34,5 @@
         "link-modules": "node -r ts-node/register ../../.erb/scripts/link-modules.ts"
     },
     "dependencies": {
-        "better-sqlite3": "^13.0.3"
     }
 }
