@@ -630,6 +630,12 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         autoCut: store.get('autoAv.autoCut', false),
     });
 
+    // FMS moved to a new event and AutoAV filled in its name: refresh an open
+    // settings dialog so it doesn't save the old name back.
+    AutoAV.Instance.on('eventNameChanged', () => {
+        window?.webContents.send('autoav:settings', autoAvSettings());
+    });
+
     ipcMain.on('autoav:getSettings', (event) => {
         event.reply('autoav:settings', autoAvSettings());
     });

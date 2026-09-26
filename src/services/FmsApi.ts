@@ -61,6 +61,11 @@ function resultsEndpoint(
     }
 }
 
+export interface FmsEventInfo {
+    eventCode: string;
+    eventName: string;
+}
+
 export default class FmsApi {
     private static instance: FmsApi;
 
@@ -95,6 +100,27 @@ export default class FmsApi {
             return { teams: { red, blue }, hasCard };
         } catch (err) {
             log.warn(`FmsApi: failed to fetch ${endpoint}`, err);
+            return null;
+        }
+    }
+
+    /**
+     * The event FMS is currently set up for. Best-effort: null on any error or
+     * when FMS has no event code yet.
+     */
+    // eslint-disable-next-line class-methods-use-this
+    public async getEventInfo(): Promise<FmsEventInfo | null> {
+        const endpoint = '/api/v1.0/audience/get/GetEventInfo';
+        try {
+            const resp = await nodeFetch(`${FMS_BASE}${endpoint}`, {
+                timeout: 5000,
+            });
+            if (!resp.ok) return null;
+            const data = (await resp.json()) as Partial<FmsEventInfo>;
+            const eventCode = (data.eventCode ?? '').trim();
+            if (!eventCode) return null;
+            return { eventCode, eventName: (data.eventName ?? '').trim() };
+        } catch {
             return null;
         }
     }

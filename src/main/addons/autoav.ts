@@ -35,8 +35,14 @@ import { invokeExpectResponse, invokeLog } from '../window_components/signalR';
 
 // Events AutoAV emits to the renderer: a human status line, a structured
 // status snapshot, a single match-record upsert, and the full match list for
-// the current event folder.
-export type AutoAVEvent = 'info' | 'status' | 'match' | 'matches';
+// the current event folder, plus a notice that the event name was auto-filled
+// from FMS (so the settings dialog can reload it).
+export type AutoAVEvent =
+    | 'info'
+    | 'status'
+    | 'match'
+    | 'matches'
+    | 'eventNameChanged';
 
 export default class AutoAV {
     private static instance: AutoAV;
@@ -91,6 +97,8 @@ export default class AutoAV {
 
     // Periodic vMix reachability poll
     private vmixPollTimer: ReturnType<typeof setInterval> | null = null;
+
+    private fmsEventTimer: ReturnType<typeof setInterval> | null = null;
 
     // vMix's configured recording folder, cached from the poll so emitStatus can
     // show the exact save path before the first recording.
@@ -298,6 +306,9 @@ export default class AutoAV {
         // Begin polling vMix reachability for the status tab
         this.startVmixPoll();
 
+        // Follow the event FMS is set up for
+        this.startFmsEventPoll();
+
         // Build a connection to the SignalR Hub
         this.hubConnection = new HubConnectionBuilder()
             .withUrl('http://10.0.100.5/infrastructureHub')
@@ -434,6 +445,7 @@ export default class AutoAV {
         this.hubConnection.onreconnected(() => {
             this.status.fmsConnected = true;
             this.emitStatus();
+            this.checkFmsEvent();
         });
         this.hubConnection.onclose(() => {
             this.status.fmsConnected = false;
@@ -452,6 +464,7 @@ export default class AutoAV {
             .then(() => {
                 this.status.fmsConnected = true;
                 this.emitStatus();
+                this.checkFmsEvent();
                 this.logFMS(
                     'FMS Connection Established!',
                     undefined,
@@ -486,6 +499,7 @@ export default class AutoAV {
         this.emitter.emit('info', 'Service Stopped');
         // Stop polling vMix
         this.stopVmixPoll();
+        this.stopFmsEventPoll();
         this.status.running = false;
         this.status.fmsConnected = false;
         this.status.vmix = { reachable: false, recording: false };
@@ -712,6 +726,42 @@ export default class AutoAV {
             clearInterval(this.vmixPollTimer);
             this.vmixPollTimer = null;
         }
+    }
+
+    // Poll FMS for its event so a new event renames recordings without anyone
+    // touching the settings dialog.
+    private startFmsEventPoll() {
+        this.stopFmsEventPoll();
+        this.fmsEventTimer = setInterval(() => this.checkFmsEvent(), 30000);
+        this.checkFmsEvent();
+    }
+
+    private stopFmsEventPoll() {
+        if (this.fmsEventTimer) {
+            clearInterval(this.fmsEventTimer);
+            this.fmsEventTimer = null;
+        }
+    }
+
+    // When FMS reports a different event code than the one the name was last
+    // filled from, replace the event name with FMS's. Same code = leave the
+    // name alone, so a volunteer's hand edit survives until the next event.
+    private async checkFmsEvent() {
+        const info = await FmsApi.Instance.getEventInfo();
+        if (!info) return;
+        const store = getStore();
+        if (info.eventCode === store.get('autoAv.lastFmsEventCode', '')) return;
+
+        const name = info.eventName || info.eventCode;
+        const previous = store.get('autoAv.eventNameOverride', '');
+        store.set('autoAv.lastFmsEventCode', info.eventCode);
+        store.set('autoAv.eventNameOverride', name);
+        this.log(
+            `FMS event is now ${info.eventCode}; event name "${previous}" -> "${name}"`
+        );
+        this.emitStatus();
+        this.emitMatches();
+        this.emitter.emit('eventNameChanged', name);
     }
 
     // Read vMix's configured recording folder from its .NET user.config (the

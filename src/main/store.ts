@@ -30,6 +30,10 @@ export type AppConfig = {
         fileNameMode: 'in-season' | 'off-season';
         // Manual event name; when set it overrides whatever FMS reports
         eventNameOverride: string;
+        // FMS event code the name was last auto-filled from. The name is only
+        // replaced again when FMS reports a different code, so a hand edit
+        // sticks for the rest of the event.
+        lastFmsEventCode: string;
         // Destination folder for renamed match videos; blank = alongside the
         // vMix recording
         saveFolder: string;
@@ -110,6 +114,10 @@ export function createStore(): Store<AppConfig> {
                         default: 'in-season',
                     },
                     eventNameOverride: {
+                        type: 'string',
+                        default: '',
+                    },
+                    lastFmsEventCode: {
                         type: 'string',
                         default: '',
                     },
