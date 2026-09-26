@@ -18,10 +18,15 @@ interface FmsTeamResult {
     teamName?: string;
     cardEffectiveStatus?: string;
 }
+// Qual results put cardEffectiveStatus on each team. Playoff and final results
+// put it on the alliance instead, and add a team4 slot (a backup robot; empty
+// slots come back with teamNumber 0).
 interface FmsAllianceData {
+    cardEffectiveStatus?: string;
     team1?: FmsTeamResult;
     team2?: FmsTeamResult;
     team3?: FmsTeamResult;
+    team4?: FmsTeamResult;
 }
 interface FmsMatchResults {
     redAllianceData?: FmsAllianceData;
@@ -35,13 +40,18 @@ function normalizeCard(status?: string): MatchTeam['card'] {
 
 function mapAlliance(alliance?: FmsAllianceData): MatchTeam[] {
     if (!alliance) return [];
-    return [alliance.team1, alliance.team2, alliance.team3]
-        .filter((t): t is FmsTeamResult => !!t && typeof t.teamNumber === 'number')
+    return [alliance.team1, alliance.team2, alliance.team3, alliance.team4]
+        .filter(
+            (t): t is FmsTeamResult =>
+                !!t && typeof t.teamNumber === 'number' && t.teamNumber > 0
+        )
         .map((t) => ({
             teamNumber: t.teamNumber as number,
             // FMS pads some names with spaces (" Dexter Dreadbots ")
             teamName: (t.teamName ?? '').trim() || null,
-            card: normalizeCard(t.cardEffectiveStatus),
+            card: normalizeCard(
+                t.cardEffectiveStatus ?? alliance.cardEffectiveStatus
+            ),
         }));
 }
 
