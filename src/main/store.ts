@@ -44,6 +44,26 @@ export type AppConfig = {
         // producing a clean uploadable copy in a "Cut" subfolder.
         autoCut: boolean;
     };
+    // YouTube + TBA upload settings for the Upload tab. Persisted here and also
+    // pushed to the youtube-tba-upload sidecar via POST /api/upload/config.
+    upload: {
+        // TBA event trusted-API credentials
+        tbaAuthId: string;
+        tbaSecret: string;
+        // Post the YouTube URL to TBA automatically after each upload
+        autoSubmitTba: boolean;
+        // Target YouTube playlist (id is stored; name is display + fallback)
+        playlistId: string;
+        playlistName: string;
+        // Title / description templates the sidecar fills per match
+        titleTemplate: string;
+        descriptionTemplate: string;
+        // Whether practice / test matches are uploaded
+        includePractice: boolean;
+        includeTest: boolean;
+        // YouTube visibility for uploaded videos
+        visibility: 'PUBLIC' | 'UNLISTED' | 'PRIVATE';
+    };
 };
 
 export function createStore(): Store<AppConfig> {
@@ -135,6 +155,33 @@ export function createStore(): Store<AppConfig> {
                     },
                 },
             },
+            upload: {
+                type: 'object',
+                properties: {
+                    tbaAuthId: { type: 'string', default: '' },
+                    tbaSecret: { type: 'string', default: '' },
+                    autoSubmitTba: { type: 'boolean', default: true },
+                    playlistId: { type: 'string', default: '' },
+                    playlistName: { type: 'string', default: '' },
+                    titleTemplate: { type: 'string', default: '' },
+                    descriptionTemplate: { type: 'string', default: '' },
+                    includePractice: { type: 'boolean', default: false },
+                    includeTest: { type: 'boolean', default: false },
+                    visibility: { type: 'string', default: 'UNLISTED' },
+                },
+                default: {
+                    tbaAuthId: '',
+                    tbaSecret: '',
+                    autoSubmitTba: true,
+                    playlistId: '',
+                    playlistName: '',
+                    titleTemplate: '',
+                    descriptionTemplate: '',
+                    includePractice: false,
+                    includeTest: false,
+                    visibility: 'UNLISTED',
+                },
+            },
         },
         migrations: {
             '0.0.4': (store) => {
@@ -172,6 +219,23 @@ export function createStore(): Store<AppConfig> {
                     store.set('vmixApi', {
                         ...vmix,
                         baseUrl: 'http://127.0.0.1:8088/api',
+                    });
+                }
+            },
+            // Seed the Upload tab's settings for installs that predate it.
+            '2026.3.3': (store) => {
+                if (!store.has('upload')) {
+                    store.set('upload', {
+                        tbaAuthId: '',
+                        tbaSecret: '',
+                        autoSubmitTba: true,
+                        playlistId: '',
+                        playlistName: '',
+                        titleTemplate: '',
+                        descriptionTemplate: '',
+                        includePractice: false,
+                        includeTest: false,
+                        visibility: 'UNLISTED',
                     });
                 }
             },

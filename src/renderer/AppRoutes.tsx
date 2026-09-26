@@ -7,6 +7,7 @@ import CameraSetup from './pages/camera_setup';
 import FallbackToDocs from './pages/fallbackToDocs';
 import AutoAV from './pages/autoav';
 import LiveCaptions from './pages/livecaptions';
+import Upload from './pages/upload';
 import Vmix from './pages/vmix';
 
 // Always use the hash router (both dev and prod load from a file/hash URL)
@@ -18,6 +19,7 @@ function AppRoutes() {
             <Route path="/" element={<Welcome />} />
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/autoav" element={<AutoAV />} />
+            <Route path="/upload" element={<Upload />} />
             <Route path="/vmix" element={<Vmix />} />
             <Route path="/livecaptions" element={<LiveCaptions />} />
 

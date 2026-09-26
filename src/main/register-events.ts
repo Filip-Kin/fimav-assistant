@@ -18,6 +18,7 @@ import { getStore } from './store';
 import Event from '../models/Event';
 import AutoAV from './addons/autoav';
 import LiveCaptions from './addons/live-captions';
+import UploadHelper from './addons/upload-helper';
 import getVmixBandwidth, { streamKeyFromUrl } from './vmixBandwidth';
 import { AutoAVStatus } from '../models/AutoAVStatus';
 import { MatchRecord } from '../models/MatchRecord';
@@ -620,6 +621,87 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         }
         event.reply('liveCaptions:status', liveCaptionsStatus());
     });
+
+    // #region Upload tab (youtube-tba-upload sidecar)
+
+    // Upload sidecar status + controls for the Upload tab's control row. The
+    // event key rides along so the renderer can scope its direct :8807 fetches.
+    const uploadStatus = () => ({
+        running: UploadHelper.Instance.isRunning(),
+        version: UploadHelper.Instance.getVersion(),
+        eventKey: AutoAV.Instance.getStatus().currentEvent?.code ?? '',
+    });
+
+    ipcMain.on('upload:getStatus', (event) => {
+        event.reply('upload:status', uploadStatus());
+    });
+
+    ipcMain.on('upload:restart', async (event) => {
+        try {
+            await UploadHelper.Instance.stop();
+            await UploadHelper.Instance.start();
+        } catch (e) {
+            log.error('Upload sidecar restart failed', e);
+        }
+        event.reply('upload:status', uploadStatus());
+    });
+
+    ipcMain.on('upload:stopAddon', async (event) => {
+        try {
+            await UploadHelper.Instance.stop();
+        } catch (e) {
+            log.error('Upload sidecar stop failed', e);
+        }
+        event.reply('upload:status', uploadStatus());
+    });
+
+    // Upload settings: persisted in electron-store and pushed to the sidecar as
+    // its event config (POST /api/upload/config). The tba_secret only ever
+    // leaves the main process, straight to the loopback sidecar.
+    const uploadSettings = () => store.get('upload');
+
+    ipcMain.on('upload:getSettings', (event) => {
+        event.reply('upload:settings', uploadSettings());
+    });
+
+    ipcMain.on('upload:saveSettings', async (event, [settings]) => {
+        store.set('upload', settings);
+        // Push to the sidecar so a save takes effect without a restart. The
+        // sidecar keys config by event; use the event AutoAV is filing into.
+        const { currentEvent } = AutoAV.Instance.getStatus();
+        const eventKey = currentEvent?.code ?? '';
+        try {
+            await fetch(
+                `http://localhost:8807/api/upload/config?event_key=${encodeURIComponent(
+                    eventKey
+                )}`,
+                {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    signal: AbortSignal.timeout(5000),
+                    body: JSON.stringify({
+                        event_key: eventKey,
+                        event_name: currentEvent?.name ?? '',
+                        playlist_id: settings.playlistId,
+                        playlist_name: settings.playlistName,
+                        title_template: settings.titleTemplate,
+                        description_template: settings.descriptionTemplate,
+                        visibility: settings.visibility,
+                        include_practice: settings.includePractice,
+                        include_test: settings.includeTest,
+                        auto_submit_tba: settings.autoSubmitTba,
+                        tba_auth_id: settings.tbaAuthId,
+                        tba_secret: settings.tbaSecret,
+                    }),
+                }
+            );
+        } catch (e) {
+            log.warn('Could not push upload config to sidecar', e);
+        }
+        event.reply('upload:settings', uploadSettings());
+    });
+
+    // #endregion Upload tab
 
     // Auto AV settings dialog: naming + save folder (vMix connection now lives
     // in the vMix tab).

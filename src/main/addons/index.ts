@@ -5,6 +5,7 @@ import glob from 'glob';
 import log from 'electron-log';
 import AutoAV from './autoav';
 import LiveCaptions from './live-captions';
+import UploadHelper from './upload-helper';
 import { logsPath } from '../util';
 import HWPing from './hw-ping';
 
@@ -14,6 +15,8 @@ export default class Addons {
     private AutoAV: AutoAV = AutoAV.Instance;
 
     private HWPing: HWPing = HWPing.Instance;
+
+    private uploadHelper: UploadHelper = UploadHelper.Instance;
 
     public init(): Addons {
         this.restartAll();
@@ -25,6 +28,13 @@ export default class Addons {
         this.liveCaptions.stop();
         this.AutoAV.stop();
         this.HWPing.stop();
+        this.uploadHelper.stop();
+    }
+
+    // Restart the upload sidecar (re-resolves the current event folder)
+    public async restartUploadHelper() {
+        await this.uploadHelper.stop();
+        await this.uploadHelper.start();
     }
 
     // Restart live captions
@@ -72,6 +82,10 @@ export default class Addons {
 
         // Start hwping
         this.HWPing.start();
+
+        // Start the upload sidecar (no-ops until an event folder is known;
+        // the Upload tab's Start/Restart re-resolves it once recording begins)
+        this.uploadHelper.start();
     }
 
     // Manage the logs, removing old and moving old copies to a new folder

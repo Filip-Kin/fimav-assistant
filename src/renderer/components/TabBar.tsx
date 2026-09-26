@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Badge } from 'antd';
 import {
     BellOutlined,
+    CloudUploadOutlined,
     MessageOutlined,
     RobotOutlined,
     SettingOutlined,
@@ -42,6 +43,12 @@ const tabs: TabDef[] = [
         label: 'Auto AV',
         icon: <RobotOutlined />,
         isActive: (p) => p.startsWith('/autoav'),
+    },
+    {
+        key: '/upload',
+        label: 'Upload',
+        icon: <CloudUploadOutlined />,
+        isActive: (p) => p.startsWith('/upload'),
     },
 ];
 
