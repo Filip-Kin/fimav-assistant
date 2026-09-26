@@ -147,23 +147,23 @@ export default class HWPing {
                     }
                     break;
                 case 1:
-                    if (this.currentState.mixer !== out.alive) {
-                        this.currentState.mixer = out.alive;
-                        this.remoteLog('Mixer', out.alive);
-                        didUpdate = true;
-                    }
-                    break;
-                case 2:
                     if (this.currentState.camera1 !== out.alive) {
                         this.currentState.camera1 = out.alive;
                         this.remoteLog('Camera 1', out.alive);
                         didUpdate = true;
                     }
                     break;
-                case 3:
+                case 2:
                     if (this.currentState.camera2 !== out.alive) {
                         this.currentState.camera2 = out.alive;
                         this.remoteLog('Camera 2', out.alive);
+                        didUpdate = true;
+                    }
+                    break;
+                case 3:
+                    if (this.currentState.mixer !== out.alive) {
+                        this.currentState.mixer = out.alive;
+                        this.remoteLog('Mixer', out.alive);
                         didUpdate = true;
                     }
                     break;

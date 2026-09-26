@@ -204,15 +204,16 @@ export default async function HWCheck(): Promise<HWCheckResponse> {
     if (resp.av_ip_ready) {
         // Ping on-cart devices
         const promises = [
-            // TODO: Ensure these are the right IPs
+            // Cart addressing (checked on FIMVIDEO3's vMix PTZ inputs):
+            // switch .10N, PTZ1 .N1, PTZ2 .N2, mixer .N3
             // Ping switch
             ping.promise.probe(`192.168.25.10${cartNumber}`, pingConfig),
             // Ping mixer
-            ping.promise.probe(`192.168.25.${cartNumber}2`, pingConfig),
-            // Ping PTZ1
             ping.promise.probe(`192.168.25.${cartNumber}3`, pingConfig),
+            // Ping PTZ1
+            ping.promise.probe(`192.168.25.${cartNumber}1`, pingConfig),
             // Ping PTZ2
-            ping.promise.probe(`192.168.25.${cartNumber}4`, pingConfig),
+            ping.promise.probe(`192.168.25.${cartNumber}2`, pingConfig),
         ];
 
         // Wait for all pings to finish
