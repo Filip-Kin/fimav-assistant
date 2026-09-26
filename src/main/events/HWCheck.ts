@@ -205,7 +205,9 @@ export default async function HWCheck(): Promise<HWCheckResponse> {
         // Ping on-cart devices
         const promises = [
             // Cart addressing (checked on FIMVIDEO3's vMix PTZ inputs):
-            // switch .10N, PTZ1 .N1, PTZ2 .N2, mixer .N3
+            // switch .10N, PTZ1 .N1, PTZ2 .N2, mixer .N3. docs.fimav.us lists
+            // the switch at .N9, but the switches are really at .10N. Only
+            // carts 1-9 exist, so .10N never goes out of range.
             // Ping switch
             ping.promise.probe(`192.168.25.10${cartNumber}`, pingConfig),
             // Ping mixer
