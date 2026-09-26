@@ -3,6 +3,9 @@ import { TournamentLevel } from './FMSMatchState';
 // A single team's participation in a recorded match, including any card issued
 export interface MatchTeam {
     teamNumber: number;
+    // Team nickname as FMS has it (trimmed); null when FMS gave none.
+    // Absent on records written before names were captured.
+    teamName?: string | null;
     // Effective card for THIS match (from FMS cardEffectiveStatus). A carried
     // yellow from a previous match is not reflected here (see FmsApi).
     card: 'None' | 'Yellow' | 'Red';

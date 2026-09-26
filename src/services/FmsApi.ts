@@ -15,6 +15,7 @@ export interface MatchResults {
 // far more than this; we only read teams + effective card status.
 interface FmsTeamResult {
     teamNumber?: number;
+    teamName?: string;
     cardEffectiveStatus?: string;
 }
 interface FmsAllianceData {
@@ -38,6 +39,8 @@ function mapAlliance(alliance?: FmsAllianceData): MatchTeam[] {
         .filter((t): t is FmsTeamResult => !!t && typeof t.teamNumber === 'number')
         .map((t) => ({
             teamNumber: t.teamNumber as number,
+            // FMS pads some names with spaces (" Dexter Dreadbots ")
+            teamName: (t.teamName ?? '').trim() || null,
             card: normalizeCard(t.cardEffectiveStatus),
         }));
 }
