@@ -686,9 +686,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
                         playlist_name: settings.playlistName,
                         title_template: settings.titleTemplate,
                         description_template: settings.descriptionTemplate,
+                        thumbnail_path: settings.thumbnailPath,
+                        headless: settings.headless,
                         visibility: settings.visibility,
-                        include_practice: settings.includePractice,
-                        include_test: settings.includeTest,
                         auto_submit_tba: settings.autoSubmitTba,
                         tba_auth_id: settings.tbaAuthId,
                         tba_secret: settings.tbaSecret,
@@ -699,6 +699,27 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             log.warn('Could not push upload config to sidecar', e);
         }
         event.reply('upload:settings', uploadSettings());
+    });
+
+    // Native image picker for the thumbnail field (same pattern as the Auto AV
+    // save-folder picker).
+    ipcMain.on('upload:pickThumbnail', async (event) => {
+        const win = BrowserWindow.getFocusedWindow() ?? window ?? undefined;
+        const opts = {
+            properties: ['openFile' as const],
+            filters: [
+                {
+                    name: 'Images',
+                    extensions: ['png', 'jpg', 'jpeg', 'webp'],
+                },
+            ],
+        };
+        const result = await (win
+            ? dialog.showOpenDialog(win, opts)
+            : dialog.showOpenDialog(opts));
+        if (!result.canceled && result.filePaths[0]) {
+            event.reply('upload:thumbnailPicked', result.filePaths[0]);
+        }
     });
 
     // #endregion Upload tab

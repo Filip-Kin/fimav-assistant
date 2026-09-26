@@ -46,6 +46,7 @@ export type AppConfig = {
     };
     // YouTube + TBA upload settings for the Upload tab. Persisted here and also
     // pushed to the youtube-tba-upload sidecar via POST /api/upload/config.
+    // Field shapes mirror the sidecar's eventConfig (INTEGRATION.md §4).
     upload: {
         // TBA event trusted-API credentials
         tbaAuthId: string;
@@ -58,13 +59,32 @@ export type AppConfig = {
         // Title / description templates the sidecar fills per match
         titleTemplate: string;
         descriptionTemplate: string;
-        // Whether practice / test matches are uploaded
-        includePractice: boolean;
-        includeTest: boolean;
+        // Thumbnail image applied to each upload
+        thumbnailPath: string;
+        // Run the upload browser hidden (default). Sign-in is always headed.
+        headless: boolean;
         // YouTube visibility for uploaded videos
         visibility: 'PUBLIC' | 'UNLISTED' | 'PRIVATE';
     };
 };
+
+// UI defaults must equal the sidecar's own defaults verbatim (INTEGRATION.md
+// §4 / state.go), so the form shows exactly what the sidecar would fill.
+export const DEFAULT_TITLE_TEMPLATE =
+    '{video_prefix} {match_level} Match {match_number}{play_suffix}';
+export const DEFAULT_DESCRIPTION_TEMPLATE = [
+    '{title}',
+    '',
+    'Red Alliance:',
+    '- {red[0].number} {red[0].name}',
+    '- {red[1].number} {red[1].name}',
+    '- {red[2].number} {red[2].name}',
+    '',
+    'Blue Alliance:',
+    '- {blue[0].number} {blue[0].name}',
+    '- {blue[1].number} {blue[1].name}',
+    '- {blue[2].number} {blue[2].name}',
+].join('\n');
 
 export function createStore(): Store<AppConfig> {
     return new Store({
@@ -163,10 +183,16 @@ export function createStore(): Store<AppConfig> {
                     autoSubmitTba: { type: 'boolean', default: true },
                     playlistId: { type: 'string', default: '' },
                     playlistName: { type: 'string', default: '' },
-                    titleTemplate: { type: 'string', default: '' },
-                    descriptionTemplate: { type: 'string', default: '' },
-                    includePractice: { type: 'boolean', default: false },
-                    includeTest: { type: 'boolean', default: false },
+                    titleTemplate: {
+                        type: 'string',
+                        default: DEFAULT_TITLE_TEMPLATE,
+                    },
+                    descriptionTemplate: {
+                        type: 'string',
+                        default: DEFAULT_DESCRIPTION_TEMPLATE,
+                    },
+                    thumbnailPath: { type: 'string', default: '' },
+                    headless: { type: 'boolean', default: true },
                     visibility: { type: 'string', default: 'UNLISTED' },
                 },
                 default: {
@@ -175,10 +201,10 @@ export function createStore(): Store<AppConfig> {
                     autoSubmitTba: true,
                     playlistId: '',
                     playlistName: '',
-                    titleTemplate: '',
-                    descriptionTemplate: '',
-                    includePractice: false,
-                    includeTest: false,
+                    titleTemplate: DEFAULT_TITLE_TEMPLATE,
+                    descriptionTemplate: DEFAULT_DESCRIPTION_TEMPLATE,
+                    thumbnailPath: '',
+                    headless: true,
                     visibility: 'UNLISTED',
                 },
             },
@@ -222,22 +248,29 @@ export function createStore(): Store<AppConfig> {
                     });
                 }
             },
-            // Seed the Upload tab's settings for installs that predate it.
+            // Seed the Upload tab's settings for installs that predate it, and
+            // drop the retired include_practice/include_test flags (the sidecar
+            // hard-excludes practice/test now).
             '2026.3.3': (store) => {
-                if (!store.has('upload')) {
-                    store.set('upload', {
-                        tbaAuthId: '',
-                        tbaSecret: '',
-                        autoSubmitTba: true,
-                        playlistId: '',
-                        playlistName: '',
-                        titleTemplate: '',
-                        descriptionTemplate: '',
-                        includePractice: false,
-                        includeTest: false,
-                        visibility: 'UNLISTED',
-                    });
-                }
+                const existing =
+                    (store.get('upload') as Partial<
+                        AppConfig['upload']
+                    >) ?? {};
+                store.set('upload', {
+                    tbaAuthId: existing.tbaAuthId ?? '',
+                    tbaSecret: existing.tbaSecret ?? '',
+                    autoSubmitTba: existing.autoSubmitTba ?? true,
+                    playlistId: existing.playlistId ?? '',
+                    playlistName: existing.playlistName ?? '',
+                    titleTemplate:
+                        existing.titleTemplate || DEFAULT_TITLE_TEMPLATE,
+                    descriptionTemplate:
+                        existing.descriptionTemplate ||
+                        DEFAULT_DESCRIPTION_TEMPLATE,
+                    thumbnailPath: existing.thumbnailPath ?? '',
+                    headless: existing.headless ?? true,
+                    visibility: existing.visibility ?? 'UNLISTED',
+                });
             },
         },
     }) as Store<AppConfig>;

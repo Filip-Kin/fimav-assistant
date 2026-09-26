@@ -5,6 +5,7 @@ import {
     Form,
     Input,
     Modal,
+    Popconfirm,
     Select,
     Space,
     Switch,
@@ -14,9 +15,15 @@ import {
     message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { YoutubeFilled } from '@ant-design/icons';
+import { ReloadOutlined, YoutubeFilled } from '@ant-design/icons';
 import AddonControlRow from '../../components/AddonControlRow';
 import './index.css';
+
+// Filename portion of a Windows or POSIX path (renderer has no node path).
+function baseName(p: string): string {
+    const parts = p.split(/[\\/]/);
+    return parts[parts.length - 1] || p;
+}
 
 const { Text, Link } = Typography;
 
@@ -63,9 +70,14 @@ export interface UploadSettings {
     playlistName: string;
     titleTemplate: string;
     descriptionTemplate: string;
-    includePractice: boolean;
-    includeTest: boolean;
+    thumbnailPath: string;
+    headless: boolean;
     visibility: 'PUBLIC' | 'UNLISTED' | 'PRIVATE';
+}
+
+export interface SignInStatus {
+    signedIn: boolean;
+    channelName: string;
 }
 
 // Sidecar status vocabulary → a display tag. "stable" is the sidecar's
@@ -224,33 +236,101 @@ const VISIBILITY_OPTIONS = [
     { value: 'PRIVATE', label: 'Private' },
 ];
 
+// The account row: sign-in status and the sign-in / log-out actions. Log out
+// deletes the saved login, so it is guarded by a confirm.
+function AccountRow({
+    signIn,
+    onSignIn,
+    onLogout,
+}: {
+    signIn: SignInStatus;
+    onSignIn: () => void;
+    onLogout: () => void;
+}) {
+    return (
+        <div className="upload-account">
+            <Space size={8} align="center">
+                <span
+                    className={`addon-dot ${
+                        signIn.signedIn ? 'addon-dot--on' : 'addon-dot--off'
+                    }`}
+                />
+                <Text>
+                    {signIn.signedIn
+                        ? `Signed in as ${signIn.channelName || 'YouTube'}`
+                        : 'Not signed in'}
+                </Text>
+            </Space>
+            <Space size={8}>
+                <Button size="small" onClick={onSignIn}>
+                    Sign in to YouTube
+                </Button>
+                <Popconfirm
+                    title="Log out of YouTube?"
+                    okText="Log out"
+                    cancelText="Cancel"
+                    onConfirm={onLogout}
+                >
+                    <Button size="small" danger disabled={!signIn.signedIn}>
+                        Log out of YouTube
+                    </Button>
+                </Popconfirm>
+            </Space>
+        </div>
+    );
+}
+
 // Settings dialog. Exported so the preview can render it open.
 export function UploadSettingsDialog({
     open,
     onClose,
     playlists,
+    signIn,
+    onSignIn,
+    onLogout,
+    onRefreshPlaylists,
 }: {
     open: boolean;
     onClose: () => void;
     playlists: Playlist[];
+    signIn: SignInStatus;
+    onSignIn: () => void;
+    onLogout: () => void;
+    onRefreshPlaylists: () => void;
 }) {
     const [form] = Form.useForm<UploadSettings>();
     const [loading, setLoading] = useState(true);
+    const [thumbnail, setThumbnail] = useState('');
 
     useEffect(() => {
         if (!open || !window.electron) return undefined;
         const { ipcRenderer } = window.electron;
         setLoading(true);
-        const off = ipcRenderer.on(
+        const offSettings = ipcRenderer.on(
             'upload:settings',
             (s: UploadSettings) => {
                 form.setFieldsValue(s);
+                setThumbnail(s.thumbnailPath ?? '');
                 setLoading(false);
             }
         );
+        const offThumb = ipcRenderer.on(
+            'upload:thumbnailPicked',
+            (p: string) => {
+                setThumbnail(p);
+                form.setFieldValue('thumbnailPath', p);
+            }
+        );
         ipcRenderer.sendMessage('upload:getSettings', []);
-        return off;
+        return () => {
+            offSettings();
+            offThumb();
+        };
     }, [open, form]);
+
+    const pickThumbnail = useCallback(() => {
+        window.electron?.ipcRenderer.sendMessage('upload:pickThumbnail', []);
+    }, []);
 
     const save = useCallback(async () => {
         const values = await form.validateFields();
@@ -270,26 +350,55 @@ export function UploadSettingsDialog({
             onOk={save}
             okText="Save"
             confirmLoading={loading}
+            width={560}
             destroyOnClose
         >
+            <AccountRow
+                signIn={signIn}
+                onSignIn={onSignIn}
+                onLogout={onLogout}
+            />
             <Form
                 form={form}
                 layout="vertical"
                 disabled={loading}
                 style={{ marginTop: 12 }}
             >
-                <Form.Item label="Playlist" name="playlistId">
-                    <Select
-                        allowClear
-                        placeholder="Playlist"
-                        options={playlists.map((p) => ({
-                            value: p.id,
-                            label: p.title,
-                        }))}
-                    />
+                <Form.Item label="Playlist">
+                    <Space.Compact style={{ width: '100%' }}>
+                        <Form.Item name="playlistId" noStyle>
+                            <Select
+                                allowClear
+                                placeholder="Playlist"
+                                options={playlists.map((p) => ({
+                                    value: p.id,
+                                    label: p.title,
+                                }))}
+                            />
+                        </Form.Item>
+                        <Button
+                            icon={<ReloadOutlined />}
+                            onClick={onRefreshPlaylists}
+                        />
+                    </Space.Compact>
                 </Form.Item>
                 <Form.Item label="Visibility" name="visibility">
                     <Select options={VISIBILITY_OPTIONS} />
+                </Form.Item>
+                <Form.Item label="Thumbnail">
+                    <Space size={8} align="center">
+                        <Button onClick={pickThumbnail}>Choose</Button>
+                        <Text
+                            type="secondary"
+                            className="file-name"
+                            title={thumbnail || undefined}
+                        >
+                            {thumbnail ? baseName(thumbnail) : 'None'}
+                        </Text>
+                    </Space>
+                    <Form.Item name="thumbnailPath" hidden>
+                        <Input />
+                    </Form.Item>
                 </Form.Item>
                 <Form.Item label="Title template" name="titleTemplate">
                     <Input />
@@ -298,7 +407,7 @@ export function UploadSettingsDialog({
                     label="Description template"
                     name="descriptionTemplate"
                 >
-                    <Input.TextArea rows={3} />
+                    <Input.TextArea autoSize={{ minRows: 8, maxRows: 14 }} />
                 </Form.Item>
                 <Form.Item label="TBA auth ID" name="tbaAuthId">
                     <Input />
@@ -306,7 +415,7 @@ export function UploadSettingsDialog({
                 <Form.Item label="TBA secret" name="tbaSecret">
                     <Input.Password />
                 </Form.Item>
-                <Space size={24} wrap>
+                <Space size={32} wrap>
                     <Form.Item
                         label="Auto-submit to TBA"
                         name="autoSubmitTba"
@@ -315,15 +424,8 @@ export function UploadSettingsDialog({
                         <Switch />
                     </Form.Item>
                     <Form.Item
-                        label="Practice matches"
-                        name="includePractice"
-                        valuePropName="checked"
-                    >
-                        <Switch />
-                    </Form.Item>
-                    <Form.Item
-                        label="Test matches"
-                        name="includeTest"
+                        label="Headless"
+                        name="headless"
                         valuePropName="checked"
                     >
                         <Switch />
@@ -354,6 +456,10 @@ export default function UploadPage() {
     const [status, setStatus] = useState<UploadAddonStatus | null>(null);
     const [rows, setRows] = useState<UploadRow[]>([]);
     const [playlists, setPlaylists] = useState<Playlist[]>([]);
+    const [signIn, setSignIn] = useState<SignInStatus>({
+        signedIn: false,
+        channelName: '',
+    });
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [busy, setBusy] = useState(false);
 
@@ -406,19 +512,90 @@ export default function UploadPage() {
         };
     }, [running, eventKey]);
 
+    // Sign-in status straight from the sidecar's health endpoint, polled.
+    useEffect(() => {
+        if (!running) return undefined;
+        let cancelled = false;
+        const load = async () => {
+            try {
+                const res = await fetch(`${UPLOAD_BASE}/api/health`, {
+                    signal: AbortSignal.timeout(3000),
+                });
+                const body = await res.json();
+                if (!cancelled) {
+                    setSignIn({
+                        signedIn: !!body?.signed_in,
+                        channelName: body?.channel_name ?? '',
+                    });
+                }
+            } catch {
+                // sidecar not answering yet
+            }
+        };
+        load();
+        const timer = setInterval(load, 4000);
+        return () => {
+            cancelled = true;
+            clearInterval(timer);
+        };
+    }, [running]);
+
+    const loadPlaylists = useCallback(
+        (refresh: boolean) => {
+            fetch(
+                `${UPLOAD_BASE}/api/yt/playlists?event_key=${encodeURIComponent(
+                    eventKey
+                )}${refresh ? '&refresh=1' : ''}`,
+                { signal: AbortSignal.timeout(8000) }
+            )
+                .then((r) => r.json())
+                .then((list) => setPlaylists(Array.isArray(list) ? list : []))
+                .catch(() => setPlaylists([]));
+        },
+        [eventKey]
+    );
+
     // Playlists for the settings dropdown (fetched when settings opens).
     useEffect(() => {
         if (!settingsOpen || !running) return;
+        loadPlaylists(false);
+    }, [settingsOpen, running, loadPlaylists]);
+
+    const signInYouTube = useCallback(() => {
         fetch(
-            `${UPLOAD_BASE}/api/yt/playlists?event_key=${encodeURIComponent(
+            `${UPLOAD_BASE}/api/upload/login?event_key=${encodeURIComponent(
                 eventKey
             )}`,
-            { signal: AbortSignal.timeout(6000) }
+            {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ event_key: eventKey }),
+                signal: AbortSignal.timeout(5000),
+            }
         )
-            .then((r) => r.json())
-            .then((list) => setPlaylists(Array.isArray(list) ? list : []))
-            .catch(() => setPlaylists([]));
-    }, [settingsOpen, running, eventKey]);
+            .then(() => message.info('Opening YouTube sign-in'))
+            .catch(() => message.error('Failed'));
+    }, [eventKey]);
+
+    const logoutYouTube = useCallback(() => {
+        fetch(
+            `${UPLOAD_BASE}/api/upload/logout?event_key=${encodeURIComponent(
+                eventKey
+            )}`,
+            {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ event_key: eventKey }),
+                signal: AbortSignal.timeout(5000),
+            }
+        )
+            .then(() => {
+                setSignIn({ signedIn: false, channelName: '' });
+                message.success('Logged out');
+                return null;
+            })
+            .catch(() => message.error('Failed'));
+    }, [eventKey]);
 
     const restart = useCallback(() => {
         setBusy(true);
@@ -493,6 +670,10 @@ export default function UploadPage() {
                 open={settingsOpen}
                 onClose={() => setSettingsOpen(false)}
                 playlists={playlists}
+                signIn={signIn}
+                onSignIn={signInYouTube}
+                onLogout={logoutYouTube}
+                onRefreshPlaylists={() => loadPlaylists(true)}
             />
         </>
     );
