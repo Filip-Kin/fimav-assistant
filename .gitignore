@@ -27,3 +27,6 @@ npm-debug.log.*
 *.css.d.ts
 *.sass.d.ts
 *.scss.d.ts
+
+# staged sidecar binary (built by CI or locally, never committed)
+assets/youtube-tba-upload/*.exe

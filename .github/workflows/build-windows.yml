@@ -1,0 +1,85 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [feat/auto-av-tab]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to publish a Release on tags
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+
+      # Build the sidecar exe in-job so the package always has a matching binary,
+      # without depending on a youtube-tba-upload release existing.
+      - name: Checkout sidecar (youtube-tba-upload)
+        uses: actions/checkout@v4
+        with:
+          repository: Filip-Kin/youtube-tba-upload
+          path: .sidecar
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: .sidecar/go.mod
+          cache-dependency-path: .sidecar/go.sum
+
+      - name: Build sidecar exe into assets
+        working-directory: .sidecar
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -ldflags "-X main.Version=${{ github.sha }}" -o "${{ github.workspace }}\assets\youtube-tba-upload\youtube-tba-upload.exe" .
+
+      - name: Install Node and NPM
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      # electron-builder build --publish never (via the repo's package script).
+      # postinstall already ran electron-builder install-app-deps, which builds
+      # better-sqlite3 for this Electron ABI natively on the Windows runner.
+      - name: Package Windows app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run package
+
+      - name: Verify package contents
+        shell: pwsh
+        run: |
+          $unpacked = "release/build/win-unpacked"
+          $exe = Join-Path $unpacked "resources/assets/youtube-tba-upload/youtube-tba-upload.exe"
+          if (-not (Test-Path $exe)) { throw "sidecar exe missing from package: $exe" }
+          $node = Get-ChildItem -Path $unpacked -Recurse -Filter "better_sqlite3.node" -ErrorAction SilentlyContinue
+          if (-not $node) { throw "better-sqlite3 native module (win32-x64) missing from package" }
+          Write-Host "OK: sidecar exe and better_sqlite3.node are in the package"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: fimav-assistant-setup
+          path: release/build/*.exe
+          if-no-files-found: error
+
+      - name: Upload win-unpacked
+        uses: actions/upload-artifact@v4
+        with:
+          name: fimav-assistant-win-unpacked
+          path: release/build/win-unpacked/**
+
+      - name: Publish Release (tags only)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/build/*.exe
