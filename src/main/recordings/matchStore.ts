@@ -15,6 +15,72 @@ function manifestPath(folder: string): string {
     return path.join(folder, MANIFEST);
 }
 
+// The youtube-tba-upload sidecar writes into this SAME file (its per-match
+// `upload` state), so both processes coordinate through one advisory lock and
+// only ever touch their own fields. This lock file + protocol MUST stay
+// identical to the sidecar's acquireManifestLock/writeFileAtomic in db.go:
+// exclusive `.lock` create, steal after 10s, 5s deadline, 40ms retries, and a
+// temp-file rename for the write itself.
+const LOCK_STALE_MS = 10_000;
+const LOCK_DEADLINE_MS = 5_000;
+const LOCK_RETRY_MS = 40;
+
+// Synchronous sleep. matchStore is fully synchronous and the lock is held for
+// microseconds, so a brief block here (only under real contention) is fine.
+function sleepSync(ms: number): void {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Run fn while holding the cross-process manifest lock. On timeout it proceeds
+// unlocked rather than losing the write — same last-resort behaviour a stuck
+// lock would force anyway, and writes are seconds apart in practice.
+function withManifestLock<T>(folder: string, fn: () => T): T {
+    const lock = `${manifestPath(folder)}.lock`;
+    const deadline = Date.now() + LOCK_DEADLINE_MS;
+    let held = false;
+    for (;;) {
+        let created = false;
+        try {
+            fs.closeSync(fs.openSync(lock, 'wx')); // O_CREAT|O_EXCL
+            created = true;
+        } catch {
+            created = false;
+        }
+        if (created) {
+            held = true;
+            break;
+        }
+        // Held by someone else: steal it if it is stale, else retry until the
+        // deadline. A vanished lock (stat throws) just means retry the create.
+        let stale = false;
+        try {
+            const st = fs.statSync(lock);
+            stale = Date.now() - st.mtimeMs > LOCK_STALE_MS;
+        } catch {
+            stale = true; // gone; loop and re-create immediately
+        }
+        if (stale) {
+            fs.rmSync(lock, { force: true });
+        } else if (Date.now() > deadline) {
+            log.warn('manifest lock busy; writing without it');
+            break;
+        } else {
+            sleepSync(LOCK_RETRY_MS);
+        }
+    }
+    try {
+        return fn();
+    } finally {
+        if (held) {
+            try {
+                fs.rmSync(lock, { force: true });
+            } catch (e) {
+                log.warn('releasing manifest lock failed', e);
+            }
+        }
+    }
+}
+
 function readManifest(folder: string): MatchRecord[] {
     try {
         const p = manifestPath(folder);
@@ -27,13 +93,15 @@ function readManifest(folder: string): MatchRecord[] {
     }
 }
 
+// Atomic write via temp + rename, matching the sidecar. Readers on the other
+// process therefore never see a half-written file.
 function writeManifest(folder: string, matches: MatchRecord[]): void {
     try {
         if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
-        fs.writeFileSync(
-            manifestPath(folder),
-            JSON.stringify({ version: 1, matches }, null, 2)
-        );
+        const p = manifestPath(folder);
+        const tmp = `${p}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify({ version: 1, matches }, null, 2));
+        fs.renameSync(tmp, p);
     } catch (e) {
         log.warn('writeManifest failed', e);
     }
@@ -52,30 +120,47 @@ export function getMatch(folder: string | null, id: string): MatchRecord | null 
     return readManifest(folder).find((m) => m.id === id) ?? null;
 }
 
-// Insert a new record or replace an existing one with the same id.
+// Insert a new record or replace an existing one with the same id. The read,
+// merge and write happen under the shared lock so a concurrent sidecar write is
+// never lost, and the sidecar-owned `upload` field is carried over verbatim
+// (FIM-AV never authors it, so replacing the record whole would otherwise drop
+// it).
 export function upsertMatch(folder: string, record: MatchRecord): void {
-    const matches = readManifest(folder);
-    const idx = matches.findIndex((m) => m.id === record.id);
-    if (idx >= 0) matches[idx] = record;
-    else matches.push(record);
-    writeManifest(folder, matches);
+    withManifestLock(folder, () => {
+        const matches = readManifest(folder);
+        const idx = matches.findIndex((m) => m.id === record.id);
+        if (idx >= 0) {
+            const kept =
+                record.upload !== undefined
+                    ? record
+                    : { ...record, upload: matches[idx].upload };
+            matches[idx] = kept;
+        } else {
+            matches.push(record);
+        }
+        writeManifest(folder, matches);
+    });
 }
 
 // Merge a partial patch into an existing record. Returns the updated record, or
-// null if no record with that id exists in this folder.
+// null if no record with that id exists in this folder. Locked read-modify-write
+// for the same reason as upsertMatch; the spread preserves `upload` unless the
+// patch names it.
 export function updateMatch(
     folder: string,
     id: string,
     patch: Partial<MatchRecord>
 ): MatchRecord | null {
-    const matches = readManifest(folder);
-    const idx = matches.findIndex((m) => m.id === id);
-    if (idx < 0) {
-        log.warn(`updateMatch: no record ${id} in ${folder}`);
-        return null;
-    }
-    const updated = { ...matches[idx], ...patch };
-    matches[idx] = updated;
-    writeManifest(folder, matches);
-    return updated;
+    return withManifestLock(folder, () => {
+        const matches = readManifest(folder);
+        const idx = matches.findIndex((m) => m.id === id);
+        if (idx < 0) {
+            log.warn(`updateMatch: no record ${id} in ${folder}`);
+            return null;
+        }
+        const updated = { ...matches[idx], ...patch };
+        matches[idx] = updated;
+        writeManifest(folder, matches);
+        return updated;
+    });
 }
