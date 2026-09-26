@@ -37,6 +37,13 @@ const LOG_DIR = 'C:\\ProgramData\\vMix\\streaming';
 // and no background loop needed, just compare against last time.
 const lastSize = new Map<string, number>();
 
+// Calls closer together than this return the previous result. The vMix tab
+// polls every 3s and the status API can poll at any rate; without this, an
+// API call landing just after a tab poll would see no log growth and report a
+// live stream as stopped.
+const MIN_POLL_MS = 2000;
+let lastResult: { at: number; value: VmixBandwidth } | null = null;
+
 function labelDestination(commandLine: string): string {
     const rtmp = /rtmp:\/\/([^/"\s]+)/i.exec(commandLine);
     const host = rtmp?.[1] ?? '';
@@ -119,6 +126,9 @@ export default function getVmixBandwidth(): Promise<VmixBandwidth> {
     if (process.platform !== 'win32') {
         return Promise.resolve({ streams: [], supported: false });
     }
+    if (lastResult && Date.now() - lastResult.at < MIN_POLL_MS) {
+        return Promise.resolve(lastResult.value);
+    }
     try {
         const logs = newestLogs();
         const seen = new Set<string>();
@@ -169,7 +179,9 @@ export default function getVmixBandwidth(): Promise<VmixBandwidth> {
         // Logs exist but we had no baseline for any of them: this is the first
         // poll of a fresh session, so we can't tell what's active yet.
         const warming = logs.length > 0 && !hadAnyBaseline;
-        return Promise.resolve({ streams, supported: true, warming });
+        const value: VmixBandwidth = { streams, supported: true, warming };
+        lastResult = { at: Date.now(), value };
+        return Promise.resolve(value);
     } catch (e) {
         log.warn('vMix bandwidth read failed', e);
         return Promise.resolve({ streams: [], supported: true });

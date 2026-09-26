@@ -24,6 +24,7 @@ import { MatchRecord } from '../models/MatchRecord';
 import { listMatches } from './recordings/matchStore';
 import { StaticIpInfo } from '../models/HWCheckResponse';
 import { getCurrentEvent } from './util';
+import startStatusApi from './api/server';
 
 // Use this file to register all events. For uniformity, all events should send their response as <event-name>-response
 
@@ -711,4 +712,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         log.info('Closing alerts window');
         getAlertsWindow()?.close();
     });
+
+    // LAN status API (read-only), sharing the vMix tab's status builder
+    startStatusApi({ vmixStatus: buildVmixStatus });
 }
