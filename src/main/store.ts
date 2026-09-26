@@ -4,6 +4,7 @@ export type AppConfig = {
     signalrUrl: unknown;
     apiKey: unknown;
     liveCaptionsDownloadBase: string;
+    youtubeUploaderDownloadBase: string;
     runOnStartup: boolean;
     currentStep: number;
     stepsStartedAt: number;
@@ -45,8 +46,8 @@ export type AppConfig = {
         autoCut: boolean;
     };
     // YouTube + TBA upload settings for the Upload tab. Persisted here and also
-    // pushed to the youtube-tba-upload sidecar via POST /api/upload/config.
-    // Field shapes mirror the sidecar's eventConfig (INTEGRATION.md §4).
+    // pushed to the youtube-tba-upload process via POST /api/upload/config.
+    // Field shapes mirror the uploader's eventConfig (INTEGRATION.md §4).
     upload: {
         // TBA event trusted-API credentials
         tbaAuthId: string;
@@ -56,7 +57,7 @@ export type AppConfig = {
         // Target YouTube playlist (id is stored; name is display + fallback)
         playlistId: string;
         playlistName: string;
-        // Title / description templates the sidecar fills per match
+        // Title / description templates the uploader fills per match
         titleTemplate: string;
         descriptionTemplate: string;
         // Thumbnail image applied to each upload
@@ -68,8 +69,8 @@ export type AppConfig = {
     };
 };
 
-// UI defaults must equal the sidecar's own defaults verbatim (INTEGRATION.md
-// §4 / state.go), so the form shows exactly what the sidecar would fill.
+// UI defaults must equal the uploader's own defaults verbatim (INTEGRATION.md
+// §4 / state.go), so the form shows exactly what the uploader would fill.
 export const DEFAULT_TITLE_TEMPLATE =
     '{video_prefix} {match_level} Match {match_number}{play_suffix}';
 export const DEFAULT_DESCRIPTION_TEMPLATE = [
@@ -100,6 +101,11 @@ export function createStore(): Store<AppConfig> {
             liveCaptionsDownloadBase: {
                 type: 'string',
                 default: 'https://github.com/Filip-Kin/live-captions/releases',
+            },
+            youtubeUploaderDownloadBase: {
+                type: 'string',
+                default:
+                    'https://github.com/Filip-Kin/youtube-tba-upload/releases',
             },
             runOnStartup: {
                 type: 'boolean',
@@ -249,7 +255,7 @@ export function createStore(): Store<AppConfig> {
                 }
             },
             // Seed the Upload tab's settings for installs that predate it, and
-            // drop the retired include_practice/include_test flags (the sidecar
+            // drop the retired include_practice/include_test flags (the uploader
             // hard-excludes practice/test now).
             '2026.3.3': (store) => {
                 const existing =

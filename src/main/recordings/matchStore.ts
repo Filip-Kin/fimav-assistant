@@ -15,10 +15,10 @@ function manifestPath(folder: string): string {
     return path.join(folder, MANIFEST);
 }
 
-// The youtube-tba-upload sidecar writes into this SAME file (its per-match
+// The youtube-tba-upload process writes into this SAME file (its per-match
 // `upload` state), so both processes coordinate through one advisory lock and
 // only ever touch their own fields. This lock file + protocol MUST stay
-// identical to the sidecar's acquireManifestLock/writeFileAtomic in db.go:
+// identical to the uploader's acquireManifestLock/writeFileAtomic in db.go:
 // exclusive `.lock` create, steal after 10s, 5s deadline, 40ms retries, and a
 // temp-file rename for the write itself.
 const LOCK_STALE_MS = 10_000;
@@ -93,7 +93,7 @@ function readManifest(folder: string): MatchRecord[] {
     }
 }
 
-// Atomic write via temp + rename, matching the sidecar. Readers on the other
+// Atomic write via temp + rename, matching the uploader. Readers on the other
 // process therefore never see a half-written file.
 function writeManifest(folder: string, matches: MatchRecord[]): void {
     try {
@@ -121,8 +121,8 @@ export function getMatch(folder: string | null, id: string): MatchRecord | null 
 }
 
 // Insert a new record or replace an existing one with the same id. The read,
-// merge and write happen under the shared lock so a concurrent sidecar write is
-// never lost, and the sidecar-owned `upload` field is carried over verbatim
+// merge and write happen under the shared lock so a concurrent uploader write is
+// never lost, and the uploader-owned `upload` field is carried over verbatim
 // (FIM-AV never authors it, so replacing the record whole would otherwise drop
 // it).
 export function upsertMatch(folder: string, record: MatchRecord): void {

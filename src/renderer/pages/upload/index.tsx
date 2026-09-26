@@ -29,7 +29,7 @@ const { Text, Link } = Typography;
 
 const UPLOAD_BASE = 'http://localhost:8807';
 
-// The sidecar's per-video state machine, projected from the shared database.
+// The uploader's per-video state machine, projected from the shared database.
 export interface UploadVideoMeta {
     tba_match_key?: string;
     match_level?: string;
@@ -80,7 +80,7 @@ export interface SignInStatus {
     channelName: string;
 }
 
-// Sidecar status vocabulary → a display tag. "stable" is the sidecar's
+// Uploader status vocabulary → a display tag. "stable" is the uploader's
 // "queued to upload" state.
 const STATUS_TAG: Record<string, { color: string; text: string }> = {
     new: { color: 'default', text: 'New' },
@@ -485,7 +485,7 @@ export default function UploadPage() {
         };
     }, []);
 
-    // Match/upload state straight from the sidecar (permissive CORS), polled.
+    // Match/upload state straight from the uploader (permissive CORS), polled.
     const running = !!status?.running;
     useEffect(() => {
         if (!running) return undefined;
@@ -501,7 +501,7 @@ export default function UploadPage() {
                 const body = await res.json();
                 if (!cancelled) setRows(sortRows(body?.videos ?? {}));
             } catch {
-                // sidecar not answering yet
+                // uploader not answering yet
             }
         };
         load();
@@ -512,7 +512,7 @@ export default function UploadPage() {
         };
     }, [running, eventKey]);
 
-    // Sign-in status straight from the sidecar's health endpoint, polled.
+    // Sign-in status straight from the uploader's health endpoint, polled.
     useEffect(() => {
         if (!running) return undefined;
         let cancelled = false;
@@ -529,7 +529,7 @@ export default function UploadPage() {
                     });
                 }
             } catch {
-                // sidecar not answering yet
+                // uploader not answering yet
             }
         };
         load();

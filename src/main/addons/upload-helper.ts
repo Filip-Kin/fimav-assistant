@@ -1,23 +1,31 @@
-import { ChildProcessWithoutNullStreams, spawn, execSync } from 'child_process';
+import path from 'path';
 import fs from 'fs';
+import { finished } from 'stream/promises';
+import { Readable } from 'node:stream';
+import { ChildProcessWithoutNullStreams, spawn, execSync } from 'child_process';
+import glob from 'glob';
 import log from 'electron-log';
-import { getAssetPath } from '../util';
+import { appdataPath } from '../util';
 import { AddonLoggers } from './addon-loggers';
+import { getStore } from '../store';
 import AutoAV from './autoav';
 
-// UploadHelper spawns and supervises the youtube-tba-upload Go sidecar, which
+// YoutubeUploaderAddon spawns and supervises the youtube-tba-upload process, which
 // uploads recorded match videos to YouTube and submits the URLs to The Blue
-// Alliance. It shares one SQLite database with FIM-AV in the recording folder
-// (see recordings/db.ts). This mirrors LiveCaptions: a lazy singleton, a
-// tracked child with an identity-guarded exit handler, a killExisting sweep by
-// image name and by port, and a readiness poll before reporting running.
+// Alliance. It shares the fimav-matches.json manifest with FIM-AV in the
+// recording folder (see recordings/matchStore.ts). This mirrors LiveCaptions:
+// a lazy singleton, a tracked child with an identity-guarded exit handler, a
+// killExisting sweep by image name and by port, and a readiness poll before
+// reporting running.
 //
-// The sidecar is a Windows .exe shipped under assets/youtube-tba-upload/ (it
-// won't exist in the repo; assets/youtube-tba-upload/ is populated at package
-// time from the youtube-tba-upload repo's release build). start() logs a clear
-// error and stays stopped if the binary is missing.
-export default class UploadHelper {
-    private static instance: UploadHelper;
+// The uploader is NOT bundled with the app. Exactly like LiveCaptions, start()
+// downloads the versioned Windows .exe (youtube-tba-upload-<version>.exe) from
+// the youtube-tba-upload GitHub releases into the app's userData dir, keeps the
+// newest one, and auto-updates on launch. Offline (e.g. at a venue) it falls
+// back to the newest local copy, and stays stopped only if none was ever
+// downloaded.
+export default class YoutubeUploaderAddon {
+    private static instance: YoutubeUploaderAddon;
 
     private running = false;
 
@@ -29,16 +37,16 @@ export default class UploadHelper {
 
     constructor() {
         this.logs = {
-            out: log.scope('upload-helper.out'),
-            err: log.scope('upload-helper.err'),
+            out: log.scope('youtube-uploader.out'),
+            err: log.scope('youtube-uploader.err'),
         };
     }
 
-    // The port the sidecar serves its HTTP API on (matches the Go -listen
+    // The port the uploader serves its HTTP API on (matches the Go -listen
     // default and the Upload tab's fetch base).
     private static readonly PORT = 8807;
 
-    // FMS + TBA base URLs the sidecar needs (Go defaults; passed explicitly so
+    // FMS + TBA base URLs the uploader needs (Go defaults; passed explicitly so
     // the spawn is self-documenting). FMS is the same field controller AutoAV
     // talks to; TBA is the public trusted-submission endpoint.
     private static readonly FMS_URL = 'http://10.0.100.5';
@@ -75,8 +83,8 @@ export default class UploadHelper {
             const pids = new Set<string>();
             out.split(/\r?\n/).forEach((line) => {
                 if (
-                    line.includes(`:${UploadHelper.PORT} `) ||
-                    line.includes(`:${UploadHelper.PORT}\t`)
+                    line.includes(`:${YoutubeUploaderAddon.PORT} `) ||
+                    line.includes(`:${YoutubeUploaderAddon.PORT}\t`)
                 ) {
                     const cols = line.trim().split(/\s+/);
                     const pid = cols[cols.length - 1];
@@ -87,7 +95,7 @@ export default class UploadHelper {
                 try {
                     execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
                     this.logs.out.log(
-                        `Freed port ${UploadHelper.PORT} (killed PID ${pid})`
+                        `Freed port ${YoutubeUploaderAddon.PORT} (killed PID ${pid})`
                     );
                 } catch {
                     // ignore
@@ -101,7 +109,7 @@ export default class UploadHelper {
         this.process = null;
     }
 
-    // Poll /api/health until the sidecar actually answers, so we only report
+    // Poll /api/health until the uploader actually answers, so we only report
     // running once it's serving. Also captures the reported version.
     private async waitForServer(timeoutMs = 15000): Promise<boolean> {
         const deadline = Date.now() + timeoutMs;
@@ -109,7 +117,7 @@ export default class UploadHelper {
             try {
                 // eslint-disable-next-line no-await-in-loop
                 const res = await fetch(
-                    `http://127.0.0.1:${UploadHelper.PORT}/api/health`,
+                    `http://127.0.0.1:${YoutubeUploaderAddon.PORT}/api/health`,
                     { signal: AbortSignal.timeout(1500) }
                 );
                 if (res.ok) {
@@ -133,46 +141,93 @@ export default class UploadHelper {
         return false;
     }
 
-    // The recording folder the sidecar watches = the event folder AutoAV is
-    // currently filing videos into. A new event is a new folder, so the sidecar
+    // The recording folder the uploader watches = the event folder AutoAV is
+    // currently filing videos into. A new event is a new folder, so the uploader
     // is restarted (restart()) when it changes.
     // eslint-disable-next-line class-methods-use-this
     private videoDir(): string | null {
         return AutoAV.Instance.getStatus().saveFolder;
     }
 
-    // Start the sidecar. Returns false (and stays stopped) when there is no
-    // recording folder yet or the binary is missing.
+    // Start the uploader. Downloads/updates the versioned exe from GitHub
+    // releases (best-effort, offline-tolerant) exactly like LiveCaptions, then
+    // launches the newest local copy. Returns false (and stays stopped) when
+    // there is no recording folder yet, or no exe was ever downloaded.
     public async start(): Promise<boolean> {
         this.killExisting();
 
         const videoDir = this.videoDir();
         if (!videoDir) {
             this.logs.out.log(
-                'No recording folder yet; upload sidecar will start once an event folder is known'
+                'No recording folder yet; YouTube uploader will start once an event folder is known'
             );
             this.running = false;
             return false;
         }
 
-        const exePath = getAssetPath(
-            'youtube-tba-upload',
-            'youtube-tba-upload.exe'
+        // Newest exe already downloaded, named youtube-tba-upload-<version>.exe
+        // in the app's userData dir.
+        const found = glob.sync(
+            path.join(appdataPath, 'youtube-tba-upload-*.exe')
         );
-        if (!fs.existsSync(exePath)) {
+        let currentVersion = '0.0.0';
+        found.forEach((file) => {
+            const version = file.split('-').pop()?.split('.exe')[0] ?? '0.0.0';
+            if (version > currentVersion) currentVersion = version;
+        });
+
+        // Update check + download is best-effort: offline at a venue we fall
+        // back to the newest local exe rather than leaving the uploader down.
+        try {
+            const baseUrl = getStore().get('youtubeUploaderDownloadBase');
+            const res = await fetch(`${baseUrl}/latest`, {
+                signal: AbortSignal.timeout(8000),
+            });
+            // "/latest" redirects to the newest release; extract its version.
+            const latestVersion = res.url.split('/').pop()?.slice(1) || '0.0.0';
+            if (latestVersion > currentVersion) {
+                this.logs.out.log(
+                    `New YouTube uploader available, currently ${currentVersion}, downloading ${latestVersion}`
+                );
+                const target = path.join(
+                    appdataPath,
+                    `youtube-tba-upload-${latestVersion}.exe`
+                );
+                const stream = fs.createWriteStream(target);
+                const { body } = await fetch(
+                    `${baseUrl}/download/v${latestVersion}/youtube-tba-upload-${latestVersion}.exe`
+                );
+                if (body === null)
+                    throw new Error('Failed to download YouTube uploader');
+                // @ts-ignore Node's Readable.fromWeb typing lags the DOM stream
+                await finished(Readable.fromWeb(body).pipe(stream));
+                currentVersion = latestVersion;
+            }
+        } catch (e) {
+            this.logs.err.warn(
+                `Update check failed, using local v${currentVersion}`,
+                e
+            );
+        }
+
+        if (currentVersion === '0.0.0') {
             this.logs.err.error(
-                `youtube-tba-upload.exe not found at ${exePath}. It is bundled at package time from the youtube-tba-upload release build; the Upload tab will stay stopped until it is present.`
+                'No YouTube uploader executable available (never downloaded and offline)'
             );
             this.running = false;
             return false;
         }
 
-        return this.startSidecar(exePath, videoDir);
+        this.currentVersion = currentVersion;
+        return this.launch(
+            path.join(appdataPath, `youtube-tba-upload-${currentVersion}.exe`),
+            videoDir
+        );
     }
 
     // Launch the exe and confirm it's serving before reporting running. Retries
     // once (with a fresh port sweep) so Restart can recover a wedged instance.
-    private async startSidecar(
+    private async launch(
         exePath: string,
         videoDir: string
     ): Promise<boolean> {
@@ -180,11 +235,11 @@ export default class UploadHelper {
             '-video-dir',
             videoDir,
             '-listen',
-            `:${UploadHelper.PORT}`,
+            `:${YoutubeUploaderAddon.PORT}`,
             '-fms-url',
-            UploadHelper.FMS_URL,
+            YoutubeUploaderAddon.FMS_URL,
             '-tba-url',
-            UploadHelper.TBA_URL,
+            YoutubeUploaderAddon.TBA_URL,
         ];
 
         for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -200,7 +255,7 @@ export default class UploadHelper {
             // one started on retry.
             child.on('exit', (code: number | null, signal: string | null) => {
                 this.logs.out.log(
-                    `Upload sidecar exited (code ${code ?? 'null'}, signal ${
+                    `YouTube uploader exited (code ${code ?? 'null'}, signal ${
                         signal ?? 'none'
                     })`
                 );
@@ -211,7 +266,7 @@ export default class UploadHelper {
             });
             child.on('error', (err) => {
                 this.logs.err.error(
-                    `Upload sidecar failed to start: ${err.message}`
+                    `YouTube uploader failed to start: ${err.message}`
                 );
                 if (this.process === child) {
                     this.running = false;
@@ -220,7 +275,7 @@ export default class UploadHelper {
             });
 
             this.logs.out.log(
-                `Starting upload sidecar, watching ${videoDir}`
+                `Starting YouTube uploader, watching ${videoDir}`
             );
 
             // eslint-disable-next-line no-await-in-loop
@@ -228,13 +283,13 @@ export default class UploadHelper {
             if (up && this.process === child && !child.killed) {
                 this.running = true;
                 this.logs.out.log(
-                    `Upload sidecar is serving on port ${UploadHelper.PORT} (v${this.currentVersion})`
+                    `YouTube uploader is serving on port ${YoutubeUploaderAddon.PORT} (v${this.currentVersion})`
                 );
                 return true;
             }
 
             this.logs.err.error(
-                `Upload sidecar did not come up on attempt ${attempt}${
+                `YouTube uploader did not come up on attempt ${attempt}${
                     attempt < 2 ? ' - retrying after a clean port sweep' : ''
                 }`
             );
@@ -244,12 +299,12 @@ export default class UploadHelper {
         return false;
     }
 
-    // Stop the sidecar cleanly: ask it to shut down (closes the browser and
+    // Stop the uploader cleanly: ask it to shut down (closes the browser and
     // checkpoints the WAL), then fall back to the kill sweep on timeout. Exit
     // handlers are identity-guarded, so the fallback kill is harmless.
     public async stop(): Promise<boolean> {
         try {
-            await fetch(`http://127.0.0.1:${UploadHelper.PORT}/api/shutdown`, {
+            await fetch(`http://127.0.0.1:${YoutubeUploaderAddon.PORT}/api/shutdown`, {
                 method: 'POST',
                 signal: AbortSignal.timeout(5000),
             });
@@ -272,7 +327,7 @@ export default class UploadHelper {
         return this.currentVersion;
     }
 
-    public static get Instance(): UploadHelper {
+    public static get Instance(): YoutubeUploaderAddon {
         if (!this.instance) this.instance = new this();
         return this.instance;
     }

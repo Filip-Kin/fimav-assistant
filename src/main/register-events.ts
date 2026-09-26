@@ -18,7 +18,7 @@ import { getStore } from './store';
 import Event from '../models/Event';
 import AutoAV from './addons/autoav';
 import LiveCaptions from './addons/live-captions';
-import UploadHelper from './addons/upload-helper';
+import YoutubeUploaderAddon from './addons/upload-helper';
 import getVmixBandwidth, { streamKeyFromUrl } from './vmixBandwidth';
 import { AutoAVStatus } from '../models/AutoAVStatus';
 import { MatchRecord } from '../models/MatchRecord';
@@ -622,13 +622,13 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         event.reply('liveCaptions:status', liveCaptionsStatus());
     });
 
-    // #region Upload tab (youtube-tba-upload sidecar)
+    // #region Upload tab (youtube-tba-upload process)
 
-    // Upload sidecar status + controls for the Upload tab's control row. The
+    // YouTube uploader status + controls for the Upload tab's control row. The
     // event key rides along so the renderer can scope its direct :8807 fetches.
     const uploadStatus = () => ({
-        running: UploadHelper.Instance.isRunning(),
-        version: UploadHelper.Instance.getVersion(),
+        running: YoutubeUploaderAddon.Instance.isRunning(),
+        version: YoutubeUploaderAddon.Instance.getVersion(),
         eventKey: AutoAV.Instance.getStatus().currentEvent?.code ?? '',
     });
 
@@ -638,26 +638,26 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     ipcMain.on('upload:restart', async (event) => {
         try {
-            await UploadHelper.Instance.stop();
-            await UploadHelper.Instance.start();
+            await YoutubeUploaderAddon.Instance.stop();
+            await YoutubeUploaderAddon.Instance.start();
         } catch (e) {
-            log.error('Upload sidecar restart failed', e);
+            log.error('YouTube uploader restart failed', e);
         }
         event.reply('upload:status', uploadStatus());
     });
 
     ipcMain.on('upload:stopAddon', async (event) => {
         try {
-            await UploadHelper.Instance.stop();
+            await YoutubeUploaderAddon.Instance.stop();
         } catch (e) {
-            log.error('Upload sidecar stop failed', e);
+            log.error('YouTube uploader stop failed', e);
         }
         event.reply('upload:status', uploadStatus());
     });
 
-    // Upload settings: persisted in electron-store and pushed to the sidecar as
+    // Upload settings: persisted in electron-store and pushed to the uploader as
     // its event config (POST /api/upload/config). The tba_secret only ever
-    // leaves the main process, straight to the loopback sidecar.
+    // leaves the main process, straight to the loopback uploader.
     const uploadSettings = () => store.get('upload');
 
     ipcMain.on('upload:getSettings', (event) => {
@@ -666,8 +666,8 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     ipcMain.on('upload:saveSettings', async (event, [settings]) => {
         store.set('upload', settings);
-        // Push to the sidecar so a save takes effect without a restart. The
-        // sidecar keys config by event; use the event AutoAV is filing into.
+        // Push to the uploader so a save takes effect without a restart. The
+        // uploader keys config by event; use the event AutoAV is filing into.
         const { currentEvent } = AutoAV.Instance.getStatus();
         const eventKey = currentEvent?.code ?? '';
         try {
@@ -696,7 +696,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
                 }
             );
         } catch (e) {
-            log.warn('Could not push upload config to sidecar', e);
+            log.warn('Could not push upload config to uploader', e);
         }
         event.reply('upload:settings', uploadSettings());
     });

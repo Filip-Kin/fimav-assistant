@@ -44,7 +44,7 @@ export interface MatchRecord {
     // v2 processing (reserved, not populated this session)
     processing?: MatchProcessing;
 
-    // Owned by the youtube-tba-upload sidecar, never written by FIM-AV. Present
+    // Owned by the youtube-tba-upload process, never written by FIM-AV. Present
     // so the match store preserves it verbatim through a read-modify-write of the
     // shared manifest instead of dropping it. See matchStore's locked writes.
     upload?: unknown;
