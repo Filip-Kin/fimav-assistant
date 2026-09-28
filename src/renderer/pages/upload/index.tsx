@@ -240,10 +240,12 @@ const VISIBILITY_OPTIONS = [
 // deletes the saved login, so it is guarded by a confirm.
 function AccountRow({
     signIn,
+    signingIn,
     onSignIn,
     onLogout,
 }: {
     signIn: SignInStatus;
+    signingIn: boolean;
     onSignIn: () => void;
     onLogout: () => void;
 }) {
@@ -262,7 +264,12 @@ function AccountRow({
                 </Text>
             </Space>
             <Space size={8}>
-                <Button size="small" onClick={onSignIn}>
+                <Button
+                    size="small"
+                    onClick={onSignIn}
+                    loading={signingIn}
+                    disabled={signIn.signedIn || signingIn}
+                >
                     Sign in to YouTube
                 </Button>
                 <Popconfirm
@@ -285,7 +292,9 @@ export function UploadSettingsDialog({
     open,
     onClose,
     playlists,
+    playlistsLoading,
     signIn,
+    signingIn,
     onSignIn,
     onLogout,
     onRefreshPlaylists,
@@ -293,7 +302,9 @@ export function UploadSettingsDialog({
     open: boolean;
     onClose: () => void;
     playlists: Playlist[];
+    playlistsLoading: boolean;
     signIn: SignInStatus;
+    signingIn: boolean;
     onSignIn: () => void;
     onLogout: () => void;
     onRefreshPlaylists: () => void;
@@ -355,6 +366,7 @@ export function UploadSettingsDialog({
         >
             <AccountRow
                 signIn={signIn}
+                signingIn={signingIn}
                 onSignIn={onSignIn}
                 onLogout={onLogout}
             />
@@ -379,6 +391,8 @@ export function UploadSettingsDialog({
                         <Button
                             icon={<ReloadOutlined />}
                             onClick={onRefreshPlaylists}
+                            loading={playlistsLoading}
+                            disabled={!signIn.signedIn}
                         />
                     </Space.Compact>
                 </Form.Item>
@@ -415,22 +429,20 @@ export function UploadSettingsDialog({
                 <Form.Item label="TBA secret" name="tbaSecret">
                     <Input.Password />
                 </Form.Item>
-                <Space size={32} wrap>
-                    <Form.Item
-                        label="Auto-submit to TBA"
-                        name="autoSubmitTba"
-                        valuePropName="checked"
-                    >
-                        <Switch />
-                    </Form.Item>
-                    <Form.Item
-                        label="Headless"
-                        name="headless"
-                        valuePropName="checked"
-                    >
-                        <Switch />
-                    </Form.Item>
-                </Space>
+                <Form.Item
+                    label="Auto-submit to TBA"
+                    name="autoSubmitTba"
+                    valuePropName="checked"
+                >
+                    <Switch />
+                </Form.Item>
+                <Form.Item
+                    label="Headless"
+                    name="headless"
+                    valuePropName="checked"
+                >
+                    <Switch />
+                </Form.Item>
             </Form>
         </Modal>
     );
@@ -462,6 +474,8 @@ export default function UploadPage() {
     });
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [busy, setBusy] = useState(false);
+    const [signingIn, setSigningIn] = useState(false);
+    const [playlistsLoading, setPlaylistsLoading] = useState(false);
 
     const eventKey = status?.eventKey ?? '';
 
@@ -542,15 +556,30 @@ export default function UploadPage() {
 
     const loadPlaylists = useCallback(
         (refresh: boolean) => {
+            // A refresh drives a Chrome scrape of the Studio playlists page, which
+            // is slow, so give it a long timeout; the cached read is instant.
+            if (refresh) setPlaylistsLoading(true);
             fetch(
                 `${UPLOAD_BASE}/api/yt/playlists?event_key=${encodeURIComponent(
                     eventKey
                 )}${refresh ? '&refresh=1' : ''}`,
-                { signal: AbortSignal.timeout(8000) }
+                { signal: AbortSignal.timeout(refresh ? 45000 : 8000) }
             )
                 .then((r) => r.json())
-                .then((list) => setPlaylists(Array.isArray(list) ? list : []))
-                .catch(() => setPlaylists([]));
+                .then((list) => {
+                    if (Array.isArray(list)) {
+                        setPlaylists(list);
+                    } else if (list?.error) {
+                        // Keep the current list rather than blanking it.
+                        message.error(`Playlists: ${list.error}`);
+                    }
+                    setPlaylistsLoading(false);
+                    return null;
+                })
+                .catch(() => {
+                    setPlaylistsLoading(false);
+                    if (refresh) message.error('Playlist refresh failed');
+                });
         },
         [eventKey]
     );
@@ -562,6 +591,7 @@ export default function UploadPage() {
     }, [settingsOpen, running, loadPlaylists]);
 
     const signInYouTube = useCallback(() => {
+        setSigningIn(true);
         fetch(
             `${UPLOAD_BASE}/api/upload/login?event_key=${encodeURIComponent(
                 eventKey
@@ -574,8 +604,17 @@ export default function UploadPage() {
             }
         )
             .then(() => message.info('Opening YouTube sign-in'))
-            .catch(() => message.error('Failed'));
+            .catch(() => {
+                setSigningIn(false);
+                message.error('Failed');
+            });
     }, [eventKey]);
+
+    // The sign-in window closes itself once sign-in lands; the health poll flips
+    // signedIn, which clears the button's in-progress state.
+    useEffect(() => {
+        if (signIn.signedIn) setSigningIn(false);
+    }, [signIn.signedIn]);
 
     const logoutYouTube = useCallback(() => {
         fetch(
@@ -670,7 +709,9 @@ export default function UploadPage() {
                 open={settingsOpen}
                 onClose={() => setSettingsOpen(false)}
                 playlists={playlists}
+                playlistsLoading={playlistsLoading}
                 signIn={signIn}
+                signingIn={signingIn}
                 onSignIn={signInYouTube}
                 onLogout={logoutYouTube}
                 onRefreshPlaylists={() => loadPlaylists(true)}
