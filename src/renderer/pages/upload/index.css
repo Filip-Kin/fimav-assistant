@@ -16,3 +16,15 @@
     font-family: 'Courier New', monospace;
     word-break: break-all;
 }
+
+.upload-toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.upload-toggle-row__label {
+    text-align: right;
+}

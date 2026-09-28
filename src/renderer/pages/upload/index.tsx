@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Button,
+    Col,
     Empty,
     Form,
     Input,
     Modal,
     Popconfirm,
+    Row,
     Select,
     Space,
     Switch,
@@ -374,7 +376,9 @@ export function UploadSettingsDialog({
             onOk={save}
             okText="Save"
             confirmLoading={loading}
-            width={560}
+            width={760}
+            style={{ top: 24 }}
+            styles={{ body: { maxHeight: '78vh', overflowY: 'auto' } }}
             destroyOnClose
         >
             <AccountRow
@@ -390,75 +394,94 @@ export function UploadSettingsDialog({
                 disabled={loading}
                 style={{ marginTop: 12 }}
             >
-                <Form.Item label="Playlist">
-                    <Space.Compact style={{ width: '100%' }}>
-                        <Form.Item name="playlistId" noStyle>
-                            <Select
-                                allowClear
-                                placeholder="Playlist"
-                                options={playlists.map((p) => ({
-                                    value: p.id,
-                                    label: p.title,
-                                }))}
+                <Row gutter={16}>
+                    <Col span={12}>
+                        <Form.Item label="Playlist">
+                            <Space.Compact style={{ width: '100%' }}>
+                                <Form.Item name="playlistId" noStyle>
+                                    <Select
+                                        allowClear
+                                        placeholder="Playlist"
+                                        options={playlists.map((p) => ({
+                                            value: p.id,
+                                            label: p.title,
+                                        }))}
+                                    />
+                                </Form.Item>
+                                <Button
+                                    icon={<ReloadOutlined />}
+                                    onClick={onRefreshPlaylists}
+                                    loading={playlistsLoading}
+                                    disabled={!signIn.signedIn}
+                                />
+                            </Space.Compact>
+                        </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                        <Form.Item label="Visibility" name="visibility">
+                            <Select options={VISIBILITY_OPTIONS} />
+                        </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                        <Form.Item label="Title template" name="titleTemplate">
+                            <Input />
+                        </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                        <Form.Item label="Thumbnail">
+                            <Space size={8} align="center">
+                                <Button onClick={pickThumbnail}>Choose</Button>
+                                <Text
+                                    type="secondary"
+                                    className="file-name"
+                                    title={thumbnail || undefined}
+                                >
+                                    {thumbnail ? baseName(thumbnail) : 'None'}
+                                </Text>
+                            </Space>
+                            <Form.Item name="thumbnailPath" hidden>
+                                <Input />
+                            </Form.Item>
+                        </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                        <Form.Item label="TBA auth ID" name="tbaAuthId">
+                            <Input />
+                        </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                        <Form.Item label="TBA secret" name="tbaSecret">
+                            <Input.Password />
+                        </Form.Item>
+                    </Col>
+                    <Col span={24}>
+                        <Form.Item
+                            label="Description template"
+                            name="descriptionTemplate"
+                        >
+                            <Input.TextArea
+                                autoSize={{ minRows: 6, maxRows: 12 }}
                             />
                         </Form.Item>
-                        <Button
-                            icon={<ReloadOutlined />}
-                            onClick={onRefreshPlaylists}
-                            loading={playlistsLoading}
-                            disabled={!signIn.signedIn}
-                        />
-                    </Space.Compact>
-                </Form.Item>
-                <Form.Item label="Visibility" name="visibility">
-                    <Select options={VISIBILITY_OPTIONS} />
-                </Form.Item>
-                <Form.Item label="Thumbnail">
-                    <Space size={8} align="center">
-                        <Button onClick={pickThumbnail}>Choose</Button>
-                        <Text
-                            type="secondary"
-                            className="file-name"
-                            title={thumbnail || undefined}
-                        >
-                            {thumbnail ? baseName(thumbnail) : 'None'}
-                        </Text>
-                    </Space>
-                    <Form.Item name="thumbnailPath" hidden>
-                        <Input />
-                    </Form.Item>
-                </Form.Item>
-                <Form.Item label="Title template" name="titleTemplate">
-                    <Input />
-                </Form.Item>
-                <Form.Item
-                    label="Description template"
-                    name="descriptionTemplate"
-                >
-                    <Input.TextArea autoSize={{ minRows: 8, maxRows: 14 }} />
-                </Form.Item>
-                <Form.Item label="TBA auth ID" name="tbaAuthId">
-                    <Input />
-                </Form.Item>
-                <Form.Item label="TBA secret" name="tbaSecret">
-                    <Input.Password />
-                </Form.Item>
-                <Form.Item
-                    label="Auto-submit to TBA"
-                    name="autoSubmitTba"
-                    valuePropName="checked"
-                >
-                    <Switch />
-                </Form.Item>
-                <Form.Item
-                    label="Headless"
-                    name="headless"
-                    valuePropName="checked"
-                >
-                    <Switch />
-                </Form.Item>
+                    </Col>
+                </Row>
+                <ToggleRow label="Auto-submit to TBA" name="autoSubmitTba" />
+                <ToggleRow label="Headless" name="headless" />
             </Form>
         </Modal>
+    );
+}
+
+// A settings toggle laid out as [label ...... switch], right-aligned so every
+// switch lines up on the right edge of the dialog.
+function ToggleRow({ label, name }: { label: string; name: string }) {
+    return (
+        <div className="upload-toggle-row">
+            <span className="upload-toggle-row__label">{label}</span>
+            <Form.Item name={name} valuePropName="checked" noStyle>
+                <Switch />
+            </Form.Item>
+        </div>
     );
 }
 
