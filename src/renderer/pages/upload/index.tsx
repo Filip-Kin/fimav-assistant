@@ -13,11 +13,16 @@ import {
     Switch,
     Table,
     Tag,
+    Tooltip,
     Typography,
     message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ReloadOutlined, YoutubeFilled } from '@ant-design/icons';
+import {
+    QuestionCircleOutlined,
+    ReloadOutlined,
+    YoutubeFilled,
+} from '@ant-design/icons';
 import AddonControlRow from '../../components/AddonControlRow';
 import './index.css';
 
@@ -456,7 +461,17 @@ export function UploadSettingsDialog({
                     </Col>
                     <Col span={24}>
                         <Form.Item
-                            label="Description template"
+                            label={
+                                <Space size={4}>
+                                    Description template
+                                    <Tooltip
+                                        title={<TemplateVarsHelp />}
+                                        overlayStyle={{ maxWidth: 360 }}
+                                    >
+                                        <QuestionCircleOutlined />
+                                    </Tooltip>
+                                </Space>
+                            }
                             name="descriptionTemplate"
                         >
                             <Input.TextArea
@@ -469,6 +484,38 @@ export function UploadSettingsDialog({
                 <ToggleRow label="Headless" name="headless" />
             </Form>
         </Modal>
+    );
+}
+
+// The template variables the uploader's renderer understands, shown in the
+// description-box tooltip. Mirrors resolvePlaceholder in the uploader's
+// template.go; a line whose variable has no value is dropped from the output.
+const TEMPLATE_VARS: [string, string][] = [
+    ['{title}', 'Rendered title line'],
+    ['{video_prefix}', 'Event name / filename prefix'],
+    ['{event_name}', 'Configured event name'],
+    ['{event_year}', 'Season year'],
+    ['{match_level}', 'Qualification / Playoff / Final'],
+    ['{match_number}', 'Match number'],
+    ['{match_label}', 'e.g. Qualification 5'],
+    ['{play_suffix}', 'e.g.  Play 2'],
+    ['{red_score}', 'Red final score'],
+    ['{blue_score}', 'Blue final score'],
+    ['{red[0].number}', 'Red team 1 number (0-2)'],
+    ['{red[0].name}', 'Red team 1 name (0-2)'],
+    ['{blue[0].number}', 'Blue team 1 number (0-2)'],
+    ['{blue[0].name}', 'Blue team 1 name (0-2)'],
+];
+
+function TemplateVarsHelp() {
+    return (
+        <div>
+            {TEMPLATE_VARS.map(([token, desc]) => (
+                <div key={token}>
+                    <code>{token}</code> — {desc}
+                </div>
+            ))}
+        </div>
     );
 }
 
