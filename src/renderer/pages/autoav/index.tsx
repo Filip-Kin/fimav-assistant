@@ -430,7 +430,10 @@ export default function AutoAVPage() {
             title: 'Status',
             key: 'status',
             render: (_, m) => {
-                const tag = STATUS_TAG[m.status];
+                const tag = STATUS_TAG[m.status] ?? {
+                    color: 'default',
+                    text: m.status ?? 'Unknown',
+                };
                 return (
                     <span title={m.error ?? undefined}>
                         <Tag color={tag.color}>{tag.text}</Tag>
