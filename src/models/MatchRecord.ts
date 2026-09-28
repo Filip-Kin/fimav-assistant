@@ -40,6 +40,8 @@ export interface MatchRecord {
     // v2 metadata (captured now, after the file is renamed)
     teams?: { red: MatchTeam[]; blue: MatchTeam[] };
     hasCard?: boolean; // derived: any cardEffectiveStatus !== 'None'
+    // Final alliance totals from FMS results; absent when FMS gave none.
+    score?: { red: number; blue: number } | null;
 
     // v2 processing (reserved, not populated this session)
     processing?: MatchProcessing;

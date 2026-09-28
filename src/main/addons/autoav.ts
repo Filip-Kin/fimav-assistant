@@ -855,6 +855,7 @@ export default class AutoAV {
             const record = updateMatch(folder, recordId, {
                 teams: results.teams,
                 hasCard: results.hasCard,
+                score: results.score,
             });
             if (record) {
                 this.emitter.emit('match', record);

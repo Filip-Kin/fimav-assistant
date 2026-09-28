@@ -9,6 +9,8 @@ const FMS_BASE = 'http://10.0.100.5';
 export interface MatchResults {
     teams: { red: MatchTeam[]; blue: MatchTeam[] };
     hasCard: boolean;
+    // Final alliance totals from scoreDetails; null when FMS didn't report them.
+    score: { red: number; blue: number } | null;
 }
 
 // Shape of the relevant bits of the FMS GetMatchResults* responses. FMS returns
@@ -23,6 +25,8 @@ interface FmsTeamResult {
 // slots come back with teamNumber 0).
 interface FmsAllianceData {
     cardEffectiveStatus?: string;
+    // Per-alliance score envelope; totalScore is the final total (game-agnostic).
+    scoreDetails?: { totalScore?: number };
     team1?: FmsTeamResult;
     team2?: FmsTeamResult;
     team3?: FmsTeamResult;
@@ -110,7 +114,13 @@ export default class FmsApi {
             const red = mapAlliance(data.redAllianceData);
             const blue = mapAlliance(data.blueAllianceData);
             const hasCard = [...red, ...blue].some((t) => t.card !== 'None');
-            return { teams: { red, blue }, hasCard };
+            const redScore = data.redAllianceData?.scoreDetails?.totalScore;
+            const blueScore = data.blueAllianceData?.scoreDetails?.totalScore;
+            const score =
+                typeof redScore === 'number' && typeof blueScore === 'number'
+                    ? { red: redScore, blue: blueScore }
+                    : null;
+            return { teams: { red, blue }, hasCard, score };
         } catch (err) {
             log.warn(`FmsApi: failed to fetch ${endpoint}`, err);
             return null;
