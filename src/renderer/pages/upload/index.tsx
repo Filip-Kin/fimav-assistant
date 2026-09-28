@@ -383,7 +383,7 @@ export function UploadSettingsDialog({
             confirmLoading={loading}
             width={760}
             style={{ top: 24 }}
-            styles={{ body: { maxHeight: '78vh', overflowY: 'auto' } }}
+            styles={{ body: { maxHeight: '86vh', overflowY: 'auto' } }}
             destroyOnClose
         >
             <AccountRow
@@ -475,7 +475,7 @@ export function UploadSettingsDialog({
                             name="descriptionTemplate"
                         >
                             <Input.TextArea
-                                autoSize={{ minRows: 6, maxRows: 12 }}
+                                autoSize={{ minRows: 4, maxRows: 10 }}
                             />
                         </Form.Item>
                     </Col>
