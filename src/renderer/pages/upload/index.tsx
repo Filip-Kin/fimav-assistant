@@ -383,7 +383,15 @@ export function UploadSettingsDialog({
             confirmLoading={loading}
             width={760}
             style={{ top: 24 }}
-            styles={{ body: { maxHeight: '86vh', overflowY: 'auto' } }}
+            styles={{
+                body: {
+                    maxHeight: '88vh',
+                    overflowY: 'auto',
+                    // Ant's Row gutter uses negative margins that spill a few px
+                    // past the body box; clip them so no horizontal scrollbar.
+                    overflowX: 'hidden',
+                },
+            }}
             destroyOnClose
         >
             <AccountRow
@@ -475,7 +483,7 @@ export function UploadSettingsDialog({
                             name="descriptionTemplate"
                         >
                             <Input.TextArea
-                                autoSize={{ minRows: 4, maxRows: 10 }}
+                                autoSize={{ minRows: 3, maxRows: 9 }}
                             />
                         </Form.Item>
                     </Col>
@@ -512,7 +520,7 @@ function TemplateVarsHelp() {
         <div>
             {TEMPLATE_VARS.map(([token, desc]) => (
                 <div key={token}>
-                    <code>{token}</code> — {desc}
+                    <code>{token}</code>: {desc}
                 </div>
             ))}
         </div>
