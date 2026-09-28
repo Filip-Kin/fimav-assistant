@@ -629,6 +629,11 @@ export default function UploadPage() {
 
     const signInYouTube = useCallback(() => {
         setSigningIn(true);
+        // The button only guards against a double-click; the uploader itself
+        // blocks a second sign-in window, so re-enable after a short delay rather
+        // than spinning until sign-in lands (which can take as long as the
+        // operator takes to log in).
+        setTimeout(() => setSigningIn(false), 4000);
         fetch(
             `${UPLOAD_BASE}/api/upload/login?event_key=${encodeURIComponent(
                 eventKey
@@ -646,12 +651,6 @@ export default function UploadPage() {
                 message.error('Failed');
             });
     }, [eventKey]);
-
-    // The sign-in window closes itself once sign-in lands; the health poll flips
-    // signedIn, which clears the button's in-progress state.
-    useEffect(() => {
-        if (signIn.signedIn) setSigningIn(false);
-    }, [signIn.signedIn]);
 
     const openChannel = useCallback(() => {
         fetch(
