@@ -242,11 +242,13 @@ function AccountRow({
     signIn,
     signingIn,
     onSignIn,
+    onOpenChannel,
     onLogout,
 }: {
     signIn: SignInStatus;
     signingIn: boolean;
     onSignIn: () => void;
+    onOpenChannel: () => void;
     onLogout: () => void;
 }) {
     return (
@@ -272,6 +274,13 @@ function AccountRow({
                 >
                     Sign in to YouTube
                 </Button>
+                <Button
+                    size="small"
+                    onClick={onOpenChannel}
+                    disabled={!signIn.signedIn}
+                >
+                    Open channel
+                </Button>
                 <Popconfirm
                     title="Log out of YouTube?"
                     okText="Log out"
@@ -296,6 +305,7 @@ export function UploadSettingsDialog({
     signIn,
     signingIn,
     onSignIn,
+    onOpenChannel,
     onLogout,
     onRefreshPlaylists,
 }: {
@@ -306,6 +316,7 @@ export function UploadSettingsDialog({
     signIn: SignInStatus;
     signingIn: boolean;
     onSignIn: () => void;
+    onOpenChannel: () => void;
     onLogout: () => void;
     onRefreshPlaylists: () => void;
 }) {
@@ -368,6 +379,7 @@ export function UploadSettingsDialog({
                 signIn={signIn}
                 signingIn={signingIn}
                 onSignIn={onSignIn}
+                onOpenChannel={onOpenChannel}
                 onLogout={onLogout}
             />
             <Form
@@ -616,6 +628,22 @@ export default function UploadPage() {
         if (signIn.signedIn) setSigningIn(false);
     }, [signIn.signedIn]);
 
+    const openChannel = useCallback(() => {
+        fetch(
+            `${UPLOAD_BASE}/api/upload/open-channel?event_key=${encodeURIComponent(
+                eventKey
+            )}`,
+            {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ event_key: eventKey }),
+                signal: AbortSignal.timeout(5000),
+            }
+        )
+            .then(() => message.info('Opening channel'))
+            .catch(() => message.error('Failed'));
+    }, [eventKey]);
+
     const logoutYouTube = useCallback(() => {
         fetch(
             `${UPLOAD_BASE}/api/upload/logout?event_key=${encodeURIComponent(
@@ -713,6 +741,7 @@ export default function UploadPage() {
                 signIn={signIn}
                 signingIn={signingIn}
                 onSignIn={signInYouTube}
+                onOpenChannel={openChannel}
                 onLogout={logoutYouTube}
                 onRefreshPlaylists={() => loadPlaylists(true)}
             />
