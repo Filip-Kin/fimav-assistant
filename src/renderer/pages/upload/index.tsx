@@ -266,31 +266,33 @@ function AccountRow({
                 </Text>
             </Space>
             <Space size={8}>
-                <Button
-                    size="small"
-                    onClick={onSignIn}
-                    loading={signingIn}
-                    disabled={signIn.signedIn || signingIn}
-                >
-                    Sign in to YouTube
-                </Button>
-                <Button
-                    size="small"
-                    onClick={onOpenChannel}
-                    disabled={!signIn.signedIn}
-                >
-                    Open channel
-                </Button>
-                <Popconfirm
-                    title="Log out of YouTube?"
-                    okText="Log out"
-                    cancelText="Cancel"
-                    onConfirm={onLogout}
-                >
-                    <Button size="small" danger disabled={!signIn.signedIn}>
-                        Log out of YouTube
+                {!signIn.signedIn && (
+                    <Button
+                        size="small"
+                        onClick={onSignIn}
+                        loading={signingIn}
+                        disabled={signingIn}
+                    >
+                        Sign in to YouTube
                     </Button>
-                </Popconfirm>
+                )}
+                {signIn.signedIn && (
+                    <>
+                        <Button size="small" onClick={onOpenChannel}>
+                            Open channel
+                        </Button>
+                        <Popconfirm
+                            title="Log out of YouTube?"
+                            okText="Log out"
+                            cancelText="Cancel"
+                            onConfirm={onLogout}
+                        >
+                            <Button size="small" danger>
+                                Log out of YouTube
+                            </Button>
+                        </Popconfirm>
+                    </>
+                )}
             </Space>
         </div>
     );
