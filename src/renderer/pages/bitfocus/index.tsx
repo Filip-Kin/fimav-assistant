@@ -28,6 +28,7 @@ import AddonControlRow from '../../components/AddonControlRow';
 import {
     ACTION_DEFS,
     ActionDef,
+    CompanionAction,
     CompanionButton,
     CompanionLayout,
     CompanionPage,
@@ -36,6 +37,7 @@ import {
     FMS_BITFOCUS_EVENTS,
     FmsAutomationConfig,
     FmsBitfocusCommand,
+    matchActionDef,
 } from '../../../models/Bitfocus';
 import './index.css';
 
@@ -56,15 +58,13 @@ interface Result {
 const send = (channel: string, ...args: unknown[]) =>
     window.electron?.ipcRenderer.sendMessage(channel, args);
 
-const defFor = (definitionId: string) =>
-    ACTION_DEFS.find((d) => d.definitionId === definitionId);
+const defFor = (a: CompanionAction) =>
+    a.hasExpression ? undefined : matchActionDef(a.definitionId, a.options);
 
 // A button the editor can change: a normal button whose press actions are all
 // in the catalog. Anything else is edited in Companion.
 const isEditable = (b: CompanionButton | undefined) =>
-    !b ||
-    (b.type === 'button-layered' &&
-        b.actions.every((a) => defFor(a.definitionId)));
+    !b || (b.type === 'button-layered' && b.actions.every((a) => defFor(a)));
 
 // #region Button editor
 
@@ -133,7 +133,7 @@ function ActionRow({
                         key={f.key}
                         style={{ width: 170, flex: 'none' }}
                         placeholder={f.label}
-                        addonAfter={f.key === 'time' ? 'ms' : undefined}
+                        addonAfter={f.suffix}
                         min={0}
                         value={v === undefined || v === '' ? null : Number(v)}
                         onChange={(x) =>
@@ -183,7 +183,7 @@ function ButtonEditor({
         setText(button?.text ?? '');
         setActions(
             (button?.actions ?? []).map((a) => ({
-                key: defFor(a.definitionId)?.key ?? a.definitionId,
+                key: defFor(a)?.key ?? a.definitionId,
                 options: a.options,
             }))
         );
@@ -813,11 +813,14 @@ export default function Bitfocus() {
                 definitionId: def.definitionId,
                 connectionId: connectionId ?? '',
                 // Only the fields the editor shows; Companion fills the rest.
-                options: Object.fromEntries(
-                    def.fields
-                        .filter((f) => a.options[f.key] !== undefined)
-                        .map((f) => [f.key, a.options[f.key]])
-                ),
+                options: {
+                    ...Object.fromEntries(
+                        def.fields
+                            .filter((f) => a.options[f.key] !== undefined)
+                            .map((f) => [f.key, a.options[f.key]])
+                    ),
+                    ...def.fixed,
+                },
             };
         });
         setSaving('button');

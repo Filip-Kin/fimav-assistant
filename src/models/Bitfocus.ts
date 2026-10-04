@@ -11,6 +11,8 @@ export interface CompanionAction {
     // Plain option values (Companion stores {value, isExpression}; expressions
     // are not edited here, so only the value is carried).
     options: Record<string, unknown>;
+    // Some option is a Companion expression; the editor leaves it alone.
+    hasExpression: boolean;
 }
 
 export interface CompanionButton {
@@ -53,6 +55,8 @@ export interface ActionField {
     options?: { value: string; label: string }[];
     // Companion stores some numbers as strings (wait time); keep its type.
     asString?: boolean;
+    // Unit shown after a number field
+    suffix?: string;
 }
 
 export interface ActionDef {
@@ -64,6 +68,10 @@ export interface ActionDef {
     definitionId: string;
     label: string;
     fields: ActionField[];
+    // Options set on every save and required to match: one Companion action
+    // can stand for several catalog entries (ptzMove is only a preset when
+    // functionID is "move to virtual input").
+    fixed?: Record<string, string>;
 }
 
 const OVERLAY_FUNCTIONS = [1, 2, 3, 4].flatMap((n) => [
@@ -72,6 +80,42 @@ const OVERLAY_FUNCTIONS = [1, 2, 3, 4].flatMap((n) => [
     { value: `OverlayInput${n}Out`, label: `Overlay ${n} out` },
     { value: `OverlayInput${n}Off`, label: `Overlay ${n} off` },
 ]);
+
+const TRANSITIONS = [
+    'Cut',
+    'Fade',
+    'Merge',
+    'Zoom',
+    'Wipe',
+    'Slide',
+    'Fly',
+    'CrossZoom',
+    'FlyRotate',
+    'Cube',
+    'CubeZoom',
+    'VerticalWipe',
+    'VerticalSlide',
+    'WipeReverse',
+    'SlideReverse',
+    'VerticalWipeReverse',
+    'VerticalSlideReverse',
+    'BarnDoor',
+    'RollerDoor',
+    'AlphaFade',
+].map((t) => ({ value: t, label: t }));
+
+const ON_OFF_TOGGLE = (base: string) => [
+    { value: base, label: 'Toggle' },
+    { value: `${base}On`, label: 'On' },
+    { value: `${base}Off`, label: 'Off' },
+];
+
+const REPLAY_CHANNEL: ActionField = {
+    key: 'channel',
+    label: 'Channel',
+    type: 'select',
+    options: ['Current', 'A', 'B'].map((c) => ({ value: c, label: c })),
+};
 
 // X-Air: channels mute with 0, mute groups with 1 (the module flips them).
 const CHANNEL_MUTE = [
@@ -125,12 +169,143 @@ export const ACTION_DEFS: ActionDef[] = [
         ],
     },
     {
+        key: 'studiocoast-vmix:transitionMix',
+        module: 'studiocoast-vmix',
+        definitionId: 'transitionMix',
+        label: 'Transition',
+        fields: [
+            {
+                key: 'functionID',
+                label: 'Transition',
+                type: 'select',
+                options: TRANSITIONS,
+            },
+            {
+                key: 'duration',
+                label: 'Duration',
+                type: 'number',
+                asString: true,
+                suffix: 'ms',
+            },
+            { key: 'input', label: 'Input', type: 'vmixInput' },
+        ],
+    },
+    {
+        key: 'studiocoast-vmix:ptzMove',
+        module: 'studiocoast-vmix',
+        definitionId: 'ptzMove',
+        label: 'PTZ preset',
+        fields: [{ key: 'input', label: 'PTZ input', type: 'vmixInput' }],
+        fixed: { functionID: 'PTZMoveToVirtualInputPosition' },
+    },
+    {
+        key: 'studiocoast-vmix:audio',
+        module: 'studiocoast-vmix',
+        definitionId: 'audio',
+        label: 'Input audio',
+        fields: [
+            { key: 'input', label: 'Input', type: 'vmixInput' },
+            {
+                key: 'functionID',
+                label: 'Audio',
+                type: 'select',
+                options: ON_OFF_TOGGLE('Audio'),
+            },
+        ],
+    },
+    {
+        key: 'studiocoast-vmix:busXAudio',
+        module: 'studiocoast-vmix',
+        definitionId: 'busXAudio',
+        label: 'Bus audio',
+        fields: [
+            {
+                key: 'value',
+                label: 'Bus',
+                type: 'select',
+                options: ['Master', 'A', 'B', 'C', 'D', 'E', 'F', 'G'].map(
+                    (b) => ({ value: b, label: b })
+                ),
+            },
+            {
+                key: 'functionID',
+                label: 'Audio',
+                type: 'select',
+                options: ON_OFF_TOGGLE('BusXAudio'),
+            },
+        ],
+    },
+    {
+        key: 'studiocoast-vmix:replayRecording',
+        module: 'studiocoast-vmix',
+        definitionId: 'replayRecording',
+        label: 'Replay record',
+        fields: [
+            {
+                key: 'functionID',
+                label: 'Recording',
+                type: 'select',
+                options: [
+                    { value: 'ReplayStartRecording', label: 'Start' },
+                    { value: 'ReplayStopRecording', label: 'Stop' },
+                    { value: 'ReplayStartStopRecording', label: 'Toggle' },
+                ],
+            },
+        ],
+    },
+    {
+        key: 'studiocoast-vmix:replayPlay',
+        module: 'studiocoast-vmix',
+        definitionId: 'replayPlay',
+        label: 'Replay play',
+        fields: [REPLAY_CHANNEL],
+    },
+    {
+        key: 'studiocoast-vmix:replayPause',
+        module: 'studiocoast-vmix',
+        definitionId: 'replayPause',
+        label: 'Replay pause',
+        fields: [REPLAY_CHANNEL],
+    },
+    {
+        key: 'studiocoast-vmix:replayChangeDirection',
+        module: 'studiocoast-vmix',
+        definitionId: 'replayChangeDirection',
+        label: 'Replay direction',
+        fields: [REPLAY_CHANNEL],
+    },
+    {
+        key: 'studiocoast-vmix:replayFastForwardBackward',
+        module: 'studiocoast-vmix',
+        definitionId: 'replayFastForwardBackward',
+        label: 'Replay speed',
+        fields: [
+            {
+                key: 'functionID',
+                label: 'Direction',
+                type: 'select',
+                options: [
+                    { value: 'ReplayFastForward', label: 'Forward' },
+                    { value: 'ReplayFastBackward', label: 'Backward' },
+                ],
+            },
+            REPLAY_CHANNEL,
+            { key: 'value', label: 'Speed', type: 'number', suffix: 'x' },
+        ],
+    },
+    {
         key: 'internal:wait',
         module: 'internal',
         definitionId: 'wait',
         label: 'Wait',
         fields: [
-            { key: 'time', label: 'Time', type: 'number', asString: true },
+            {
+                key: 'time',
+                label: 'Time',
+                type: 'number',
+                asString: true,
+                suffix: 'ms',
+            },
         ],
     },
     {
@@ -166,6 +341,19 @@ export const ACTION_DEFS: ActionDef[] = [
         ],
     },
 ];
+
+// The catalog entry an existing action is, or undefined if the editor does
+// not handle it (then the button is edited in Companion).
+export function matchActionDef(
+    definitionId: string,
+    options: Record<string, unknown>
+): ActionDef | undefined {
+    return ACTION_DEFS.find(
+        (d) =>
+            d.definitionId === definitionId &&
+            Object.entries(d.fixed ?? {}).every(([k, v]) => options[k] === v)
+    );
+}
 
 // #endregion
 

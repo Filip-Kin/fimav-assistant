@@ -1,7 +1,6 @@
 import zlib from 'zlib';
 import WebSocket from 'ws';
 import {
-    ACTION_DEFS,
     CompanionAction,
     CompanionButton,
     CompanionLayout,
@@ -9,6 +8,7 @@ import {
     CustomAdConfig,
     CustomAdState,
     FmsAutomationConfig,
+    matchActionDef,
 } from '../models/Bitfocus';
 
 // Bitfocus Companion + audience-display trigger access for the Bitfocus tab.
@@ -51,6 +51,9 @@ function buttonActions(ctl: any): CompanionAction[] {
         connectionId: a.connectionId ?? a.instance,
         options: Object.fromEntries(
             Object.entries(a.options ?? {}).map(([k, v]) => [k, plain(v)])
+        ),
+        hasExpression: Object.values(a.options ?? {}).some(
+            (v: any) => v?.isExpression === true
         ),
     }));
 }
@@ -261,8 +264,20 @@ export async function saveCompanionButton(
             throw new Error('Not an editable button');
         }
         const current: any[] = config.steps?.['0']?.action_sets?.down ?? [];
-        const known = new Set(ACTION_DEFS.map((d) => d.definitionId));
-        if (current.some((a) => !known.has(a.definitionId))) {
+        const editable = (a: any) =>
+            !Object.values(a.options ?? {}).some(
+                (v: any) => v?.isExpression === true
+            ) &&
+            matchActionDef(
+                a.definitionId,
+                Object.fromEntries(
+                    Object.entries(a.options ?? {}).map(([k, v]) => [
+                        k,
+                        plain(v),
+                    ])
+                )
+            );
+        if (current.some((a) => !editable(a))) {
             throw new Error('Button has actions only Companion can edit');
         }
 
