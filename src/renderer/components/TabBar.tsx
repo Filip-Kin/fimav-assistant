@@ -4,12 +4,12 @@ import { Badge } from 'antd';
 import {
     BellOutlined,
     AppstoreOutlined,
-    CloudUploadOutlined,
     DesktopOutlined,
     MessageOutlined,
     RobotOutlined,
     SettingOutlined,
     VideoCameraOutlined,
+    YoutubeFilled,
 } from '@ant-design/icons';
 import AlertsResponse from 'models/AlertsResponse';
 import { AutoAVStatus } from 'models/AutoAVStatus';
@@ -38,6 +38,12 @@ const tabs: TabDef[] = [
         isActive: (p) => p.startsWith('/vmix'),
     },
     {
+        key: '/bitfocus',
+        label: 'Bitfocus',
+        icon: <AppstoreOutlined />,
+        isActive: (p) => p.startsWith('/bitfocus'),
+    },
+    {
         key: '/livecaptions',
         label: 'Live Captions',
         icon: <MessageOutlined />,
@@ -50,23 +56,17 @@ const tabs: TabDef[] = [
         isActive: (p) => p.startsWith('/autoav'),
     },
     {
-        key: '/bitfocus',
-        label: 'Bitfocus',
-        icon: <AppstoreOutlined />,
-        isActive: (p) => p.startsWith('/bitfocus'),
+        key: '/upload',
+        label: 'Upload',
+        icon: <YoutubeFilled />,
+        isActive: (p) => p.startsWith('/upload'),
+        offSeasonOnly: true,
     },
     {
         key: '/audiencedisplay',
         label: 'Offseason AD',
         icon: <DesktopOutlined />,
         isActive: (p) => p.startsWith('/audiencedisplay'),
-        offSeasonOnly: true,
-    },
-    {
-        key: '/upload',
-        label: 'Upload',
-        icon: <CloudUploadOutlined />,
-        isActive: (p) => p.startsWith('/upload'),
         offSeasonOnly: true,
     },
 ];
