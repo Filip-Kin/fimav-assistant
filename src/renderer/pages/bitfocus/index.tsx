@@ -756,7 +756,13 @@ export default function Bitfocus() {
             ) {
                 setLoading(false);
                 if (r.ok) {
-                    setLayout(r.data);
+                    // Same content keeps the same object, so a poll that
+                    // finds nothing new does not redraw or reset anything.
+                    setLayout((prev) =>
+                        prev && JSON.stringify(prev) === JSON.stringify(r.data)
+                            ? prev
+                            : r.data
+                    );
                     setLayoutError(null);
                 } else if (r.op === 'layout') {
                     setLayout(null);
@@ -815,7 +821,24 @@ export default function Bitfocus() {
         };
     }, [loadAll]);
 
+    // Follow changes made in Companion itself (an import, an edit in its own
+    // UI): re-read the layout every 3 s while the tab is open. Paused while a
+    // button dialog is open so an edit in progress is never replaced.
+    useEffect(() => {
+        if (cell) return undefined;
+        const timer = setInterval(() => send('bitfocus:getLayout'), 3000);
+        return () => clearInterval(timer);
+    }, [cell]);
+
     const page = layout?.pages.find((p) => p.number === pageNumber);
+
+    // A Companion change can remove the page being shown; fall back to the
+    // first one.
+    useEffect(() => {
+        if (layout?.pages.length && !page) {
+            setPageNumber(layout.pages[0].number);
+        }
+    }, [layout, page]);
     const button = cell
         ? page?.buttons[`${cell.row}/${cell.column}`]
         : undefined;
