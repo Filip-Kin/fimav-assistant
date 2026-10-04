@@ -36,6 +36,7 @@ export type AppConfig = {
         // replaced again when FMS reports a different code, so a hand edit
         // sticks for the rest of the event.
         lastFmsEventCode: string;
+        lastFtcEventCode: string;
         // Destination folder for renamed match videos; blank = alongside the
         // vMix recording
         saveFolder: string;
@@ -49,7 +50,20 @@ export type AppConfig = {
     // Bitfocus tab: which audience display's triggers the tab edits. Both
     // Companion and the custom display run on this machine.
     bitfocus: {
-        triggerSource: 'fms' | 'customAd';
+        triggerSource: 'fms' | 'customAd' | 'ftc';
+    };
+    // FTC Live scorekeeper: where it is, which event, and the Bitfocus
+    // triggers FIM-AV presses for it.
+    ftc: {
+        address: string;
+        eventCode: string;
+        automations: boolean;
+        triggers: Record<string, { page: number; row: number; column: number }>;
+        // Recording length after MATCH_START: the match (DECODE: 30 s auto +
+        // 8 s transition + 2:00 teleop) plus a few seconds. FTC Live sends no
+        // match-end event, and off-season events can change the timing.
+        matchSeconds: number;
+        tailSeconds: number;
     };
     // YouTube + TBA upload settings for the Upload tab. Persisted here and also
     // pushed to the youtube-tba-upload process via POST /api/upload/config.
@@ -179,6 +193,10 @@ export function createStore(): Store<AppConfig> {
                         type: 'string',
                         default: '',
                     },
+                    lastFtcEventCode: {
+                        type: 'string',
+                        default: '',
+                    },
                     saveFolder: {
                         type: 'string',
                         default: '',
@@ -200,6 +218,25 @@ export function createStore(): Store<AppConfig> {
                 },
                 default: {
                     triggerSource: 'fms',
+                },
+            },
+            ftc: {
+                type: 'object',
+                properties: {
+                    address: { type: 'string', default: '' },
+                    eventCode: { type: 'string', default: '' },
+                    automations: { type: 'boolean', default: true },
+                    triggers: { type: 'object', default: {} },
+                    matchSeconds: { type: 'number', default: 158 },
+                    tailSeconds: { type: 'number', default: 5 },
+                },
+                default: {
+                    address: '',
+                    eventCode: '',
+                    automations: true,
+                    triggers: {},
+                    matchSeconds: 158,
+                    tailSeconds: 5,
                 },
             },
             upload: {

@@ -33,6 +33,9 @@ type FMSMatchStatus = {
     MatchNumber: number;
     PlayNumber: number;
     Level: TournamentLevel;
+    // FTC only: the scorekeeper's own match name (e.g. "Q3"), used in file
+    // names instead of FRC's numbering, which does not fit FTC playoffs.
+    ShortName?: string;
 };
 
 export default FMSMatchStatus;

@@ -10,7 +10,9 @@ import {
     EquipmentLogDetails,
     EquipmentLogType,
 } from '../../models/EquipmentLog';
-import FMSMatchStatus from '../../models/FMSMatchState';
+import FMSMatchStatus, { TournamentLevel } from '../../models/FMSMatchState';
+import FtcScorekeeper from '../ftc/scorekeeper';
+import { FtcScorekeeperStatus, FtcUpdate } from '../../models/Ftc';
 import attemptRename, {
     FileNameMode,
     eventFolderName,
@@ -297,8 +299,93 @@ export default class AutoAV {
             });
     }
 
+    // #region FTC
+
+    private ftcStopTimer: ReturnType<typeof setTimeout> | null = null;
+
+    private ftcListening = false;
+
+    // FTC Live drives recording the same way FMS does for FRC: start on
+    // MATCH_START, stop on an abort. It sends no match-end event, so a
+    // recording stops at the configured match length plus a few seconds.
+    private async onFtcUpdate(u: FtcUpdate) {
+        if (u.type === 'MATCH_START') {
+            if (this.ftcStopTimer) clearTimeout(this.ftcStopTimer);
+            this.ftcStopTimer = null;
+            // One vMix recording at a time: a match starting on the other
+            // field while one is still recording ends the old one first.
+            if (this.weAreRecording) await this.stopRecording();
+            // Practice and qualification short names start P / Q; anything
+            // else is a playoff match.
+            let level: TournamentLevel = 'Playoff';
+            if (/^Q/i.test(u.shortName)) level = 'Qualification';
+            else if (/^P(R)?[-\d]/i.test(u.shortName)) level = 'Practice';
+            this.startRecording({
+                MatchState: 'GameSpecificData',
+                Level: level,
+                MatchNumber: u.number,
+                PlayNumber: 1,
+                ShortName: u.shortName || undefined,
+            });
+            const store = getStore();
+            const seconds =
+                store.get('ftc.matchSeconds', 158) +
+                store.get('ftc.tailSeconds', 5);
+            this.willStopRecording = true;
+            this.ftcStopTimer = setTimeout(() => {
+                this.ftcStopTimer = null;
+                this.stopRecording();
+            }, seconds * 1000);
+        } else if (u.type === 'MATCH_ABORT' && this.weAreRecording) {
+            if (this.ftcStopTimer) clearTimeout(this.ftcStopTimer);
+            this.willStopRecording = true;
+            // Same as an FRC cancelled match: keep the aftermath for a bit.
+            this.ftcStopTimer = setTimeout(() => {
+                this.ftcStopTimer = null;
+                this.stopRecording();
+            }, 10000);
+        }
+    }
+
+    // A new FTC event fills in the event name like a new FMS event does, and
+    // stands in as the current event when fim-admin has none.
+    private onFtcStatus(s: FtcScorekeeperStatus) {
+        if (!s.eventCode) return;
+        const store = getStore();
+        if (s.eventCode !== store.get('autoAv.lastFtcEventCode', '')) {
+            const name = s.eventName || s.eventCode;
+            store.set('autoAv.lastFtcEventCode', s.eventCode);
+            store.set('autoAv.eventNameOverride', name);
+            this.log(`FTC event is now ${s.eventCode}; event name "${name}"`);
+            this.emitter.emit('eventNameChanged', name);
+        }
+        if (!this.currentEvent || this.currentEvent.code === s.eventCode) {
+            this.currentEvent = {
+                ...(this.currentEvent ?? {}),
+                code: s.eventCode,
+                name: s.eventName || s.eventCode,
+                // Scrimmages and off-season events are not official.
+                isOfficial: !/OFF|SCRIM/i.test(s.eventType ?? ''),
+            } as Event;
+        }
+        this.emitStatus();
+        this.emitMatches();
+    }
+
+    // #endregion
+
     // Start AutoAV
     public start() {
+        if (!this.ftcListening) {
+            this.ftcListening = true;
+            FtcScorekeeper.Instance.on('update', (u: FtcUpdate) =>
+                this.onFtcUpdate(u)
+            );
+            FtcScorekeeper.Instance.on('status', (s: FtcScorekeeperStatus) =>
+                this.onFtcStatus(s)
+            );
+        }
+
         // Notify Parent logs that we're running
         this.log('AutoAV Service Started', undefined, true);
 

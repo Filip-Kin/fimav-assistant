@@ -37,13 +37,20 @@ import {
     FmsAutomationConfig,
     matchActionDef,
 } from '../../../models/Bitfocus';
+import {
+    FTC_UPDATE_LABELS,
+    FTC_UPDATE_TYPES,
+    FtcScorekeeperStatus,
+    FtcSettings,
+    FtcTriggerMap,
+} from '../../../models/Ftc';
 import './index.css';
 
 const { Text } = Typography;
 
 // Which audience display's triggers the tab edits: the official FMS display
 // (in-season) or our custom one (off-season). Both run on this machine.
-type TriggerSource = 'fms' | 'customAd';
+type TriggerSource = 'fms' | 'customAd' | 'ftc';
 
 interface BitfocusSettings {
     triggerSource: TriggerSource;
@@ -132,6 +139,32 @@ const customAdEventsAt = (
         )
         .map(([event]) => event);
 };
+
+// FTC trigger options: every stream update type, per field when the event
+// has more than one. Before the scorekeeper answers, offer two fields (FIM
+// runs one or two).
+const ftcTriggerOptions = (fieldCount: number): TriggerOption[] =>
+    [...Array(fieldCount).keys()].flatMap((i) =>
+        FTC_UPDATE_TYPES.map((t) => ({
+            value: `${t}:${i + 1}`,
+            label:
+                fieldCount > 1
+                    ? `${FTC_UPDATE_LABELS[t]} · Field ${i + 1}`
+                    : FTC_UPDATE_LABELS[t],
+        }))
+    );
+
+const ftcTriggersAt = (
+    triggers: FtcTriggerMap,
+    page: number,
+    row: number,
+    column: number
+): string[] =>
+    Object.entries(triggers)
+        .filter(
+            ([, b]) => b.page === page && b.row === row && b.column === column
+        )
+        .map(([id]) => id);
 
 // #region Button editor
 
@@ -488,6 +521,8 @@ function SettingsDialog({
     settings,
     fms,
     customAd,
+    ftc,
+    ftcStatus,
     onSaveFms,
     onSaveCustomAd,
     onClose,
@@ -496,28 +531,54 @@ function SettingsDialog({
     settings: BitfocusSettings;
     fms: FmsAutomationConfig | null;
     customAd: CustomAdState | null;
+    ftc: FtcSettings | null;
+    ftcStatus: FtcScorekeeperStatus | null;
     onSaveFms: (_c: FmsAutomationConfig) => void;
     onSaveCustomAd: (_c: CustomAdConfig) => void;
     onClose: () => void;
 }) {
     const [source, setSource] = useState<TriggerSource>('fms');
     const [automations, setAutomations] = useState(false);
+    const [address, setAddress] = useState('');
+    const [scanning, setScanning] = useState(false);
+    const [found, setFound] = useState<string[] | null>(null);
 
-    const enabledFor = (src: TriggerSource) =>
-        src === 'fms'
-            ? fms?.BitfocusIntegrationEnabled ?? false
-            : customAd?.config.enabled ?? false;
-    const loaded = (src: TriggerSource) =>
-        src === 'fms' ? fms !== null : customAd !== null;
+    const enabledFor = (src: TriggerSource) => {
+        if (src === 'fms') return fms?.BitfocusIntegrationEnabled ?? false;
+        if (src === 'customAd') return customAd?.config.enabled ?? false;
+        return ftc?.automations ?? true;
+    };
+    const loaded = (src: TriggerSource) => {
+        if (src === 'fms') return fms !== null;
+        if (src === 'customAd') return customAd !== null;
+        return ftc !== null;
+    };
 
     useEffect(() => {
         if (open) {
             setSource(settings.triggerSource);
             setAutomations(enabledFor(settings.triggerSource));
+            setAddress(ftc?.address ?? '');
+            setFound(null);
         }
-        // enabledFor reads fms/customAd, which are deps here already.
+        // enabledFor reads fms/customAd/ftc, which are deps here already.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open, settings, fms, customAd]);
+    }, [open, settings, fms, customAd, ftc]);
+
+    const scan = () => {
+        if (!window.electron) return;
+        setScanning(true);
+        const off = window.electron.ipcRenderer.on(
+            'ftc:scanResult',
+            (list: string[]) => {
+                off();
+                setScanning(false);
+                setFound(list);
+                if (list.length === 1) setAddress(list[0]);
+            }
+        );
+        send('ftc:scan');
+    };
 
     return (
         <Modal
@@ -527,7 +588,12 @@ function SettingsDialog({
             okText="Save"
             onOk={() => {
                 send('bitfocus:saveSettings', { triggerSource: source });
-                if (loaded(source) && automations !== enabledFor(source)) {
+                if (source === 'ftc') {
+                    send('ftc:saveSettings', { address, automations });
+                } else if (
+                    loaded(source) &&
+                    automations !== enabledFor(source)
+                ) {
                     if (source === 'fms' && fms) {
                         onSaveFms({
                             ...fms,
@@ -551,6 +617,7 @@ function SettingsDialog({
                         options={[
                             { value: 'fms', label: 'FMS audience display' },
                             { value: 'customAd', label: 'Custom AD' },
+                            { value: 'ftc', label: 'FTC scorekeeper' },
                         ]}
                         onChange={(v: TriggerSource) => {
                             setSource(v);
@@ -558,11 +625,55 @@ function SettingsDialog({
                         }}
                     />
                 </Form.Item>
+                {source === 'ftc' && (
+                    <Form.Item label="Scorekeeper">
+                        <Space.Compact style={{ width: '100%' }}>
+                            <Input
+                                placeholder="10.0.0.10"
+                                value={address}
+                                onChange={(e) => setAddress(e.target.value)}
+                                status={
+                                    ftcStatus?.address === address &&
+                                    address &&
+                                    !ftcStatus.connected
+                                        ? 'error'
+                                        : undefined
+                                }
+                            />
+                            <Button loading={scanning} onClick={scan}>
+                                Scan
+                            </Button>
+                        </Space.Compact>
+                        {found && found.length > 1 && (
+                            <Select
+                                style={{ width: '100%', marginTop: 8 }}
+                                placeholder="Scorekeepers"
+                                options={found.map((f) => ({
+                                    value: f,
+                                    label: f,
+                                }))}
+                                onChange={setAddress}
+                            />
+                        )}
+                        {found && found.length === 0 && (
+                            <Text type="secondary">None found</Text>
+                        )}
+                        {ftcStatus?.connected &&
+                            ftcStatus.address === address && (
+                                <Text type="secondary">
+                                    {ftcStatus.eventName} ·{' '}
+                                    {ftcStatus.eventCode}
+                                </Text>
+                            )}
+                    </Form.Item>
+                )}
                 <Form.Item
                     label={
-                        source === 'fms'
-                            ? 'FMS Automations'
-                            : 'Custom AD Automations'
+                        {
+                            fms: 'FMS Automations',
+                            customAd: 'Custom AD Automations',
+                            ftc: 'FTC Automations',
+                        }[source]
                     }
                 >
                     {loaded(source) ? (
@@ -609,12 +720,19 @@ export default function Bitfocus() {
         send('bitfocus:saveCustomAd', c);
     };
 
+    const [ftc, setFtc] = useState<FtcSettings | null>(null);
+    const [ftcStatus, setFtcStatus] = useState<FtcScorekeeperStatus | null>(
+        null
+    );
+    const ftcSaveRef = useRef(false);
+
     const loadAll = useCallback(() => {
         setLoading(true);
         send('bitfocus:getLayout');
         send('bitfocus:getVmixInputs');
         send('bitfocus:getFms');
         send('bitfocus:getCustomAd');
+        send('ftc:getState');
     }, []);
 
     useEffect(() => {
@@ -674,10 +792,23 @@ export default function Bitfocus() {
                 customAdSaveRef.current = false;
             }
         });
+        const offFtc = ipcRenderer.on('ftc:settings', (f: FtcSettings) => {
+            setFtc(f);
+            if (ftcSaveRef.current) {
+                message.success('Saved');
+                ftcSaveRef.current = false;
+            }
+        });
+        const offFtcStatus = ipcRenderer.on(
+            'ftc:status',
+            (st: FtcScorekeeperStatus) => setFtcStatus(st)
+        );
         send('bitfocus:getSettings');
         return () => {
             offSettings();
             offResult();
+            offFtc();
+            offFtcStatus();
         };
     }, [loadAll]);
 
@@ -721,15 +852,23 @@ export default function Bitfocus() {
 
     // Triggers come from the audience display chosen in settings.
     const { triggerSource } = settings;
-    const triggerOptions: TriggerOption[] | null =
-        triggerSource === 'fms'
-            ? fms && FMS_BITFOCUS_EVENTS
-            : customAd &&
-              customAd.events.map((e) => ({ value: e.id, label: e.label }));
-    const triggersAt = (row: number, column: number): TriggerId[] =>
-        triggerSource === 'fms'
-            ? commandsAt(fms, pageNumber, row, column).map((c) => c.BfEvent)
-            : customAdEventsAt(customAd, pageNumber, row, column);
+    const ftcFields = ftcStatus?.connected ? ftcStatus.fieldCount : 2;
+    let triggerOptions: TriggerOption[] | null = null;
+    if (triggerSource === 'fms') triggerOptions = fms && FMS_BITFOCUS_EVENTS;
+    else if (triggerSource === 'customAd') {
+        triggerOptions =
+            customAd &&
+            customAd.events.map((e) => ({ value: e.id, label: e.label }));
+    } else triggerOptions = ftc && ftcTriggerOptions(ftcFields);
+    const triggersAt = (row: number, column: number): TriggerId[] => {
+        if (triggerSource === 'fms')
+            return commandsAt(fms, pageNumber, row, column).map(
+                (c) => c.BfEvent
+            );
+        if (triggerSource === 'customAd')
+            return customAdEventsAt(customAd, pageNumber, row, column);
+        return ftcTriggersAt(ftc?.triggers ?? {}, pageNumber, row, column);
+    };
 
     // Point the chosen events at this button: drop what pressed it before,
     // add one entry per event. FMS keeps an existing command's id; the custom
@@ -759,6 +898,19 @@ export default function Bitfocus() {
                     })),
                 ],
             });
+            return;
+        }
+        if (triggerSource === 'ftc') {
+            if (!ftc) return;
+            const triggers = { ...ftc.triggers };
+            ftcTriggersAt(triggers, loc.page, loc.row, loc.column).forEach(
+                (id) => delete triggers[id]
+            );
+            events.forEach((e) => {
+                triggers[String(e)] = loc;
+            });
+            ftcSaveRef.current = true;
+            send('ftc:saveSettings', { triggers });
             return;
         }
         if (!customAd) return;
@@ -869,6 +1021,8 @@ export default function Bitfocus() {
                 settings={settings}
                 fms={fms}
                 customAd={customAd}
+                ftc={ftc}
+                ftcStatus={ftcStatus}
                 onSaveFms={saveFms}
                 onSaveCustomAd={saveCustomAd}
                 onClose={() => setSettingsOpen(false)}

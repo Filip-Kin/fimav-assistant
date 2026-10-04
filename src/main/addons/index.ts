@@ -7,6 +7,7 @@ import AutoAV from './autoav';
 import LiveCaptions from './live-captions';
 import YoutubeUploaderAddon from './upload-helper';
 import AudienceDisplayAddon from './audience-display';
+import FtcScorekeeper from '../ftc/scorekeeper';
 import { logsPath } from '../util';
 import HWPing from './hw-ping';
 
@@ -35,6 +36,7 @@ export default class Addons {
         this.HWPing.stop();
         this.youtubeUploader.stop();
         this.audienceDisplay.stop();
+        FtcScorekeeper.Instance.stop();
     }
 
     // Restart the YouTube uploader (re-resolves the current event folder)
@@ -96,6 +98,9 @@ export default class Addons {
         // Start the custom audience display (off-season only; start() refuses
         // in-season and the season change in register-events flips it)
         this.audienceDisplay.start();
+
+        // Connect to the FTC Live scorekeeper if one is set
+        FtcScorekeeper.Instance.start();
     }
 
     // Manage the logs, removing old and moving old copies to a new folder

@@ -20,6 +20,7 @@ import AutoAV from './addons/autoav';
 import LiveCaptions from './addons/live-captions';
 import YoutubeUploaderAddon from './addons/upload-helper';
 import AudienceDisplayAddon from './addons/audience-display';
+import FtcScorekeeper from './ftc/scorekeeper';
 import getVmixBandwidth, { streamKeyFromUrl } from './vmixBandwidth';
 import { AutoAVStatus } from '../models/AutoAVStatus';
 import { MatchRecord } from '../models/MatchRecord';
@@ -642,8 +643,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     ipcMain.on('bitfocus:saveSettings', (event, [settings]) => {
         store.set('bitfocus', {
-            triggerSource:
-                settings?.triggerSource === 'customAd' ? 'customAd' : 'fms',
+            triggerSource: ['customAd', 'ftc'].includes(settings?.triggerSource)
+                ? settings.triggerSource
+                : 'fms',
         });
         event.reply('bitfocus:settings', bitfocusSettings());
     });
@@ -691,6 +693,54 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             (await VmixService.Instance.GetInputs()).map((i) => i.title)
         )
     );
+
+    // FTC Live: connection status pushed to the UI, settings, scan, triggers.
+    FtcScorekeeper.Instance.on('status', (s) =>
+        window?.webContents.send('ftc:status', s)
+    );
+
+    const ftcSettings = () => ({
+        address: store.get('ftc.address', ''),
+        eventCode: store.get('ftc.eventCode', ''),
+        automations: store.get('ftc.automations', true),
+        triggers: store.get('ftc.triggers', {}),
+    });
+
+    ipcMain.on('ftc:getState', (event) => {
+        event.reply('ftc:status', FtcScorekeeper.Instance.getStatus());
+        event.reply('ftc:settings', ftcSettings());
+    });
+
+    // Address / event / automations. A changed address or event reconnects.
+    ipcMain.on('ftc:saveSettings', (event, [s]) => {
+        const before = ftcSettings();
+        if (typeof s?.address === 'string')
+            store.set(
+                'ftc.address',
+                s.address
+                    .trim()
+                    .replace(/^https?:\/\//, '')
+                    .replace(/\/+$/, '')
+            );
+        if (typeof s?.eventCode === 'string')
+            store.set('ftc.eventCode', s.eventCode.trim());
+        if (typeof s?.automations === 'boolean')
+            store.set('ftc.automations', s.automations);
+        if (s?.triggers && typeof s.triggers === 'object')
+            store.set('ftc.triggers', s.triggers);
+        const after = ftcSettings();
+        if (
+            before.address !== after.address ||
+            before.eventCode !== after.eventCode
+        ) {
+            FtcScorekeeper.Instance.start();
+        }
+        event.reply('ftc:settings', after);
+    });
+
+    ipcMain.on('ftc:scan', async (event) => {
+        event.reply('ftc:scanResult', await FtcScorekeeper.Instance.scan());
+    });
 
     ipcMain.on('bitfocus:getFms', (event) =>
         bitfocusReply(event, 'fms', () => readFmsAutomation())

@@ -21,6 +21,9 @@ const fileNameBuilders: Record<
 > = {
     'in-season': (event, matchStatus) => {
         const eventCode = event?.code ?? event?.name ?? 'Unknown_Event';
+        if (matchStatus.ShortName) {
+            return `${matchStatus.ShortName}_${eventCode}.mp4`;
+        }
 
         // Build the file name
         let match = '';
@@ -56,6 +59,9 @@ const fileNameBuilders: Record<
         const eventName = `${new Date().getFullYear()} ${
             event?.name ?? 'Unknown Event'
         }`;
+        if (matchStatus.ShortName) {
+            return `${eventName} - ${matchStatus.Level} ${matchStatus.ShortName}.mp4`;
+        }
         const playString =
             matchStatus.PlayNumber > 1
                 ? ` (Play #${matchStatus.PlayNumber})`
