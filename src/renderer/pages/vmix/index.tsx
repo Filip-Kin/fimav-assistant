@@ -22,6 +22,7 @@ import {
     VideoCameraOutlined,
 } from '@ant-design/icons';
 import AddonControlRow from '../../components/AddonControlRow';
+import { AutoAVStatus, Program } from '../../../models/AutoAVStatus';
 import './index.css';
 
 const { Title, Text } = Typography;
@@ -83,7 +84,11 @@ function fmtBitrate(kbps: number | null): string {
 }
 
 // Minimal inline sparkline of combined stream bitrate over time.
-function Sparkline({ data, width = 240, height = 36 }: {
+function Sparkline({
+    data,
+    width = 240,
+    height = 36,
+}: {
     data: number[];
     width?: number;
     height?: number;
@@ -150,7 +155,9 @@ function StatusLine({
             {on ? (
                 <CheckCircleFilled style={{ color: '#52c41a' }} />
             ) : (
-                <CloseCircleFilled style={{ color: 'rgba(255,255,255,0.35)' }} />
+                <CloseCircleFilled
+                    style={{ color: 'rgba(255,255,255,0.35)' }}
+                />
             )}
             <span className="vmix-status-icon">{icon}</span>
             <Text>{label}</Text>
@@ -167,6 +174,18 @@ export default function VmixPage() {
     const [settingKeys, setSettingKeys] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [compositeOpen, setCompositeOpen] = useState(false);
+    const [program, setProgram] = useState<Program>('frc');
+
+    // FRC or FTC decides which audience display input the tab adds.
+    useEffect(() => {
+        if (!window.electron) return undefined;
+        const { ipcRenderer } = window.electron;
+        const off = ipcRenderer.on('autoav:status', (s: AutoAVStatus) =>
+            setProgram(s.program)
+        );
+        ipcRenderer.sendMessage('autoav:getState', []);
+        return off;
+    }, []);
     const [inputs, setInputs] = useState<
         { key: string; number: number; title: string; type: string }[]
     >([]);
@@ -197,9 +216,7 @@ export default function VmixPage() {
                     (sum, s) => sum + (s.liveKbps ?? 0),
                     0
                 );
-                setHistory((h) =>
-                    [...h, combined / 1000].slice(-MAX_HISTORY)
-                );
+                setHistory((h) => [...h, combined / 1000].slice(-MAX_HISTORY));
             }
         );
         const offSettings = ipcRenderer.on('vmix:settings', (s: VmixApi) =>
@@ -249,9 +266,7 @@ export default function VmixPage() {
                 else message.error(r.message);
             }
         );
-        ipcRenderer.sendMessage('vmix:testConnection', [
-            form.getFieldsValue(),
-        ]);
+        ipcRenderer.sendMessage('vmix:testConnection', [form.getFieldsValue()]);
     }, [form]);
 
     const saveConn = useCallback(async () => {
@@ -281,9 +296,8 @@ export default function VmixPage() {
                 setFmsKey(
                     (prev) =>
                         prev ??
-                        list.find((i) =>
-                            /audience|fms|display/i.test(i.title)
-                        )?.key
+                        list.find((i) => /audience|fms|display/i.test(i.title))
+                            ?.key
                 );
             }
         );
@@ -320,281 +334,304 @@ export default function VmixPage() {
                 onSettings={() => setSettingsOpen(true)}
             />
             <div className="vmix-page">
-            <div className="vmix-cards">
-                <Card size="small" title="Status">
-                    <Space direction="vertical" size={10}>
-                        <StatusLine
-                            on={reachable}
-                            label="vMix reachable"
-                            icon={<ApiOutlined />}
-                        />
-                        <Space size={8}>
-                            <Dot on={!!status?.recording} color="#ff4d4f" />
-                            <VideoCameraOutlined className="vmix-status-icon" />
-                            <Text>
-                                {status?.recording
-                                    ? 'Recording'
-                                    : 'Not recording'}
-                            </Text>
-                        </Space>
-                        <Space size={8}>
-                            <Dot on={!!status?.streaming} color="#ff4d4f" />
-                            <DesktopOutlined className="vmix-status-icon" />
-                            <Text>
-                                {status?.streaming
-                                    ? 'Streaming (live)'
-                                    : 'Not streaming'}
-                            </Text>
-                        </Space>
-                    </Space>
-                </Card>
-
-                <Card size="small" title="Stream keys">
-                    <Space direction="vertical" size={10}>
-                        {status?.keysSetForEvent ? (
-                            <Tag color="success" icon={<KeyOutlined />}>
-                                Set for this event
-                            </Tag>
-                        ) : (
-                            <Tag color="warning" icon={<KeyOutlined />}>
-                                Not set for this event
-                            </Tag>
-                        )}
-                        <Text type="secondary">
-                            Current event: {event?.name ?? 'None detected'}
-                        </Text>
-                        {status?.streamKeys && (
-                            <Text type="secondary" className="vmix-dim">
-                                Last set for {status.streamKeys.eventName}
-                            </Text>
-                        )}
-
-                        {status?.keyValidation?.match === false && (
-                            <div className="vmix-key-mismatch">
-                                <Text type="danger" strong>
-                                    ⚠ Admin key doesn&apos;t match vMix
-                                </Text>
-                                <Text type="secondary" className="vmix-dim">
-                                    vMix using:{' '}
-                                    {status.keyValidation.runningKeys
-                                        .map(keyTail)
-                                        .join(', ') || '-'}
-                                </Text>
-                                <Text type="secondary" className="vmix-dim">
-                                    admin now:{' '}
-                                    {status.keyValidation.cloudKeys
-                                        .map(keyTail)
-                                        .join(', ') || '-'}
-                                </Text>
-                                <Text type="secondary" className="vmix-dim">
-                                    → press Set stream keys
-                                </Text>
-                            </div>
-                        )}
-                        {status?.keyValidation?.match === true && (
-                            <Text type="success">
-                                ✓ Key matches admin
-                            </Text>
-                        )}
-
-                        <Button
-                            icon={<KeyOutlined />}
-                            disabled={!reachable || settingKeys}
-                            loading={settingKeys}
-                            onClick={setStreamKeys}
-                        >
-                            {settingKeys ? 'Setting keys' : 'Set stream keys'}
-                        </Button>
-                    </Space>
-                </Card>
-            </div>
-
-            <Title level={5} style={{ margin: '16px 0 8px' }}>
-                Streaming bandwidth
-            </Title>
-            <Card size="small">
-                {(() => {
-                    if (
-                        bandwidth == null ||
-                        (bandwidth.warming &&
-                            bandwidth.streams.length === 0)
-                    ) {
-                        return (
-                            <Space size={10}>
-                                <Spin size="small" />
-                                <Text type="secondary">
-                                    Loading streaming stats
+                <div className="vmix-cards">
+                    <Card size="small" title="Status">
+                        <Space direction="vertical" size={10}>
+                            <StatusLine
+                                on={reachable}
+                                label="vMix reachable"
+                                icon={<ApiOutlined />}
+                            />
+                            <Space size={8}>
+                                <Dot on={!!status?.recording} color="#ff4d4f" />
+                                <VideoCameraOutlined className="vmix-status-icon" />
+                                <Text>
+                                    {status?.recording
+                                        ? 'Recording'
+                                        : 'Not recording'}
                                 </Text>
                             </Space>
-                        );
-                    }
-                    if (bandwidth.streams.length === 0) {
+                            <Space size={8}>
+                                <Dot on={!!status?.streaming} color="#ff4d4f" />
+                                <DesktopOutlined className="vmix-status-icon" />
+                                <Text>
+                                    {status?.streaming
+                                        ? 'Streaming (live)'
+                                        : 'Not streaming'}
+                                </Text>
+                            </Space>
+                        </Space>
+                    </Card>
+
+                    <Card size="small" title="Stream keys">
+                        <Space direction="vertical" size={10}>
+                            {status?.keysSetForEvent ? (
+                                <Tag color="success" icon={<KeyOutlined />}>
+                                    Set for this event
+                                </Tag>
+                            ) : (
+                                <Tag color="warning" icon={<KeyOutlined />}>
+                                    Not set for this event
+                                </Tag>
+                            )}
+                            <Text type="secondary">
+                                Current event: {event?.name ?? 'None detected'}
+                            </Text>
+                            {status?.streamKeys && (
+                                <Text type="secondary" className="vmix-dim">
+                                    Last set for {status.streamKeys.eventName}
+                                </Text>
+                            )}
+
+                            {status?.keyValidation?.match === false && (
+                                <div className="vmix-key-mismatch">
+                                    <Text type="danger" strong>
+                                        ⚠ Admin key doesn&apos;t match vMix
+                                    </Text>
+                                    <Text type="secondary" className="vmix-dim">
+                                        vMix using:{' '}
+                                        {status.keyValidation.runningKeys
+                                            .map(keyTail)
+                                            .join(', ') || '-'}
+                                    </Text>
+                                    <Text type="secondary" className="vmix-dim">
+                                        admin now:{' '}
+                                        {status.keyValidation.cloudKeys
+                                            .map(keyTail)
+                                            .join(', ') || '-'}
+                                    </Text>
+                                    <Text type="secondary" className="vmix-dim">
+                                        → press Set stream keys
+                                    </Text>
+                                </div>
+                            )}
+                            {status?.keyValidation?.match === true && (
+                                <Text type="success">✓ Key matches admin</Text>
+                            )}
+
+                            <Button
+                                icon={<KeyOutlined />}
+                                disabled={!reachable || settingKeys}
+                                loading={settingKeys}
+                                onClick={setStreamKeys}
+                            >
+                                {settingKeys
+                                    ? 'Setting keys'
+                                    : 'Set stream keys'}
+                            </Button>
+                        </Space>
+                    </Card>
+                </div>
+
+                <Title level={5} style={{ margin: '16px 0 8px' }}>
+                    Streaming bandwidth
+                </Title>
+                <Card size="small">
+                    {(() => {
+                        if (
+                            bandwidth == null ||
+                            (bandwidth.warming &&
+                                bandwidth.streams.length === 0)
+                        ) {
+                            return (
+                                <Space size={10}>
+                                    <Spin size="small" />
+                                    <Text type="secondary">
+                                        Loading streaming stats
+                                    </Text>
+                                </Space>
+                            );
+                        }
+                        if (bandwidth.streams.length === 0) {
+                            return (
+                                <Text type="secondary">No active streams.</Text>
+                            );
+                        }
                         return (
-                            <Text type="secondary">No active streams.</Text>
+                            <Space
+                                direction="vertical"
+                                size={8}
+                                style={{ width: '100%' }}
+                            >
+                                {bandwidth.streams.map((s) => (
+                                    <div
+                                        key={s.index}
+                                        className="vmix-stream-row"
+                                    >
+                                        <Space size={8}>
+                                            <Dot on color="#ff4d4f" />
+                                            <Text strong>Stream {s.index}</Text>
+                                            <Tag>{s.destination}</Tag>
+                                        </Space>
+                                        <Text>
+                                            <Text strong>
+                                                {fmtBitrate(s.liveKbps)}
+                                            </Text>
+                                            <Text
+                                                type="secondary"
+                                                className="vmix-dim"
+                                            >
+                                                {' '}
+                                                / target{' '}
+                                                {fmtBitrate(s.targetKbps)}
+                                            </Text>
+                                        </Text>
+                                    </div>
+                                ))}
+
+                                <div className="vmix-spark-row">
+                                    <Text type="secondary" className="vmix-dim">
+                                        Combined live bitrate
+                                    </Text>
+                                    <Space size={10}>
+                                        <Sparkline data={history} />
+                                        <Text strong>
+                                            {fmtBitrate(
+                                                bandwidth.streams.reduce(
+                                                    (sum, s) =>
+                                                        sum + (s.liveKbps ?? 0),
+                                                    0
+                                                )
+                                            )}
+                                        </Text>
+                                    </Space>
+                                </div>
+                            </Space>
                         );
-                    }
-                    return (
+                    })()}
+                </Card>
+
+                <Title level={5} style={{ margin: '16px 0 8px' }}>
+                    vMix inputs
+                </Title>
+                <Space wrap>
+                    <Button
+                        icon={<AudioOutlined />}
+                        disabled={!reachable}
+                        onClick={() => send('vmix:addLiveCaptionsInput')}
+                    >
+                        Add Live Captions input
+                    </Button>
+                    <Button
+                        icon={<DesktopOutlined />}
+                        disabled={!reachable}
+                        onClick={() => send('vmix:addAudienceDisplayInput')}
+                    >
+                        {program === 'ftc'
+                            ? 'Add Scoring input'
+                            : 'Add FMS input'}
+                    </Button>
+                    {/* The composite fits the FRC display's camera cut-out. */}
+                    {program === 'frc' && (
+                        <Button
+                            icon={<VideoCameraOutlined />}
+                            disabled={!reachable}
+                            onClick={() => setCompositeOpen(true)}
+                        >
+                            Add Alliance Selection Composite
+                        </Button>
+                    )}
+                </Space>
+
+                <Modal
+                    title="Alliance Selection Composite"
+                    open={compositeOpen}
+                    onCancel={() => setCompositeOpen(false)}
+                    onOk={applyComposite}
+                    okText="Apply"
+                    width={520}
+                >
                     <Space
                         direction="vertical"
-                        size={8}
+                        size={12}
                         style={{ width: '100%' }}
                     >
-                        {bandwidth.streams.map((s) => (
-                            <div key={s.index} className="vmix-stream-row">
-                                <Space size={8}>
-                                    <Dot on color="#ff4d4f" />
-                                    <Text strong>Stream {s.index}</Text>
-                                    <Tag>{s.destination}</Tag>
-                                </Space>
-                                <Text>
-                                    <Text strong>{fmtBitrate(s.liveKbps)}</Text>
-                                    <Text type="secondary" className="vmix-dim">
-                                        {' '}
-                                        / target {fmtBitrate(s.targetKbps)}
-                                    </Text>
-                                </Text>
-                            </div>
-                        ))}
-
-                        <div className="vmix-spark-row">
-                            <Text type="secondary" className="vmix-dim">
-                                Combined live bitrate
-                            </Text>
-                            <Space size={10}>
-                                <Sparkline data={history} />
-                                <Text strong>
-                                    {fmtBitrate(
-                                        bandwidth.streams.reduce(
-                                            (sum, s) => sum + (s.liveKbps ?? 0),
-                                            0
-                                        )
-                                    )}
-                                </Text>
-                            </Space>
+                        <Text type="secondary">
+                            Creates an &quot;Alliance Selection Composite&quot;
+                            input: a blank base with your FMS/AD input as layer
+                            1 and the camera on top as layer 2, sized to the
+                            official AD camera box. Your existing inputs are
+                            referenced, not duplicated.
+                        </Text>
+                        <div>
+                            <Text>FMS / audience display input</Text>
+                            <Select
+                                style={{ width: '100%' }}
+                                placeholder="Select FMS/AD input"
+                                value={fmsKey}
+                                onChange={setFmsKey}
+                                options={inputs.map((i) => ({
+                                    value: i.key,
+                                    label: `${i.number}. ${i.title}`,
+                                }))}
+                            />
+                        </div>
+                        <div>
+                            <Text>Main camera input</Text>
+                            <Select
+                                style={{ width: '100%' }}
+                                placeholder="Select camera"
+                                value={cameraKey}
+                                onChange={setCameraKey}
+                                options={inputs.map((i) => ({
+                                    value: i.key,
+                                    label: `${i.number}. ${i.title}`,
+                                }))}
+                            />
                         </div>
                     </Space>
-                    );
-                })()}
-            </Card>
+                </Modal>
 
-            <Title level={5} style={{ margin: '16px 0 8px' }}>
-                vMix inputs
-            </Title>
-            <Space wrap>
-                <Button
-                    icon={<AudioOutlined />}
-                    disabled={!reachable}
-                    onClick={() => send('vmix:addLiveCaptionsInput')}
+                <Modal
+                    title="vMix connection"
+                    open={settingsOpen}
+                    onCancel={() => setSettingsOpen(false)}
+                    footer={null}
                 >
-                    Add Live Captions input
-                </Button>
-                <Button
-                    icon={<DesktopOutlined />}
-                    disabled={!reachable}
-                    onClick={() => send('vmix:addAudienceDisplayInput')}
-                >
-                    Add Audience Display input
-                </Button>
-                <Button
-                    icon={<VideoCameraOutlined />}
-                    disabled={!reachable}
-                    onClick={() => setCompositeOpen(true)}
-                >
-                    Add Alliance Selection Composite
-                </Button>
-            </Space>
-
-            <Modal
-                title="Alliance Selection Composite"
-                open={compositeOpen}
-                onCancel={() => setCompositeOpen(false)}
-                onOk={applyComposite}
-                okText="Apply"
-                width={520}
-            >
-                <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                    <Text type="secondary">
-                        Creates an &quot;Alliance Selection Composite&quot; input:
-                        a blank base with your FMS/AD input as layer 1 and the
-                        camera on top as layer 2, sized to the official AD camera
-                        box. Your existing inputs are referenced, not duplicated.
-                    </Text>
-                    <div>
-                        <Text>FMS / audience display input</Text>
-                        <Select
-                            style={{ width: '100%' }}
-                            placeholder="Select FMS/AD input"
-                            value={fmsKey}
-                            onChange={setFmsKey}
-                            options={inputs.map((i) => ({
-                                value: i.key,
-                                label: `${i.number}. ${i.title}`,
-                            }))}
-                        />
-                    </div>
-                    <div>
-                        <Text>Main camera input</Text>
-                        <Select
-                            style={{ width: '100%' }}
-                            placeholder="Select camera"
-                            value={cameraKey}
-                            onChange={setCameraKey}
-                            options={inputs.map((i) => ({
-                                value: i.key,
-                                label: `${i.number}. ${i.title}`,
-                            }))}
-                        />
-                    </div>
-                </Space>
-            </Modal>
-
-            <Modal
-                title="vMix connection"
-                open={settingsOpen}
-                onCancel={() => setSettingsOpen(false)}
-                footer={null}
-            >
-                <Form
-                    form={form}
-                    layout="vertical"
-                    style={{ marginTop: 12 }}
-                >
-                    <Form.Item
-                        label="Web API URL"
-                        name="baseUrl"
-                        rules={[
-                            { required: true, message: 'Enter the vMix API URL' },
-                        ]}
-                        tooltip="vMix defaults to http://127.0.0.1:8088/api"
+                    <Form
+                        form={form}
+                        layout="vertical"
+                        style={{ marginTop: 12 }}
                     >
-                        <Input placeholder="http://127.0.0.1:8088/api" />
-                    </Form.Item>
-                    <Space size={12} style={{ display: 'flex' }}>
                         <Form.Item
-                            label="Username"
-                            name="username"
-                            style={{ flex: 1 }}
+                            label="Web API URL"
+                            name="baseUrl"
+                            rules={[
+                                {
+                                    required: true,
+                                    message: 'Enter the vMix API URL',
+                                },
+                            ]}
+                            tooltip="vMix defaults to http://127.0.0.1:8088/api"
                         >
-                            <Input placeholder="(blank if web auth is off)" />
+                            <Input placeholder="http://127.0.0.1:8088/api" />
                         </Form.Item>
-                        <Form.Item
-                            label="Password"
-                            name="password"
-                            style={{ flex: 1 }}
-                        >
-                            <Input.Password placeholder="(blank if web auth is off)" />
-                        </Form.Item>
-                    </Space>
-                    <Space>
-                        <Button onClick={test} loading={testing}>
-                            Test connection
-                        </Button>
-                        <Button type="primary" onClick={saveConn}>
-                            Save
-                        </Button>
-                    </Space>
-                </Form>
-            </Modal>
+                        <Space size={12} style={{ display: 'flex' }}>
+                            <Form.Item
+                                label="Username"
+                                name="username"
+                                style={{ flex: 1 }}
+                            >
+                                <Input placeholder="(blank if web auth is off)" />
+                            </Form.Item>
+                            <Form.Item
+                                label="Password"
+                                name="password"
+                                style={{ flex: 1 }}
+                            >
+                                <Input.Password placeholder="(blank if web auth is off)" />
+                            </Form.Item>
+                        </Space>
+                        <Space>
+                            <Button onClick={test} loading={testing}>
+                                Test connection
+                            </Button>
+                            <Button type="primary" onClick={saveConn}>
+                                Save
+                            </Button>
+                        </Space>
+                    </Form>
+                </Modal>
             </div>
         </>
     );

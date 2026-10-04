@@ -5,6 +5,7 @@ import {
     Empty,
     Form,
     Input,
+    InputNumber,
     Modal,
     Select,
     Space,
@@ -203,14 +204,34 @@ function SettingsDialog({
     onClose,
     offSeason,
     modeForced,
+    ftc,
 }: {
     open: boolean;
     onClose: () => void;
     offSeason: boolean;
     modeForced: boolean;
+    ftc: boolean;
 }) {
     const [form] = Form.useForm<AutoAvSettings>();
     const [loading, setLoading] = useState(true);
+    // FTC recording length: FTC Live sends no match-end event, so a recording
+    // runs this long after the match starts.
+    const [matchSeconds, setMatchSeconds] = useState(158);
+    const [tailSeconds, setTailSeconds] = useState(5);
+
+    useEffect(() => {
+        if (!open || !ftc || !window.electron) return undefined;
+        const { ipcRenderer } = window.electron;
+        const off = ipcRenderer.on(
+            'ftc:settings',
+            (f: { matchSeconds: number; tailSeconds: number }) => {
+                setMatchSeconds(f.matchSeconds);
+                setTailSeconds(f.tailSeconds);
+            }
+        );
+        ipcRenderer.sendMessage('ftc:getState', []);
+        return off;
+    }, [open, ftc]);
 
     // Load current settings whenever the dialog opens.
     useEffect(() => {
@@ -240,9 +261,14 @@ function SettingsDialog({
         window.electron?.ipcRenderer.sendMessage('autoav:saveSettings', [
             values,
         ]);
+        if (ftc) {
+            window.electron?.ipcRenderer.sendMessage('ftc:saveSettings', [
+                { matchSeconds, tailSeconds },
+            ]);
+        }
         message.success('Settings saved');
         onClose();
-    }, [form, onClose]);
+    }, [form, onClose, ftc, matchSeconds, tailSeconds]);
 
     return (
         <Modal
@@ -318,6 +344,27 @@ function SettingsDialog({
                 >
                     <Switch />
                 </Form.Item>
+
+                {ftc && (
+                    <Space size={16}>
+                        <Form.Item label="Match length">
+                            <InputNumber
+                                min={1}
+                                addonAfter="s"
+                                value={matchSeconds}
+                                onChange={(v) => setMatchSeconds(v ?? 158)}
+                            />
+                        </Form.Item>
+                        <Form.Item label="Recording tail">
+                            <InputNumber
+                                min={0}
+                                addonAfter="s"
+                                value={tailSeconds}
+                                onChange={(v) => setTailSeconds(v ?? 5)}
+                            />
+                        </Form.Item>
+                    </Space>
+                )}
             </Form>
         </Modal>
     );
@@ -547,6 +594,7 @@ export default function AutoAVPage() {
                 onClose={() => setSettingsOpen(false)}
                 offSeason={offSeason}
                 modeForced={!!status?.fileNameModeForced}
+                ftc={ftc}
             />
         </>
     );

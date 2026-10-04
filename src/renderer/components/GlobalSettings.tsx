@@ -3,7 +3,6 @@ import {
     Button,
     Form,
     Input,
-    InputNumber,
     Modal,
     Select,
     Space,
@@ -21,15 +20,14 @@ const send = (channel: string, ...args: unknown[]) =>
     window.electron?.ipcRenderer.sendMessage(channel, args);
 
 // App-wide settings, opened from "Settings" in the menu bar: FRC / FTC
-// (detected, with an override) and the FTC Live scorekeeper.
+// (detected, with an override) and the FTC Live scorekeeper. FTC recording
+// length lives in Auto AV's settings.
 export default function GlobalSettings() {
     const [open, setOpen] = useState(false);
     const [program, setProgram] = useState<ProgramSetting>('auto');
     const [detected, setDetected] =
         useState<AutoAVStatus['programDetected']>(null);
     const [address, setAddress] = useState('');
-    const [matchSeconds, setMatchSeconds] = useState(158);
-    const [tailSeconds, setTailSeconds] = useState(5);
     const [ftcStatus, setFtcStatus] = useState<FtcScorekeeperStatus | null>(
         null
     );
@@ -52,8 +50,6 @@ export default function GlobalSettings() {
             ),
             ipcRenderer.on('ftc:settings', (s: FtcSettings) => {
                 setAddress(s.address);
-                setMatchSeconds(s.matchSeconds);
-                setTailSeconds(s.tailSeconds);
             }),
             ipcRenderer.on('ftc:status', (s: FtcScorekeeperStatus) =>
                 setFtcStatus(s)
@@ -83,7 +79,7 @@ export default function GlobalSettings() {
     const save = () => {
         send('app:saveSettings', { program });
         if (program !== 'frc') {
-            send('ftc:saveSettings', { address, matchSeconds, tailSeconds });
+            send('ftc:saveSettings', { address });
         }
         message.success('Saved');
         setOpen(false);
@@ -118,66 +114,46 @@ export default function GlobalSettings() {
                     />
                 </Form.Item>
                 {program !== 'frc' && (
-                    <>
-                        <Form.Item label="FTC scorekeeper">
-                            <Space.Compact style={{ width: '100%' }}>
-                                <Input
-                                    placeholder="172.18.5.212"
-                                    value={address}
-                                    onChange={(e) => setAddress(e.target.value)}
-                                    status={
-                                        ftcStatus?.address === address &&
-                                        address &&
-                                        !ftcStatus.connected
-                                            ? 'error'
-                                            : undefined
-                                    }
-                                />
-                                <Button loading={scanning} onClick={scan}>
-                                    Scan
-                                </Button>
-                            </Space.Compact>
-                            {found && found.length > 1 && (
-                                <Select
-                                    style={{ width: '100%', marginTop: 8 }}
-                                    placeholder="Scorekeepers"
-                                    options={found.map((f) => ({
-                                        value: f,
-                                        label: f,
-                                    }))}
-                                    onChange={setAddress}
-                                />
+                    <Form.Item label="FTC scorekeeper">
+                        <Space.Compact style={{ width: '100%' }}>
+                            <Input
+                                placeholder="172.18.5.212"
+                                value={address}
+                                onChange={(e) => setAddress(e.target.value)}
+                                status={
+                                    ftcStatus?.address === address &&
+                                    address &&
+                                    !ftcStatus.connected
+                                        ? 'error'
+                                        : undefined
+                                }
+                            />
+                            <Button loading={scanning} onClick={scan}>
+                                Scan
+                            </Button>
+                        </Space.Compact>
+                        {found && found.length > 1 && (
+                            <Select
+                                style={{ width: '100%', marginTop: 8 }}
+                                placeholder="Scorekeepers"
+                                options={found.map((f) => ({
+                                    value: f,
+                                    label: f,
+                                }))}
+                                onChange={setAddress}
+                            />
+                        )}
+                        {found && found.length === 0 && (
+                            <Text type="secondary">None found</Text>
+                        )}
+                        {ftcStatus?.connected &&
+                            ftcStatus.address === address && (
+                                <Text type="secondary">
+                                    {ftcStatus.eventName} ·{' '}
+                                    {ftcStatus.eventCode}
+                                </Text>
                             )}
-                            {found && found.length === 0 && (
-                                <Text type="secondary">None found</Text>
-                            )}
-                            {ftcStatus?.connected &&
-                                ftcStatus.address === address && (
-                                    <Text type="secondary">
-                                        {ftcStatus.eventName} ·{' '}
-                                        {ftcStatus.eventCode}
-                                    </Text>
-                                )}
-                        </Form.Item>
-                        <Space size={16}>
-                            <Form.Item label="Match length">
-                                <InputNumber
-                                    min={1}
-                                    addonAfter="s"
-                                    value={matchSeconds}
-                                    onChange={(v) => setMatchSeconds(v ?? 158)}
-                                />
-                            </Form.Item>
-                            <Form.Item label="Recording tail">
-                                <InputNumber
-                                    min={0}
-                                    addonAfter="s"
-                                    value={tailSeconds}
-                                    onChange={(v) => setTailSeconds(v ?? 5)}
-                                />
-                            </Form.Item>
-                        </Space>
-                    </>
+                    </Form.Item>
                 )}
             </Form>
         </Modal>

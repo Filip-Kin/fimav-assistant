@@ -25,6 +25,7 @@ import {
     YoutubeFilled,
 } from '@ant-design/icons';
 import AddonControlRow from '../../components/AddonControlRow';
+import { AutoAVStatus, Program } from '../../../models/AutoAVStatus';
 import './index.css';
 
 // Filename portion of a Windows or POSIX path (renderer has no node path).
@@ -74,6 +75,9 @@ export interface UploadSettings {
     tbaAuthId: string;
     tbaSecret: string;
     autoSubmitTba: boolean;
+    toaApiKey: string;
+    toaEventKey: string;
+    autoSubmitToa: boolean;
     playlistId: string;
     playlistName: string;
     titleTemplate: string;
@@ -322,6 +326,7 @@ export function UploadSettingsDialog({
     onRefreshPlaylists,
     onCreatePlaylist,
     sample,
+    ftc,
 }: {
     open: boolean;
     onClose: () => void;
@@ -335,6 +340,7 @@ export function UploadSettingsDialog({
     onRefreshPlaylists: () => void;
     onCreatePlaylist: () => Promise<Playlist | null>;
     sample: UploadRow | undefined;
+    ftc: boolean;
 }) {
     const [form] = Form.useForm<UploadSettings>();
     const titleTemplate = Form.useWatch('titleTemplate', form);
@@ -518,13 +524,38 @@ export function UploadSettingsDialog({
                             </Form.Item>
                         </Form.Item>
                     </Col>
+                    {/* Match video links go to TBA at FRC events and to The
+                        Orange Alliance at FTC events. Hidden fields keep
+                        their values. */}
                     <Col span={12}>
-                        <Form.Item label="TBA auth ID" name="tbaAuthId">
+                        <Form.Item
+                            label="TBA auth ID"
+                            name="tbaAuthId"
+                            hidden={ftc}
+                        >
+                            <Input />
+                        </Form.Item>
+                        <Form.Item
+                            label="TOA event key"
+                            name="toaEventKey"
+                            hidden={!ftc}
+                        >
                             <Input />
                         </Form.Item>
                     </Col>
                     <Col span={12}>
-                        <Form.Item label="TBA secret" name="tbaSecret">
+                        <Form.Item
+                            label="TBA secret"
+                            name="tbaSecret"
+                            hidden={ftc}
+                        >
+                            <Input.Password />
+                        </Form.Item>
+                        <Form.Item
+                            label="TOA API key"
+                            name="toaApiKey"
+                            hidden={!ftc}
+                        >
                             <Input.Password />
                         </Form.Item>
                     </Col>
@@ -551,8 +582,17 @@ export function UploadSettingsDialog({
                         </Form.Item>
                     </Col>
                 </Row>
-                <ToggleRow label="Auto-submit to TBA" name="autoSubmitTba" />
-                <ToggleRow label="Headless" name="headless" />
+                <ToggleRow
+                    label="Auto-submit to TBA"
+                    name="autoSubmitTba"
+                    hidden={ftc}
+                />
+                <ToggleRow
+                    label="Auto-submit to TOA"
+                    name="autoSubmitToa"
+                    hidden={!ftc}
+                />
+                <ToggleRow label="Headless" name="headless" hidden={false} />
             </Form>
         </Modal>
     );
@@ -650,9 +690,21 @@ function renderTitlePreview(tmpl: string, sample?: UploadRow): string {
 
 // A settings toggle laid out as [label ...... switch], right-aligned so every
 // switch lines up on the right edge of the dialog.
-function ToggleRow({ label, name }: { label: string; name: string }) {
+// hidden keeps the field registered (and its value saved) while not shown.
+function ToggleRow({
+    label,
+    name,
+    hidden,
+}: {
+    label: string;
+    name: string;
+    hidden: boolean;
+}) {
     return (
-        <div className="upload-toggle-row">
+        <div
+            className="upload-toggle-row"
+            style={hidden ? { display: 'none' } : undefined}
+        >
             <span className="upload-toggle-row__label">{label}</span>
             <Form.Item name={name} valuePropName="checked" noStyle>
                 <Switch />
@@ -678,6 +730,17 @@ function sortRows(videos: Record<string, UploadVideo>): UploadRow[] {
 }
 
 export default function UploadPage() {
+    // FRC or FTC: TBA vs The Orange Alliance in settings.
+    const [program, setProgram] = useState<Program>('frc');
+    useEffect(() => {
+        if (!window.electron) return undefined;
+        const { ipcRenderer } = window.electron;
+        const off = ipcRenderer.on('autoav:status', (st: AutoAVStatus) =>
+            setProgram(st.program)
+        );
+        ipcRenderer.sendMessage('autoav:getState', []);
+        return off;
+    }, []);
     const [status, setStatus] = useState<UploadAddonStatus | null>(null);
     const [rows, setRows] = useState<UploadRow[]>([]);
     const [playlists, setPlaylists] = useState<Playlist[]>([]);
@@ -966,6 +1029,7 @@ export default function UploadPage() {
                 onRefreshPlaylists={() => loadPlaylists(true)}
                 onCreatePlaylist={createPlaylist}
                 sample={rows.find((r) => r.meta?.match_number)}
+                ftc={program === 'ftc'}
             />
         </>
     );

@@ -303,20 +303,23 @@ export default class VmixService {
     }
 
     // Add a browser input pointing at the given URL, then rename the freshly
-    // created input (vMix titles it "Browser <host>"). Returns the input key,
-    // or null if it couldn't be found afterwards.
+    // created input. The new input is the Browser input that was not there
+    // before (vMix's own title, "Browser <host>", varies with the port).
+    // Returns the input key, or null if it couldn't be found afterwards.
     private async addBrowserInputNamed(
         url: string,
-        host: string,
+        _host: string,
         name: string
     ): Promise<string | null> {
+        const keys = async (): Promise<any[]> => {
+            const parsed = await this.GetBase();
+            const inputs = parsed?.vmix?.inputs?.input;
+            return Array.isArray(inputs) ? inputs : [inputs].filter(Boolean);
+        };
+        const before = new Set((await keys()).map((i: any) => i?.key));
         await this.AddBrowserInput(url);
-        const parsed = await this.GetBase();
-        const inputs = parsed?.vmix?.inputs?.input;
-        const list = Array.isArray(inputs) ? inputs : [inputs].filter(Boolean);
-        const match = list.find(
-            (input: any) =>
-                input?.type === 'Browser' && input?.title === `Browser ${host}`
+        const match = (await keys()).find(
+            (input: any) => input?.type === 'Browser' && !before.has(input?.key)
         );
         if (!match) return null;
         await this.RenameInput(match.key, name);
@@ -332,15 +335,13 @@ export default class VmixService {
         if (!key) throw new Error('Could not find the new Live Captions input');
     }
 
-    async AddAudienceDisplayInput(): Promise<void> {
-        const key = await this.addBrowserInputNamed(
-            'http://10.0.100.5/AudienceDisplay',
-            '10.0.100.5',
-            // "FMS": the name the custom audience display and FIM's Companion
-            // profiles use for this input too.
-            'FMS'
-        );
-        if (!key) throw new Error('Could not find the new FMS input');
+    // The audience display browser input: the FMS display or our custom one
+    // at FRC events ("FMS", the name the custom display and FIM's Companion
+    // profiles use), FTC Live's display at FTC events ("Scoring", the name
+    // FIM's FTC vMix projects use).
+    async AddAudienceDisplayInput(url: string, name: string): Promise<void> {
+        const key = await this.addBrowserInputNamed(url, '', name);
+        if (!key) throw new Error(`Could not find the new ${name} input`);
         await this.SetInputAudioAlwaysOn(key);
     }
 

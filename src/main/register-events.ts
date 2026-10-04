@@ -448,13 +448,40 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         }
     });
 
+    // The audience display in use: FTC Live's display at FTC events; at FRC
+    // events the custom display when it runs (off-season, chosen as the
+    // Bitfocus trigger source), otherwise the FMS display.
+    const audienceDisplayInput = () => {
+        if (AutoAV.Instance.isFtc()) {
+            const { address, eventCode } = FtcScorekeeper.Instance.getStatus();
+            if (!address || !eventCode) {
+                throw new Error('No FTC scorekeeper event');
+            }
+            return {
+                url: `http://${address}/event/${eventCode}/display/`,
+                name: 'Scoring',
+            };
+        }
+        const customAd =
+            AutoAV.Instance.isFrcOffSeason() &&
+            store.get('bitfocus', { triggerSource: 'fms' }).triggerSource ===
+                'customAd';
+        return {
+            url: customAd
+                ? 'http://127.0.0.1:3001/display'
+                : 'http://10.0.100.5/AudienceDisplay',
+            name: 'FMS',
+        };
+    };
+
     ipcMain.on('vmix:addAudienceDisplayInput', async (event) => {
         try {
-            await VmixService.Instance.AddAudienceDisplayInput();
+            const { url, name } = audienceDisplayInput();
+            await VmixService.Instance.AddAudienceDisplayInput(url, name);
             event.reply('vmix:action', {
                 ok: true,
                 action: 'addAudienceDisplayInput',
-                message: 'Added Audience Display input to vMix',
+                message: `Added ${name} input to vMix`,
             });
         } catch (e) {
             event.reply('vmix:action', {
@@ -795,8 +822,12 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // should be doing changes, it is started or stopped. At boot the mode is
     // the stored fallback until FMS or the scorekeeper reports, so that change
     // is what starts them.
+    // The uploader value carries the program: it is launched with
+    // -program frc|ftc, so a program change restarts it.
     const wanted = () => ({
-        uploader: AutoAV.Instance.runsUploader(),
+        uploader: AutoAV.Instance.runsUploader()
+            ? AutoAV.Instance.getStatus().program
+            : false,
         display: AutoAV.Instance.isFrcOffSeason(),
     });
     let running = wanted();
@@ -809,6 +840,8 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             ] as const
         ).forEach(([key, addon]) => {
             if (next[key] === running[key]) return;
+            // start() replaces a running instance, so a changed value
+            // (e.g. FRC -> FTC uploader) is a restart.
             const change = next[key] ? addon.start() : addon.stop();
             change.catch((e) => log.error('Addon season change failed', e));
         });
@@ -979,6 +1012,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
                         auto_submit_tba: settings.autoSubmitTba,
                         tba_auth_id: settings.tbaAuthId,
                         tba_secret: settings.tbaSecret,
+                        auto_submit_toa: settings.autoSubmitToa ?? true,
+                        toa_api_key: settings.toaApiKey ?? '',
+                        toa_event_key: settings.toaEventKey ?? '',
                     }),
                 }
             );

@@ -9,6 +9,7 @@ import { appdataPath } from '../util';
 import { AddonLoggers } from './addon-loggers';
 import { getStore } from '../store';
 import AutoAV from './autoav';
+import FtcScorekeeper from '../ftc/scorekeeper';
 
 // YoutubeUploaderAddon spawns and supervises the youtube-tba-upload process, which
 // uploads recorded match videos to YouTube and submits the URLs to The Blue
@@ -245,6 +246,13 @@ export default class YoutubeUploaderAddon {
             '-tba-url',
             YoutubeUploaderAddon.TBA_URL,
         ];
+        // FTC: scores come from the FTC Live scorekeeper and video links go
+        // to The Orange Alliance instead of TBA.
+        if (AutoAV.Instance.isFtc()) {
+            const { address } = FtcScorekeeper.Instance.getStatus();
+            args.push('-program', 'ftc');
+            if (address) args.push('-ftc-url', `http://${address}`);
+        }
 
         for (let attempt = 1; attempt <= 2; attempt += 1) {
             this.killExisting();

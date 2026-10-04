@@ -76,6 +76,10 @@ export type AppConfig = {
         tbaSecret: string;
         // Post the YouTube URL to TBA automatically after each upload
         autoSubmitTba: boolean;
+        // FTC: The Orange Alliance submission (FTC's TBA)
+        toaApiKey: string;
+        toaEventKey: string;
+        autoSubmitToa: boolean;
         // Unused: the playlist is per event and lives in the uploader's event
         // config (see upload:getSettings). Kept blank for older installs.
         playlistId: string;
@@ -248,6 +252,9 @@ export function createStore(): Store<AppConfig> {
                     tbaAuthId: { type: 'string', default: '' },
                     tbaSecret: { type: 'string', default: '' },
                     autoSubmitTba: { type: 'boolean', default: true },
+                    toaApiKey: { type: 'string', default: '' },
+                    toaEventKey: { type: 'string', default: '' },
+                    autoSubmitToa: { type: 'boolean', default: true },
                     playlistId: { type: 'string', default: '' },
                     playlistName: { type: 'string', default: '' },
                     titleTemplate: {
@@ -266,6 +273,9 @@ export function createStore(): Store<AppConfig> {
                     tbaAuthId: '',
                     tbaSecret: '',
                     autoSubmitTba: true,
+                    toaApiKey: '',
+                    toaEventKey: '',
+                    autoSubmitToa: true,
                     playlistId: '',
                     playlistName: '',
                     titleTemplate: DEFAULT_TITLE_TEMPLATE,
