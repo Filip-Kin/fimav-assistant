@@ -457,8 +457,30 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             if (!address || !eventCode) {
                 throw new Error('No FTC scorekeeper event');
             }
+            // FTC Live's audience display as an overlay, with the options FIM
+            // ran at Detroit spring 2026 (transparent background, score bar
+            // at the bottom, all fields).
+            const options = new URLSearchParams({
+                type: 'audience',
+                bindToField: 'all',
+                scoringBarLocation: 'bottom',
+                allianceOrientation: 'standard',
+                mute: 'false',
+                muteRandomizationResults: 'false',
+                inspectionGroupDivision: 'false',
+                fieldStyleTimer: 'false',
+                overlay: 'true',
+                overlayColor: 'transparent',
+                allianceSelectionStyle: 'classic',
+                awardsStyle: 'overlay',
+                dualDivisionRankingStyle: 'sideBySide',
+                rankingsFontSize: 'larger',
+                showMeetRankings: 'false',
+                rankingsAllTeams: 'true',
+                name: 'Audience',
+            });
             return {
-                url: `http://${address}/event/${eventCode}/display/`,
+                url: `http://${address}/event/${eventCode}/display/?${options}`,
                 name: 'Scoring',
             };
         }
