@@ -559,8 +559,8 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     // Manually cut the dead time out of a recorded match (the Cut button).
     ipcMain.on('autoav:cutMatch', (_event, [folder, id]) => {
-        // Dead-time cutting is an off-season feature.
-        if (!AutoAV.Instance.isOffSeason()) return;
+        // Dead-time cutting is an FRC off-season feature.
+        if (!AutoAV.Instance.isFrcOffSeason()) return;
         if (typeof folder === 'string' && typeof id === 'string') {
             AutoAV.Instance.queueCut(folder, id);
         }
@@ -704,6 +704,8 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         eventCode: store.get('ftc.eventCode', ''),
         automations: store.get('ftc.automations', true),
         triggers: store.get('ftc.triggers', {}),
+        matchSeconds: store.get('ftc.matchSeconds', 158),
+        tailSeconds: store.get('ftc.tailSeconds', 5),
     });
 
     ipcMain.on('ftc:getState', (event) => {
@@ -728,6 +730,10 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             store.set('ftc.automations', s.automations);
         if (s?.triggers && typeof s.triggers === 'object')
             store.set('ftc.triggers', s.triggers);
+        if (Number.isFinite(s?.matchSeconds) && s.matchSeconds > 0)
+            store.set('ftc.matchSeconds', s.matchSeconds);
+        if (Number.isFinite(s?.tailSeconds) && s.tailSeconds >= 0)
+            store.set('ftc.tailSeconds', s.tailSeconds);
         const after = ftcSettings();
         if (
             before.address !== after.address ||
@@ -783,24 +789,44 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         eventKey: AutoAV.Instance.getStatus().currentEvent?.code ?? '',
     });
 
-    // The off-season addons (YouTube uploader, custom audience display)
-    // follow the season: an event that turns out to be in-season (official)
-    // stops them, and a flip to off-season starts them. At boot the mode is
-    // the stored fallback until FMS reports the event, so the flip is what
-    // starts them for an off-season event.
-    let seasonMode = AutoAV.Instance.getStatus().fileNameMode;
-    AutoAV.Instance.on('status', (s: AutoAVStatus) => {
-        if (s.fileNameMode === seasonMode) return;
-        seasonMode = s.fileNameMode;
-        [YoutubeUploaderAddon.Instance, AudienceDisplayAddon.Instance].forEach(
-            (addon) => {
-                const change =
-                    s.fileNameMode === 'in-season'
-                        ? addon.stop()
-                        : addon.start();
-                change.catch((e) => log.error('Addon season change failed', e));
-            }
-        );
+    // The uploader and the custom audience display follow the program and
+    // the season: the uploader runs at FTC events and FRC off-season events,
+    // the custom display only at FRC off-season events. When what an addon
+    // should be doing changes, it is started or stopped. At boot the mode is
+    // the stored fallback until FMS or the scorekeeper reports, so that change
+    // is what starts them.
+    const wanted = () => ({
+        uploader: AutoAV.Instance.runsUploader(),
+        display: AutoAV.Instance.isFrcOffSeason(),
+    });
+    let running = wanted();
+    AutoAV.Instance.on('status', () => {
+        const next = wanted();
+        (
+            [
+                ['uploader', YoutubeUploaderAddon.Instance],
+                ['display', AudienceDisplayAddon.Instance],
+            ] as const
+        ).forEach(([key, addon]) => {
+            if (next[key] === running[key]) return;
+            const change = next[key] ? addon.start() : addon.stop();
+            change.catch((e) => log.error('Addon season change failed', e));
+        });
+        running = next;
+    });
+
+    // Global Settings (menu bar): FRC/FTC override. The FTC scorekeeper
+    // address lives on the ftc:* channels.
+    ipcMain.on('app:getSettings', (event) => {
+        event.reply('app:settings', { program: store.get('program', 'auto') });
+    });
+
+    ipcMain.on('app:saveSettings', (event, [s]) => {
+        if (['auto', 'frc', 'ftc'].includes(s?.program)) {
+            store.set('program', s.program);
+            AutoAV.Instance.applySettings();
+        }
+        event.reply('app:settings', { program: store.get('program', 'auto') });
     });
 
     // #region Offseason AD tab (custom audience display)

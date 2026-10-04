@@ -36,7 +36,6 @@ export default class MenuBuilder {
         return menu;
     }
 
-    // eslint-disable-next-line class-methods-use-this
     buildDefaultTemplate(dev: boolean) {
         const templateDefault: MenuItemConstructorOptions[] = [];
 
@@ -90,6 +89,12 @@ export default class MenuBuilder {
                           },
                       ] as MenuItemConstructorOptions[])
                     : []),
+                {
+                    label: 'Settings',
+                    click: () => {
+                        this.mainWindow.webContents.send('app:openSettings');
+                    },
+                },
                 {
                     label: 'About',
                     submenu: [
@@ -169,5 +174,4 @@ export default class MenuBuilder {
         window.loadURL(`http://localhost:3000/settings.html#${submenu}`);
         window.show();
     }
-
 }

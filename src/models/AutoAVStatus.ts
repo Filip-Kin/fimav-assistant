@@ -1,5 +1,8 @@
 import { FileNameMode } from '../utils/recording';
 
+// Which FIRST program the cart is serving.
+export type Program = 'frc' | 'ftc';
+
 // Snapshot of AutoAV's health, surfaced in the Auto AV tab so a volunteer can
 // tell at a glance whether recording is actually working.
 export interface AutoAVStatus {
@@ -7,6 +10,14 @@ export interface AutoAVStatus {
     running: boolean;
     // Connected to the FMS SignalR hub
     fmsConnected: boolean;
+    // Connected to the FTC Live scorekeeper stream
+    ftcConnected: boolean;
+    // FRC or FTC: the Settings override, else what was detected (FTC when only
+    // the scorekeeper answers, FRC otherwise). The app shows only that
+    // program's features.
+    program: Program;
+    // What detection alone says, or null when neither answers
+    programDetected: Program | null;
     // vMix reachability + whether it is currently recording
     vmix: { reachable: boolean; recording: boolean };
     // Whether AutoAV itself kicked off the current recording

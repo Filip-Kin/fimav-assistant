@@ -138,9 +138,11 @@ export default class AudienceDisplayAddon {
     public async start(): Promise<boolean> {
         this.killExisting();
 
-        // The custom display is an off-season feature.
-        if (!AutoAV.Instance.isOffSeason()) {
-            this.logs.out.log('In-season event; audience display off');
+        // The custom display is an FRC off-season feature.
+        if (!AutoAV.Instance.isFrcOffSeason()) {
+            this.logs.out.log(
+                'Not an FRC off-season event; audience display off'
+            );
             this.running = false;
             return false;
         }

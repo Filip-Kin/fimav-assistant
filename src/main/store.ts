@@ -47,6 +47,8 @@ export type AppConfig = {
         // producing a clean uploadable copy in a "Cut" subfolder.
         autoCut: boolean;
     };
+    // FRC / FTC override from Settings; 'auto' follows detection.
+    program: 'auto' | 'frc' | 'ftc';
     // Bitfocus tab: which audience display's triggers the tab edits. Both
     // Companion and the custom display run on this machine.
     bitfocus: {
@@ -211,6 +213,7 @@ export function createStore(): Store<AppConfig> {
                     },
                 },
             },
+            program: { type: 'string', default: 'auto' },
             bitfocus: {
                 type: 'object',
                 properties: {

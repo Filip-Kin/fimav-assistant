@@ -6,6 +6,7 @@ import StatusContext, { StatusContextType } from './hooks/status_state';
 import BackendStatusSync from './components/BackendStatusSync';
 import AppFooter from './components/Footer';
 import TabBar from './components/TabBar';
+import GlobalSettings from './components/GlobalSettings';
 
 export default function App() {
     const [status, setStatus] = useState<StatusContextType>({
@@ -54,6 +55,7 @@ export default function App() {
                 </AppRouter>
 
                 <AppFooter />
+                <GlobalSettings />
             </StatusContext.Provider>
         </ConfigProvider>
     );

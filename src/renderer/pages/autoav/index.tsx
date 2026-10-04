@@ -370,8 +370,14 @@ export default function AutoAVPage() {
         window.electron?.ipcRenderer.sendMessage('autoav:stopAddon', []);
     }, []);
 
-    const working = !!status?.fmsConnected && !!status?.vmix.reachable;
-    const offSeason = status?.fileNameMode === 'off-season';
+    const ftc = status?.program === 'ftc';
+    // The field source for this program: FTC Live's scorekeeper or FRC's FMS.
+    const fieldConnected = ftc
+        ? !!status?.ftcConnected
+        : !!status?.fmsConnected;
+    const working = fieldConnected && !!status?.vmix.reachable;
+    // Dead-time cutting (and its settings switch) is FRC off-season only.
+    const offSeason = !ftc && status?.fileNameMode === 'off-season';
 
     const columns: ColumnsType<MatchRecord> = [
         {
@@ -453,8 +459,12 @@ export default function AutoAVPage() {
                     <Card size="small" title="Status">
                         <Space direction="vertical" size={8}>
                             <StatusBadge
-                                ok={!!status?.fmsConnected}
-                                label="FMS connected"
+                                ok={fieldConnected}
+                                label={
+                                    ftc
+                                        ? 'FTC Scorekeeper connected'
+                                        : 'FMS connected'
+                                }
                             />
                             <StatusBadge
                                 ok={!!status?.vmix.reachable}

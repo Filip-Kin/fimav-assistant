@@ -23,7 +23,7 @@ import { getCurrentEvent, signalrToElectronLog } from '../util';
 import VmixService from '../../services/VmixService';
 import FmsApi from '../../services/FmsApi';
 import Event from '../../models/Event';
-import { AutoAVStatus } from '../../models/AutoAVStatus';
+import { AutoAVStatus, Program } from '../../models/AutoAVStatus';
 import { MatchRecord } from '../../models/MatchRecord';
 import {
     upsertMatch,
@@ -86,6 +86,9 @@ export default class AutoAV {
         saveFolder: null,
         fileNameMode: 'in-season',
         fileNameModeForced: false,
+        ftcConnected: false,
+        program: 'frc',
+        programDetected: null,
         sampleFileName: '',
         lastMessage: null,
     };
@@ -197,7 +200,7 @@ export default class AutoAV {
                         // Originals/), if enabled. Never cut a match with a card:
                         // the card explanation lives in the dead time we'd remove.
                         if (
-                            this.isOffSeason() &&
+                            this.isFrcOffSeason() &&
                             getStore().get('autoAv.autoCut', false) &&
                             hasCard !== true
                         ) {
@@ -350,7 +353,11 @@ export default class AutoAV {
     // A new FTC event fills in the event name like a new FMS event does, and
     // stands in as the current event when fim-admin has none.
     private onFtcStatus(s: FtcScorekeeperStatus) {
-        if (!s.eventCode) return;
+        // Connecting or dropping can change the detected program.
+        if (!s.eventCode) {
+            this.emitStatus();
+            return;
+        }
         const store = getStore();
         if (s.eventCode !== store.get('autoAv.lastFtcEventCode', '')) {
             const name = s.eventName || s.eventCode;
@@ -747,6 +754,22 @@ export default class AutoAV {
         return getStore().get('autoAv.fileNameMode', 'in-season');
     }
 
+    public isFtc(): boolean {
+        return this.status.program === 'ftc';
+    }
+
+    // FRC off-season features: the custom audience display and dead-time
+    // cutting (its keep-first-166-s rule is FRC match timing).
+    public isFrcOffSeason(): boolean {
+        return !this.isFtc() && this.isOffSeason();
+    }
+
+    // The YouTube uploader runs at FTC events in either season and at FRC
+    // off-season events.
+    public runsUploader(): boolean {
+        return this.isFtc() || this.isOffSeason();
+    }
+
     // Off-season mode turns on the off-season-only features: the YouTube
     // uploader, the Upload tab and dead-time cutting.
     public isOffSeason(): boolean {
@@ -775,6 +798,19 @@ export default class AutoAV {
               }
             : null;
         this.status.fileNameMode = this.effectiveFileNameMode();
+        // FRC or FTC. Detection: the scorekeeper answering and FMS not = FTC;
+        // FMS answering = FRC; neither = keep what it was. Settings override.
+        const ftcConnected = FtcScorekeeper.Instance.getStatus().connected;
+        this.status.ftcConnected = ftcConnected;
+        let detected: Program | null = null;
+        if (ftcConnected && !this.status.fmsConnected) detected = 'ftc';
+        else if (this.status.fmsConnected) detected = 'frc';
+        this.status.programDetected = detected;
+        const override = store.get('program', 'auto');
+        this.status.program =
+            override === 'frc' || override === 'ftc'
+                ? override
+                : detected ?? this.status.program;
         this.status.fileNameModeForced =
             typeof this.currentEvent?.isOfficial === 'boolean';
         this.status.sampleFileName = sampleFileName(

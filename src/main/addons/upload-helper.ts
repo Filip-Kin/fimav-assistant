@@ -156,9 +156,9 @@ export default class YoutubeUploaderAddon {
     public async start(): Promise<boolean> {
         this.killExisting();
 
-        // Match-video uploads are an off-season feature.
-        if (!AutoAV.Instance.isOffSeason()) {
-            this.logs.out.log('In-season event; YouTube uploader off');
+        // Match-video uploads: FTC events in either season, FRC off-season.
+        if (!AutoAV.Instance.runsUploader()) {
+            this.logs.out.log('In-season FRC event; YouTube uploader off');
             this.running = false;
             return false;
         }

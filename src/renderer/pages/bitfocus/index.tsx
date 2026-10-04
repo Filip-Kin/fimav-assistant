@@ -45,6 +45,7 @@ import {
     FtcSettings,
     FtcTriggerMap,
 } from '../../../models/Ftc';
+import { AutoAVStatus, Program } from '../../../models/AutoAVStatus';
 import './index.css';
 
 const { Text } = Typography;
@@ -521,30 +522,32 @@ function ButtonGrid({
 
 function SettingsDialog({
     open,
+    program,
+    offSeason,
     settings,
     fms,
     customAd,
     ftc,
-    ftcStatus,
     onSaveFms,
     onSaveCustomAd,
     onClose,
 }: {
     open: boolean;
+    program: Program;
+    offSeason: boolean;
     settings: BitfocusSettings;
     fms: FmsAutomationConfig | null;
     customAd: CustomAdState | null;
     ftc: FtcSettings | null;
-    ftcStatus: FtcScorekeeperStatus | null;
     onSaveFms: (_c: FmsAutomationConfig) => void;
     onSaveCustomAd: (_c: CustomAdConfig) => void;
     onClose: () => void;
 }) {
+    // FTC events have one trigger source; FRC picks the audience display.
+    const frcSource = (src: TriggerSource): TriggerSource =>
+        src === 'ftc' ? 'fms' : src;
     const [source, setSource] = useState<TriggerSource>('fms');
     const [automations, setAutomations] = useState(false);
-    const [address, setAddress] = useState('');
-    const [scanning, setScanning] = useState(false);
-    const [found, setFound] = useState<string[] | null>(null);
 
     const enabledFor = (src: TriggerSource) => {
         if (src === 'fms') return fms?.BitfocusIntegrationEnabled ?? false;
@@ -559,29 +562,15 @@ function SettingsDialog({
 
     useEffect(() => {
         if (open) {
-            setSource(settings.triggerSource);
-            setAutomations(enabledFor(settings.triggerSource));
-            setAddress(ftc?.address ?? '');
-            setFound(null);
+            let src: TriggerSource = frcSource(settings.triggerSource);
+            if (program === 'ftc') src = 'ftc';
+            else if (!offSeason) src = 'fms';
+            setSource(src);
+            setAutomations(enabledFor(src));
         }
         // enabledFor reads fms/customAd/ftc, which are deps here already.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open, settings, fms, customAd, ftc]);
-
-    const scan = () => {
-        if (!window.electron) return;
-        setScanning(true);
-        const off = window.electron.ipcRenderer.on(
-            'ftc:scanResult',
-            (list: string[]) => {
-                off();
-                setScanning(false);
-                setFound(list);
-                if (list.length === 1) setAddress(list[0]);
-            }
-        );
-        send('ftc:scan');
-    };
+    }, [open, program, offSeason, settings, fms, customAd, ftc]);
 
     return (
         <Modal
@@ -590,23 +579,28 @@ function SettingsDialog({
             onCancel={onClose}
             okText="Save"
             onOk={() => {
-                send('bitfocus:saveSettings', { triggerSource: source });
                 if (source === 'ftc') {
-                    send('ftc:saveSettings', { address, automations });
-                } else if (
-                    loaded(source) &&
-                    automations !== enabledFor(source)
-                ) {
-                    if (source === 'fms' && fms) {
-                        onSaveFms({
-                            ...fms,
-                            BitfocusIntegrationEnabled: automations,
+                    send('ftc:saveSettings', { automations });
+                } else {
+                    // In-season the source is fixed, so keep the stored
+                    // off-season choice.
+                    if (offSeason) {
+                        send('bitfocus:saveSettings', {
+                            triggerSource: source,
                         });
-                    } else if (customAd) {
-                        onSaveCustomAd({
-                            ...customAd.config,
-                            enabled: automations,
-                        });
+                    }
+                    if (loaded(source) && automations !== enabledFor(source)) {
+                        if (source === 'fms' && fms) {
+                            onSaveFms({
+                                ...fms,
+                                BitfocusIntegrationEnabled: automations,
+                            });
+                        } else if (customAd) {
+                            onSaveCustomAd({
+                                ...customAd.config,
+                                enabled: automations,
+                            });
+                        }
                     }
                 }
                 onClose();
@@ -614,60 +608,22 @@ function SettingsDialog({
             destroyOnClose
         >
             <Form layout="vertical">
-                <Form.Item label="Triggers">
-                    <Select
-                        value={source}
-                        options={[
-                            { value: 'fms', label: 'FMS audience display' },
-                            { value: 'customAd', label: 'Custom AD' },
-                            { value: 'ftc', label: 'FTC scorekeeper' },
-                        ]}
-                        onChange={(v: TriggerSource) => {
-                            setSource(v);
-                            setAutomations(enabledFor(v));
-                        }}
-                    />
-                </Form.Item>
-                {source === 'ftc' && (
-                    <Form.Item label="Scorekeeper">
-                        <Space.Compact style={{ width: '100%' }}>
-                            <Input
-                                placeholder="10.0.0.10"
-                                value={address}
-                                onChange={(e) => setAddress(e.target.value)}
-                                status={
-                                    ftcStatus?.address === address &&
-                                    address &&
-                                    !ftcStatus.connected
-                                        ? 'error'
-                                        : undefined
-                                }
-                            />
-                            <Button loading={scanning} onClick={scan}>
-                                Scan
-                            </Button>
-                        </Space.Compact>
-                        {found && found.length > 1 && (
-                            <Select
-                                style={{ width: '100%', marginTop: 8 }}
-                                placeholder="Scorekeepers"
-                                options={found.map((f) => ({
-                                    value: f,
-                                    label: f,
-                                }))}
-                                onChange={setAddress}
-                            />
-                        )}
-                        {found && found.length === 0 && (
-                            <Text type="secondary">None found</Text>
-                        )}
-                        {ftcStatus?.connected &&
-                            ftcStatus.address === address && (
-                                <Text type="secondary">
-                                    {ftcStatus.eventName} ·{' '}
-                                    {ftcStatus.eventCode}
-                                </Text>
-                            )}
+                {program === 'frc' && offSeason && (
+                    <Form.Item label="Triggers">
+                        <Select
+                            value={source}
+                            options={[
+                                {
+                                    value: 'fms',
+                                    label: 'FMS audience display',
+                                },
+                                { value: 'customAd', label: 'Custom AD' },
+                            ]}
+                            onChange={(v: TriggerSource) => {
+                                setSource(v);
+                                setAutomations(enabledFor(v));
+                            }}
+                        />
                     </Form.Item>
                 )}
                 <Form.Item
@@ -724,6 +680,8 @@ export default function Bitfocus() {
     };
 
     const [ftc, setFtc] = useState<FtcSettings | null>(null);
+    const [program, setProgram] = useState<Program>('frc');
+    const [offSeason, setOffSeason] = useState(false);
     const [ftcStatus, setFtcStatus] = useState<FtcScorekeeperStatus | null>(
         null
     );
@@ -812,8 +770,17 @@ export default function Bitfocus() {
             'ftc:status',
             (st: FtcScorekeeperStatus) => setFtcStatus(st)
         );
+        const offAutoav = ipcRenderer.on(
+            'autoav:status',
+            (st: AutoAVStatus) => {
+                setProgram(st.program);
+                setOffSeason(st.fileNameMode === 'off-season');
+            }
+        );
+        send('autoav:getState');
         send('bitfocus:getSettings');
         return () => {
+            offAutoav();
             offSettings();
             offResult();
             offFtc();
@@ -876,8 +843,13 @@ export default function Bitfocus() {
         });
     };
 
-    // Triggers come from the audience display chosen in settings.
-    const { triggerSource } = settings;
+    // Triggers: FTC events use the scorekeeper; FRC uses the audience
+    // display chosen in settings.
+    // FTC: the scorekeeper. FRC in-season: the FMS audience display only.
+    // FRC off-season: the audience display chosen in settings.
+    let { triggerSource } = settings;
+    if (program === 'ftc') triggerSource = 'ftc';
+    else if (!offSeason || triggerSource === 'ftc') triggerSource = 'fms';
     const ftcFields = ftcStatus?.connected ? ftcStatus.fieldCount : 2;
     let triggerOptions: TriggerOption[] | null = null;
     if (triggerSource === 'fms') triggerOptions = fms && FMS_BITFOCUS_EVENTS;
@@ -1044,11 +1016,12 @@ export default function Bitfocus() {
             />
             <SettingsDialog
                 open={settingsOpen}
+                program={program}
+                offSeason={offSeason}
                 settings={settings}
                 fms={fms}
                 customAd={customAd}
                 ftc={ftc}
-                ftcStatus={ftcStatus}
                 onSaveFms={saveFms}
                 onSaveCustomAd={saveCustomAd}
                 onClose={() => setSettingsOpen(false)}

@@ -20,8 +20,8 @@ interface TabDef {
     label: string;
     icon: ReactNode;
     isActive: (_pathname: string) => boolean;
-    // Shown only in off-season mode
-    offSeasonOnly?: boolean;
+    // Shown only when this says so (program / season); always shown if unset
+    showIf?: (_s: AutoAVStatus) => boolean;
 }
 
 const tabs: TabDef[] = [
@@ -60,14 +60,16 @@ const tabs: TabDef[] = [
         label: 'Upload',
         icon: <YoutubeFilled />,
         isActive: (p) => p.startsWith('/upload'),
-        offSeasonOnly: true,
+        // FTC events in either season; FRC off-season only.
+        showIf: (s) => s.program === 'ftc' || s.fileNameMode === 'off-season',
     },
     {
         key: '/audiencedisplay',
         label: 'Offseason AD',
         icon: <DesktopOutlined />,
         isActive: (p) => p.startsWith('/audiencedisplay'),
-        offSeasonOnly: true,
+        // The custom audience display is FRC off-season only.
+        showIf: (s) => s.program === 'frc' && s.fileNameMode === 'off-season',
     },
 ];
 
@@ -75,27 +77,32 @@ export default function TabBar() {
     const nav = useNavigate();
     const { pathname } = useLocation();
     const [alertCount, setAlertCount] = useState(0);
-    // null until AutoAV reports, so an off-season-only tab never flashes in.
-    const [offSeason, setOffSeason] = useState<boolean | null>(null);
+    // null until AutoAV reports, so a conditional tab never flashes in.
+    const [status, setStatus] = useState<AutoAVStatus | null>(null);
 
-    // The season follows AutoAV's effective file naming mode.
+    // Program (FRC / FTC) and season come from AutoAV's status.
     useEffect(() => {
         if (!window.electron) return undefined;
         const { ipcRenderer } = window.electron;
         const off = ipcRenderer.on('autoav:status', (s: AutoAVStatus) =>
-            setOffSeason(s?.fileNameMode === 'off-season')
+            setStatus(s)
         );
         ipcRenderer.sendMessage('autoav:getState', []);
         return off;
     }, []);
 
-    // Leave an off-season-only page once the event turns out to be in-season.
+    const shown = (t: TabDef) => !t.showIf || (!!status && t.showIf(status));
+
+    // Leave a page whose tab no longer applies (event turned in-season, or
+    // the program changed).
     useEffect(() => {
-        if (offSeason !== false) return;
-        if (tabs.some((t) => t.offSeasonOnly && t.isActive(pathname))) {
+        if (!status) return;
+        if (tabs.some((t) => !shown(t) && t.isActive(pathname))) {
             nav('/autoav');
         }
-    }, [offSeason, pathname, nav]);
+        // shown reads status, a dep here already.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [status, pathname, nav]);
 
     // Subscribe to alerts and poll so the bell reflects unread count.
     useEffect(() => {
@@ -117,24 +124,22 @@ export default function TabBar() {
 
     return (
         <div className="tab-bar">
-            {tabs
-                .filter((t) => !t.offSeasonOnly || offSeason === true)
-                .map((t) => {
-                    const active = t.isActive(pathname);
-                    return (
-                        <button
-                            key={t.key}
-                            type="button"
-                            className={`tab-item${
-                                active ? ' tab-item--active' : ''
-                            }`}
-                            onClick={() => nav(t.key)}
-                        >
-                            <span className="tab-icon">{t.icon}</span>
-                            <span>{t.label}</span>
-                        </button>
-                    );
-                })}
+            {tabs.filter(shown).map((t) => {
+                const active = t.isActive(pathname);
+                return (
+                    <button
+                        key={t.key}
+                        type="button"
+                        className={`tab-item${
+                            active ? ' tab-item--active' : ''
+                        }`}
+                        onClick={() => nav(t.key)}
+                    >
+                        <span className="tab-icon">{t.icon}</span>
+                        <span>{t.label}</span>
+                    </button>
+                );
+            })}
 
             <div className="tab-spacer" />
 

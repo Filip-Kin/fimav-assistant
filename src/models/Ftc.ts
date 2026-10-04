@@ -55,4 +55,6 @@ export interface FtcSettings {
     eventCode: string;
     automations: boolean;
     triggers: FtcTriggerMap;
+    matchSeconds: number;
+    tailSeconds: number;
 }
