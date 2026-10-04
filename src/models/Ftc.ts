@@ -1,6 +1,7 @@
 // FTC Live (FTC scoring system) shapes shared by the main process and the UI.
 
-// updateType values of FTC Live's /api/v2/stream/ websocket.
+// updateType values of FTC Live's /api/v2/stream/ websocket (8.0 / BIOBUZZ;
+// 7.5 also had SHOW_RANDOM, dropped in 8.0).
 export const FTC_UPDATE_TYPES = [
     'MATCH_LOAD',
     'MATCH_START',
@@ -8,7 +9,6 @@ export const FTC_UPDATE_TYPES = [
     'MATCH_COMMIT',
     'MATCH_POST',
     'SHOW_PREVIEW',
-    'SHOW_RANDOM',
     'SHOW_MATCH',
 ] as const;
 
@@ -21,7 +21,6 @@ export const FTC_UPDATE_LABELS: Record<FtcUpdateType, string> = {
     MATCH_COMMIT: 'Match Commit',
     MATCH_POST: 'Match Post',
     SHOW_PREVIEW: 'Show Preview',
-    SHOW_RANDOM: 'Show Random',
     SHOW_MATCH: 'Show Match',
 };
 

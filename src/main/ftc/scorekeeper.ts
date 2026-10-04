@@ -17,7 +17,7 @@ import {
 // its push stream, websocket /api/v2/stream/?code=<event>, which sends
 // {updateTime, updateType, payload:{number, shortName, field}} for MATCH_LOAD,
 // MATCH_START, MATCH_ABORT, MATCH_COMMIT, MATCH_POST, SHOW_PREVIEW,
-// SHOW_RANDOM, SHOW_MATCH. REST is only used to find the event (once per
+// SHOW_MATCH. REST is only used to find the event (once per
 // connect): once a match is loaded FTC Live allows 30 requests per 5 minutes
 // per event, shared by every app, so nothing here polls.
 //
