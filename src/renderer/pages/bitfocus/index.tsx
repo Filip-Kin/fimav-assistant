@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     AutoComplete,
     Button,
@@ -36,7 +36,6 @@ import {
     CustomAdState,
     FMS_BITFOCUS_EVENTS,
     FmsAutomationConfig,
-    FmsBitfocusCommand,
     matchActionDef,
 } from '../../../models/Bitfocus';
 import './index.css';
@@ -65,6 +64,21 @@ const defFor = (a: CompanionAction) =>
 // in the catalog. Anything else is edited in Companion.
 const isEditable = (b: CompanionButton | undefined) =>
     !b || (b.type === 'button-layered' && b.actions.every((a) => defFor(a)));
+
+// Companion writes a line break in a label as the two characters "\\n".
+const labelToText = (label: string) => label.replace(/\\n/g, '\n');
+const textToLabel = (text: string) => text.replace(/\r?\n/g, '\\n');
+
+// FMS commands that press the button at this location.
+const commandsAt = (
+    fms: FmsAutomationConfig | null,
+    page: number,
+    row: number,
+    column: number
+) =>
+    (fms?.BitfocusCommands ?? []).filter(
+        (c) => c.Page === page && c.Row === row && c.Column === column
+    );
 
 // #region Button editor
 
@@ -104,6 +118,15 @@ function ActionRow({
                         <AutoComplete
                             key={f.key}
                             style={{ flex: 1, minWidth: 0 }}
+                            // Red when vMix has no input by that name (only
+                            // once vMix has answered with its inputs).
+                            status={
+                                v &&
+                                vmixInputs.length > 0 &&
+                                !vmixInputs.includes(v as string)
+                                    ? 'error'
+                                    : undefined
+                            }
                             placeholder={f.label}
                             value={(v as string) ?? ''}
                             options={vmixInputs.map((i) => ({ value: i }))}
@@ -159,8 +182,10 @@ function ButtonEditor({
     button,
     layout,
     vmixInputs,
+    fms,
     saving,
     onSave,
+    onSaveTriggers,
     onClear,
     onClose,
 }: {
@@ -170,17 +195,30 @@ function ButtonEditor({
     button: CompanionButton | undefined;
     layout: CompanionLayout | null;
     vmixInputs: string[];
+    fms: FmsAutomationConfig | null;
     saving: boolean;
     onSave: (_text: string, _actions: EditAction[]) => void;
+    onSaveTriggers: (_events: number[]) => void;
     onClear: () => void;
     onClose: () => void;
 }) {
     const [text, setText] = useState('');
     const [actions, setActions] = useState<EditAction[]>([]);
+    const [events, setEvents] = useState<number[]>([]);
+
+    const savedEvents = useMemo(
+        () =>
+            page && cell
+                ? commandsAt(fms, page.number, cell.row, cell.column).map(
+                      (c) => c.BfEvent
+                  )
+                : [],
+        [fms, page, cell]
+    );
 
     useEffect(() => {
         if (!open) return;
-        setText(button?.text ?? '');
+        setText(labelToText(button?.text ?? ''));
         setActions(
             (button?.actions ?? []).map((a) => ({
                 key: defFor(a)?.key ?? a.definitionId,
@@ -188,6 +226,34 @@ function ButtonEditor({
             }))
         );
     }, [open, button]);
+
+    useEffect(() => {
+        if (open) setEvents(savedEvents);
+    }, [open, savedEvents]);
+
+    const triggersChanged =
+        [...events].sort().join() !== [...savedEvents].sort().join();
+
+    // The FMS part saves on its own, so a button only Companion can edit
+    // still gets its FMS triggers.
+    const save = () => {
+        if (triggersChanged) onSaveTriggers(events);
+        if (isEditable(button)) onSave(textToLabel(text), actions);
+        else onClose();
+    };
+
+    const triggers = fms && (
+        <Form.Item label="FMS">
+            <Select
+                mode="multiple"
+                allowClear
+                placeholder="Events"
+                value={events}
+                options={FMS_BITFOCUS_EVENTS}
+                onChange={setEvents}
+            />
+        </Form.Item>
+    );
 
     // Only actions whose module has a connection in this Companion.
     const defs = useMemo(
@@ -226,24 +292,29 @@ function ButtonEditor({
                             </Popconfirm>
                         )}
                         <Button onClick={onClose}>Cancel</Button>
-                        <Button
-                            type="primary"
-                            loading={saving}
-                            onClick={() => onSave(text, actions)}
-                        >
+                        <Button type="primary" loading={saving} onClick={save}>
                             Save
                         </Button>
                     </Space>
                 ) : (
                     <Space>
-                        <Button onClick={onClose}>Close</Button>
                         <Button
-                            type="primary"
                             icon={<ExportOutlined />}
                             onClick={() => send('bitfocus:openCompanion')}
                         >
                             Companion
                         </Button>
+                        <Button onClick={onClose}>Cancel</Button>
+                        {fms && (
+                            <Button
+                                type="primary"
+                                loading={saving}
+                                disabled={!triggersChanged}
+                                onClick={save}
+                            >
+                                Save
+                            </Button>
+                        )}
                     </Space>
                 )
             }
@@ -251,7 +322,8 @@ function ButtonEditor({
             {editable ? (
                 <Form layout="vertical">
                     <Form.Item label="Label">
-                        <Input
+                        <Input.TextArea
+                            autoSize={{ minRows: 1, maxRows: 4 }}
                             value={text}
                             onChange={(e) => setText(e.target.value)}
                         />
@@ -293,9 +365,10 @@ function ButtonEditor({
                             </Button>
                         </div>
                     </Form.Item>
+                    {triggers}
                 </Form>
             ) : (
-                <div>
+                <Form layout="vertical">
                     <Tag color="gold">Companion only</Tag>
                     <div className="bf-readonly">
                         {(button?.actions ?? []).map((a) => (
@@ -304,7 +377,8 @@ function ButtonEditor({
                             </div>
                         ))}
                     </div>
-                </div>
+                    {triggers}
+                </Form>
             )}
         </Modal>
     );
@@ -316,9 +390,11 @@ function ButtonEditor({
 
 function ButtonGrid({
     page,
+    fms,
     onPick,
 }: {
     page: CompanionPage;
+    fms: FmsAutomationConfig | null;
     onPick: (_row: number, _column: number) => void;
 }) {
     const cells = [];
@@ -331,11 +407,15 @@ function ButtonGrid({
                     key={`${r}/${c}`}
                     className={`bf-cell${b ? ' bf-cell--set' : ''}${
                         b && !isEditable(b) ? ' bf-cell--locked' : ''
+                    }${
+                        commandsAt(fms, page.number, r, c).length
+                            ? ' bf-cell--fms'
+                            : ''
                     }`}
                     title={`${r}/${c}`}
                     onClick={() => onPick(r, c)}
                 >
-                    {b ? b.text.replace(/\\n/g, '\n') || b.type : ''}
+                    {b ? labelToText(b.text) || b.type : ''}
                 </button>
             );
         }
@@ -369,144 +449,6 @@ const locationColumns = (
             />
         ),
     }));
-
-function FmsTriggers({
-    config,
-    error,
-    saving,
-    onSave,
-}: {
-    config: FmsAutomationConfig | null;
-    error: string | null;
-    saving: boolean;
-    onSave: (_c: FmsAutomationConfig) => void;
-}) {
-    const [draft, setDraft] = useState<FmsAutomationConfig | null>(config);
-    useEffect(() => setDraft(config), [config]);
-
-    if (!draft) {
-        return (
-            <Card size="small" title="FMS audience display">
-                <Text type="secondary" title={error ?? undefined}>
-                    {error ? 'Not reachable' : 'Loading'}
-                </Text>
-            </Card>
-        );
-    }
-
-    const setCommand = (i: number, key: string, v: number) =>
-        setDraft({
-            ...draft,
-            BitfocusCommands: draft.BitfocusCommands.map((c, j) =>
-                j === i ? { ...c, [key]: v } : c
-            ),
-        });
-
-    return (
-        <Card
-            size="small"
-            title="FMS audience display"
-            extra={
-                <Button
-                    type="primary"
-                    loading={saving}
-                    onClick={() => onSave(draft)}
-                >
-                    Save
-                </Button>
-            }
-        >
-            <Space wrap size={16} className="bf-trigger-head">
-                <Space>
-                    <Text>Enabled</Text>
-                    <Switch
-                        checked={draft.BitfocusIntegrationEnabled}
-                        onChange={(v) =>
-                            setDraft({
-                                ...draft,
-                                BitfocusIntegrationEnabled: v,
-                            })
-                        }
-                    />
-                </Space>
-                <Input
-                    addonBefore="Companion"
-                    className="bf-address"
-                    value={draft.BitfocusIntegrationAddress}
-                    onChange={(e) =>
-                        setDraft({
-                            ...draft,
-                            BitfocusIntegrationAddress: e.target.value,
-                        })
-                    }
-                />
-            </Space>
-            <Table<FmsBitfocusCommand>
-                rowKey="BfId"
-                size="small"
-                pagination={false}
-                dataSource={draft.BitfocusCommands}
-                columns={[
-                    {
-                        title: 'Event',
-                        key: 'event',
-                        render: (_, r, i) => (
-                            <Select
-                                className="bf-event"
-                                value={r.BfEvent}
-                                options={FMS_BITFOCUS_EVENTS}
-                                onChange={(v) => setCommand(i, 'BfEvent', v)}
-                            />
-                        ),
-                    },
-                    ...locationColumns((i, key, v) => setCommand(i, key, v)),
-                    {
-                        title: '',
-                        key: 'del',
-                        width: 48,
-                        render: (_, r) => (
-                            <Button
-                                type="text"
-                                danger
-                                icon={<DeleteOutlined />}
-                                onClick={() =>
-                                    setDraft({
-                                        ...draft,
-                                        BitfocusCommands:
-                                            draft.BitfocusCommands.filter(
-                                                (c) => c.BfId !== r.BfId
-                                            ),
-                                    })
-                                }
-                            />
-                        ),
-                    },
-                ]}
-            />
-            <Button
-                className="bf-add"
-                icon={<PlusOutlined />}
-                onClick={() =>
-                    setDraft({
-                        ...draft,
-                        BitfocusCommands: [
-                            ...draft.BitfocusCommands,
-                            {
-                                BfId: crypto.randomUUID(),
-                                BfEvent: 1,
-                                Page: 1,
-                                Row: 0,
-                                Column: 0,
-                            },
-                        ],
-                    })
-                }
-            >
-                Trigger
-            </Button>
-        </Card>
-    );
-}
 
 function CustomAdTriggers({
     state,
@@ -666,16 +608,28 @@ function CustomAdTriggers({
 function SettingsDialog({
     open,
     settings,
+    fms,
+    onSaveFms,
     onClose,
 }: {
     open: boolean;
     settings: BitfocusSettings;
+    fms: FmsAutomationConfig | null;
+    onSaveFms: (_c: FmsAutomationConfig) => void;
     onClose: () => void;
 }) {
-    const [form] = Form.useForm<BitfocusSettings>();
+    const [form] = Form.useForm<
+        BitfocusSettings & { fmsEnabled: boolean; fmsAddress: string }
+    >();
     useEffect(() => {
-        if (open) form.setFieldsValue(settings);
-    }, [open, settings, form]);
+        if (open) {
+            form.setFieldsValue({
+                ...settings,
+                fmsEnabled: fms?.BitfocusIntegrationEnabled ?? false,
+                fmsAddress: fms?.BitfocusIntegrationAddress ?? '',
+            });
+        }
+    }, [open, settings, fms, form]);
     return (
         <Modal
             title="Bitfocus settings"
@@ -683,7 +637,22 @@ function SettingsDialog({
             onCancel={onClose}
             okText="Save"
             onOk={async () => {
-                send('bitfocus:saveSettings', await form.validateFields());
+                const v = await form.validateFields();
+                send('bitfocus:saveSettings', {
+                    companionUrl: v.companionUrl,
+                    customAdUrl: v.customAdUrl,
+                });
+                if (
+                    fms &&
+                    (v.fmsEnabled !== fms.BitfocusIntegrationEnabled ||
+                        v.fmsAddress !== fms.BitfocusIntegrationAddress)
+                ) {
+                    onSaveFms({
+                        ...fms,
+                        BitfocusIntegrationEnabled: v.fmsEnabled,
+                        BitfocusIntegrationAddress: v.fmsAddress,
+                    });
+                }
                 onClose();
             }}
             destroyOnClose
@@ -695,6 +664,20 @@ function SettingsDialog({
                 <Form.Item label="Custom audience display" name="customAdUrl">
                     <Input placeholder="http://10.0.100.20:3001" />
                 </Form.Item>
+                {fms && (
+                    <>
+                        <Form.Item
+                            label="FMS audience display"
+                            name="fmsEnabled"
+                            valuePropName="checked"
+                        >
+                            <Switch />
+                        </Form.Item>
+                        <Form.Item label="Companion (FMS)" name="fmsAddress">
+                            <Input placeholder="http://127.0.0.1:8000" />
+                        </Form.Item>
+                    </>
+                )}
             </Form>
         </Modal>
     );
@@ -718,7 +701,12 @@ export default function Bitfocus() {
     const [saving, setSaving] = useState<string | null>(null);
     const [vmixInputs, setVmixInputs] = useState<string[]>([]);
     const [fms, setFms] = useState<FmsAutomationConfig | null>(null);
-    const [fmsError, setFmsError] = useState<string | null>(null);
+    // A save is in flight, so its answer gets a message (a load does not).
+    const fmsSaveRef = useRef(false);
+    const saveFms = (c: FmsAutomationConfig) => {
+        fmsSaveRef.current = true;
+        send('bitfocus:saveFms', c);
+    };
     const [customAd, setCustomAd] = useState<CustomAdState | null>(null);
     const [customAdError, setCustomAdError] = useState<string | null>(null);
 
@@ -771,13 +759,13 @@ export default function Bitfocus() {
             if (r.op === 'fms' || r.op === 'customAd') {
                 setSaving((x) => (x === r.op ? null : x));
             }
+            // No FMS answer hides the FMS parts; a failed save says so.
             if (r.op === 'fms') {
-                if (r.ok) {
-                    setFms(r.data);
-                    setFmsError(null);
-                } else {
-                    setFmsError(r.error ?? 'FMS not reachable');
-                }
+                if (r.ok) setFms(r.data);
+                else if (fmsSaveRef.current) message.error(r.error);
+                else setFms(null);
+                if (r.ok && fmsSaveRef.current) message.success('Saved');
+                fmsSaveRef.current = false;
             }
             if (r.op === 'customAd') {
                 if (r.ok) {
@@ -833,6 +821,29 @@ export default function Bitfocus() {
         });
     };
 
+    // Point the chosen FMS events at this button: drop the commands that press
+    // it now, add one per event (keeping an existing command's id).
+    const saveTriggers = (events: number[]) => {
+        if (!fms || !cell) return;
+        const here = commandsAt(fms, pageNumber, cell.row, cell.column);
+        const others = fms.BitfocusCommands.filter((c) => !here.includes(c));
+        saveFms({
+            ...fms,
+            BitfocusCommands: [
+                ...others,
+                ...events.map((e) => ({
+                    BfId:
+                        here.find((c) => c.BfEvent === e)?.BfId ??
+                        crypto.randomUUID(),
+                    BfEvent: e,
+                    Page: pageNumber,
+                    Row: cell.row,
+                    Column: cell.column,
+                })),
+            ],
+        });
+    };
+
     const connected = !!layout;
 
     return (
@@ -873,6 +884,7 @@ export default function Bitfocus() {
                             {page && (
                                 <ButtonGrid
                                     page={page}
+                                    fms={fms}
                                     onPick={(row, column) =>
                                         setCell({ row, column })
                                     }
@@ -889,15 +901,6 @@ export default function Bitfocus() {
                         </span>
                     )}
                 </Card>
-                <FmsTriggers
-                    config={fms}
-                    error={fmsError}
-                    saving={saving === 'fms'}
-                    onSave={(c) => {
-                        setSaving('fms');
-                        send('bitfocus:saveFms', c);
-                    }}
-                />
                 {settings.customAdUrl && (
                     <CustomAdTriggers
                         state={customAd}
@@ -917,8 +920,10 @@ export default function Bitfocus() {
                 button={button}
                 layout={layout}
                 vmixInputs={vmixInputs}
+                fms={fms}
                 saving={saving === 'button'}
                 onSave={saveButton}
+                onSaveTriggers={saveTriggers}
                 onClear={() => {
                     if (!cell) return;
                     setSaving('button');
@@ -934,6 +939,8 @@ export default function Bitfocus() {
             <SettingsDialog
                 open={settingsOpen}
                 settings={settings}
+                fms={fms}
+                onSaveFms={saveFms}
                 onClose={() => setSettingsOpen(false)}
             />
         </>

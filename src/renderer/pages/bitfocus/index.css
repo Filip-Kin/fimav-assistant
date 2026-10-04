@@ -81,3 +81,8 @@
 .bf-sink + .bf-sink {
     margin-top: 16px;
 }
+
+.bf-cell--fms {
+    outline: 2px solid #1677ff;
+    outline-offset: 2px;
+}
