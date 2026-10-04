@@ -19,6 +19,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
+    PlusOutlined,
     QuestionCircleOutlined,
     ReloadOutlined,
     YoutubeFilled,
@@ -80,6 +81,8 @@ export interface UploadSettings {
     thumbnailPath: string;
     headless: boolean;
     visibility: 'PUBLIC' | 'UNLISTED' | 'PRIVATE';
+    // Name of the event's own playlist, from the uploader; not a stored setting.
+    eventPlaylistName: string;
 }
 
 export interface SignInStatus {
@@ -317,6 +320,7 @@ export function UploadSettingsDialog({
     onOpenChannel,
     onLogout,
     onRefreshPlaylists,
+    onCreatePlaylist,
     sample,
 }: {
     open: boolean;
@@ -329,12 +333,15 @@ export function UploadSettingsDialog({
     onOpenChannel: () => void;
     onLogout: () => void;
     onRefreshPlaylists: () => void;
+    onCreatePlaylist: () => Promise<Playlist | null>;
     sample: UploadRow | undefined;
 }) {
     const [form] = Form.useForm<UploadSettings>();
     const titleTemplate = Form.useWatch('titleTemplate', form);
     const [loading, setLoading] = useState(true);
     const [thumbnail, setThumbnail] = useState('');
+    const [eventPlaylistName, setEventPlaylistName] = useState('');
+    const [creating, setCreating] = useState(false);
 
     useEffect(() => {
         if (!open || !window.electron) return undefined;
@@ -345,6 +352,7 @@ export function UploadSettingsDialog({
             (s: UploadSettings) => {
                 form.setFieldsValue(s);
                 setThumbnail(s.thumbnailPath ?? '');
+                setEventPlaylistName(s.eventPlaylistName ?? '');
                 setLoading(false);
             }
         );
@@ -365,6 +373,15 @@ export function UploadSettingsDialog({
     const pickThumbnail = useCallback(() => {
         window.electron?.ipcRenderer.sendMessage('upload:pickThumbnail', []);
     }, []);
+
+    const createPlaylist = useCallback(async () => {
+        setCreating(true);
+        const pl = await onCreatePlaylist();
+        setCreating(false);
+        if (pl) {
+            form.setFieldsValue({ playlistId: pl.id });
+        }
+    }, [form, onCreatePlaylist]);
 
     const save = useCallback(async () => {
         const values = await form.validateFields();
@@ -414,6 +431,19 @@ export function UploadSettingsDialog({
                     <Col span={12}>
                         <Form.Item label="Playlist">
                             <Space.Compact style={{ width: '100%' }}>
+                                <Tooltip
+                                    title={`Create playlist (${eventPlaylistName})`}
+                                >
+                                    <Button
+                                        icon={<PlusOutlined />}
+                                        onClick={createPlaylist}
+                                        loading={creating}
+                                        disabled={
+                                            !signIn.signedIn ||
+                                            !eventPlaylistName
+                                        }
+                                    />
+                                </Tooltip>
                                 <Form.Item name="playlistId" noStyle>
                                     <Select
                                         allowClear
@@ -504,7 +534,9 @@ export function UploadSettingsDialog({
                                 <Space size={4}>
                                     Description template
                                     <Tooltip
-                                        title={<TemplateVarsHelp title={false} />}
+                                        title={
+                                            <TemplateVarsHelp title={false} />
+                                        }
                                         overlayStyle={{ maxWidth: 360 }}
                                     >
                                         <QuestionCircleOutlined />
@@ -768,6 +800,30 @@ export default function UploadPage() {
         loadPlaylists(false);
     }, [settingsOpen, running, loadPlaylists]);
 
+    // Make (or reuse, by title) the event's playlist. Creating drives the
+    // browser, so it gets the same long timeout as a playlist refresh.
+    const createPlaylist = useCallback(async (): Promise<Playlist | null> => {
+        try {
+            const res = await fetch(
+                `${UPLOAD_BASE}/api/yt/playlists/create?event_key=${encodeURIComponent(
+                    eventKey
+                )}`,
+                { method: 'POST', signal: AbortSignal.timeout(90000) }
+            );
+            const body = await res.json();
+            if (!res.ok || !body?.id) {
+                message.error(`Playlist: ${body?.error ?? res.status}`);
+                return null;
+            }
+            loadPlaylists(false);
+            message.success(`Playlist: ${body.title}`);
+            return body as Playlist;
+        } catch {
+            message.error('Playlist not created');
+            return null;
+        }
+    }, [eventKey, loadPlaylists]);
+
     const signInYouTube = useCallback(() => {
         setSigningIn(true);
         // The button only guards against a double-click; the uploader itself
@@ -908,6 +964,7 @@ export default function UploadPage() {
                 onOpenChannel={openChannel}
                 onLogout={logoutYouTube}
                 onRefreshPlaylists={() => loadPlaylists(true)}
+                onCreatePlaylist={createPlaylist}
                 sample={rows.find((r) => r.meta?.match_number)}
             />
         </>

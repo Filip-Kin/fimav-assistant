@@ -186,9 +186,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // the RTMP stream key and configure live-captions over its tRPC API
     // (httpBatchLink, no transformer → body is {"0": <input>}).
     async function pushYouTubeCaptions(streams: any[]) {
-        const yt = streams.find((s) =>
-            /youtube/i.test(s?.rtmpUrl ?? '')
-        );
+        const yt = streams.find((s) => /youtube/i.test(s?.rtmpUrl ?? ''));
         const key = yt?.rtmpKey || streamKeyFromUrl(yt?.rtmpUrl ?? '');
         if (!key) return;
         const url = `http://upload.youtube.com/closedcaption?cid=${key}`;
@@ -319,7 +317,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             reachable = false;
         }
 
-        const {currentEvent} = AutoAV.Instance.getStatus();
+        const { currentEvent } = AutoAV.Instance.getStatus();
         const keys = store.get('vmixStreamKeys');
         // Only count keys as "set for this event" if the recorded event matches
         // the one running now (by code when available, else name).
@@ -543,10 +541,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // The Auto AV tab requests the full current state on mount
     ipcMain.on('autoav:getState', (event) => {
         event.reply('autoav:status', lastAutoAvStatus);
-        event.reply(
-            'autoav:matches',
-            listMatches(lastAutoAvStatus.saveFolder)
-        );
+        event.reply('autoav:matches', listMatches(lastAutoAvStatus.saveFolder));
     });
 
     // Manually cut the dead time out of a recorded match (the Cut button).
@@ -658,14 +653,48 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // Upload settings: persisted in electron-store and pushed to the uploader as
     // its event config (POST /api/upload/config). The tba_secret only ever
     // leaves the main process, straight to the loopback uploader.
-    const uploadSettings = () => store.get('upload');
+    //
+    // The playlist is the exception: it belongs to one event, so it lives only
+    // in the uploader's per-event config and is read back from there. A global
+    // copy here would hand last week's playlist to this week's event on the
+    // next Save. eventPlaylistName is the name the uploader gives the event's
+    // own playlist (the + button's tooltip); it is not a stored setting.
+    const uploadSettings = async () => {
+        const settings = {
+            ...store.get('upload'),
+            playlistId: '',
+            playlistName: '',
+            eventPlaylistName: '',
+        };
+        const eventKey = AutoAV.Instance.getStatus().currentEvent?.code ?? '';
+        if (!eventKey) return settings;
+        try {
+            const res = await fetch(
+                `http://localhost:8807/api/upload/state?event_key=${encodeURIComponent(
+                    eventKey
+                )}`,
+                { signal: AbortSignal.timeout(3000) }
+            );
+            const st = await res.json();
+            settings.playlistId = st?.config?.playlist_id ?? '';
+            settings.playlistName = st?.config?.playlist_name ?? '';
+            settings.eventPlaylistName = st?.event_playlist_name ?? '';
+        } catch (e) {
+            log.warn('Could not read the event playlist from the uploader', e);
+        }
+        return settings;
+    };
 
-    ipcMain.on('upload:getSettings', (event) => {
-        event.reply('upload:settings', uploadSettings());
+    ipcMain.on('upload:getSettings', async (event) => {
+        event.reply('upload:settings', await uploadSettings());
     });
 
     ipcMain.on('upload:saveSettings', async (event, [settings]) => {
-        store.set('upload', settings);
+        store.set('upload', {
+            ...settings,
+            playlistId: '',
+            playlistName: '',
+        });
         // Push to the uploader so a save takes effect without a restart. The
         // uploader keys config by event; use the event AutoAV is filing into.
         const { currentEvent } = AutoAV.Instance.getStatus();
@@ -698,7 +727,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         } catch (e) {
             log.warn('Could not push upload config to uploader', e);
         }
-        event.reply('upload:settings', uploadSettings());
+        event.reply('upload:settings', await uploadSettings());
     });
 
     // Native image picker for the thumbnail field (same pattern as the Auto AV

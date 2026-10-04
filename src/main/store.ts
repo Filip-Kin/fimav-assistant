@@ -54,7 +54,8 @@ export type AppConfig = {
         tbaSecret: string;
         // Post the YouTube URL to TBA automatically after each upload
         autoSubmitTba: boolean;
-        // Target YouTube playlist (id is stored; name is display + fallback)
+        // Unused: the playlist is per event and lives in the uploader's event
+        // config (see upload:getSettings). Kept blank for older installs.
         playlistId: string;
         playlistName: string;
         // Title / description templates the uploader fills per match
@@ -259,9 +260,7 @@ export function createStore(): Store<AppConfig> {
             // hard-excludes practice/test now).
             '2026.3.3': (store) => {
                 const existing =
-                    (store.get('upload') as Partial<
-                        AppConfig['upload']
-                    >) ?? {};
+                    (store.get('upload') as Partial<AppConfig['upload']>) ?? {};
                 store.set('upload', {
                     tbaAuthId: existing.tbaAuthId ?? '',
                     tbaSecret: existing.tbaSecret ?? '',
