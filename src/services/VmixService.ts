@@ -272,7 +272,10 @@ export default class VmixService {
 
     async AddBrowserInput(url: string): Promise<void> {
         await fetch(
-            `${this.settings.baseUrl}?Function=AddInput&Value=Browser|${url}`,
+            // Encoded: an "&" in the page's own query would end vMix's Value.
+            `${
+                this.settings.baseUrl
+            }?Function=AddInput&Value=${encodeURIComponent(`Browser|${url}`)}`,
             {
                 headers: this.createHeaders(),
             }
@@ -337,8 +340,7 @@ export default class VmixService {
 
     // The audience display browser input: the FMS display or our custom one
     // at FRC events ("FMS", the name the custom display and FIM's Companion
-    // profiles use), FTC Live's display at FTC events ("Scoring", the name
-    // FIM's FTC vMix projects use).
+    // profiles use), FTC Live's display at FTC events ("Audience Display").
     async AddAudienceDisplayInput(url: string, name: string): Promise<void> {
         const key = await this.addBrowserInputNamed(url, '', name);
         if (!key) throw new Error(`Could not find the new ${name} input`);

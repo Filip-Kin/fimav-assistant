@@ -314,7 +314,7 @@ export default function VmixPage() {
 
     const applyComposite = useCallback(() => {
         if (!cameraKey || !fmsKey) {
-            message.error('Pick both the FMS input and the camera');
+            message.error('Display and camera required');
             return;
         }
         window.electron?.ipcRenderer.sendMessage('vmix:applyComposite', [
@@ -518,19 +518,17 @@ export default function VmixPage() {
                         onClick={() => send('vmix:addAudienceDisplayInput')}
                     >
                         {program === 'ftc'
-                            ? 'Add Scoring input'
+                            ? 'Add Audience Display input'
                             : 'Add FMS input'}
                     </Button>
-                    {/* The composite fits the FRC display's camera cut-out. */}
-                    {program === 'frc' && (
-                        <Button
-                            icon={<VideoCameraOutlined />}
-                            disabled={!reachable}
-                            onClick={() => setCompositeOpen(true)}
-                        >
-                            Add Alliance Selection Composite
-                        </Button>
-                    )}
+                    {/* Sized to the FMS or FTC Live display's camera box. */}
+                    <Button
+                        icon={<VideoCameraOutlined />}
+                        disabled={!reachable}
+                        onClick={() => setCompositeOpen(true)}
+                    >
+                        Add Alliance Selection Composite
+                    </Button>
                 </Space>
 
                 <Modal
@@ -546,18 +544,15 @@ export default function VmixPage() {
                         size={12}
                         style={{ width: '100%' }}
                     >
-                        <Text type="secondary">
-                            Creates an &quot;Alliance Selection Composite&quot;
-                            input: a blank base with your FMS/AD input as layer
-                            1 and the camera on top as layer 2, sized to the
-                            official AD camera box. Your existing inputs are
-                            referenced, not duplicated.
-                        </Text>
                         <div>
-                            <Text>FMS / audience display input</Text>
+                            <Text>
+                                {program === 'ftc'
+                                    ? 'Audience Display input'
+                                    : 'FMS / audience display input'}
+                            </Text>
                             <Select
                                 style={{ width: '100%' }}
-                                placeholder="Select FMS/AD input"
+                                placeholder="Display"
                                 value={fmsKey}
                                 onChange={setFmsKey}
                                 options={inputs.map((i) => ({
@@ -570,7 +565,7 @@ export default function VmixPage() {
                             <Text>Main camera input</Text>
                             <Select
                                 style={{ width: '100%' }}
-                                placeholder="Select camera"
+                                placeholder="Camera"
                                 value={cameraKey}
                                 onChange={setCameraKey}
                                 options={inputs.map((i) => ({

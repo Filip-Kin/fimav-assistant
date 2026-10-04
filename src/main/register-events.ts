@@ -457,9 +457,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             if (!address || !eventCode) {
                 throw new Error('No FTC scorekeeper event');
             }
-            // FTC Live's audience display as an overlay, with the options FIM
-            // ran at Detroit spring 2026 (transparent background, score bar
-            // at the bottom, all fields).
+            // FTC Live's audience display as an overlay: transparent
+            // background, score bar at the bottom, all fields, hybrid
+            // alliance selection (the list over a camera).
             const options = new URLSearchParams({
                 type: 'audience',
                 bindToField: 'all',
@@ -471,7 +471,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
                 fieldStyleTimer: 'false',
                 overlay: 'true',
                 overlayColor: 'transparent',
-                allianceSelectionStyle: 'classic',
+                allianceSelectionStyle: 'hybrid',
                 awardsStyle: 'overlay',
                 dualDivisionRankingStyle: 'sideBySide',
                 rankingsFontSize: 'larger',
@@ -481,7 +481,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             });
             return {
                 url: `http://${address}/event/${eventCode}/display/?${options}`,
-                name: 'Scoring',
+                name: 'Audience Display',
             };
         }
         const customAd = AutoAV.Instance.runsCustomAd();
@@ -525,22 +525,32 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         event.reply('vmix:composite', store.get('vmixComposite'));
     });
 
+    // FTC Live's hybrid alliance selection camera box, measured on FTC Live
+    // 8.0 at 1920x1080 (X119 Y357 W912 H513): zoom = W/1920,
+    // panX = (centerX-960)/960, panY = (540-centerY)/540.
+    const FTC_COMPOSITE = { zoom: 0.475, panX: -0.401, panY: -0.1361 };
+
     ipcMain.on('vmix:applyComposite', async (event, [cfg]) => {
         try {
+            const ftc = AutoAV.Instance.isFtc();
+            const geo = ftc ? FTC_COMPOSITE : cfg;
             await VmixService.Instance.CreateAllianceComposite(
                 cfg.fmsKey,
                 cfg.cameraKey,
-                cfg.zoom,
-                cfg.panX,
-                cfg.panY
+                geo.zoom,
+                geo.panX,
+                geo.panY
             );
-            // Persist the geometry (not the input keys, which vary per session).
-            store.set('vmixComposite', {
-                layer: cfg.layer,
-                zoom: cfg.zoom,
-                panX: cfg.panX,
-                panY: cfg.panY,
-            });
+            // Persist the FRC geometry (not the input keys, which vary per
+            // session). FTC's is fixed.
+            if (!ftc) {
+                store.set('vmixComposite', {
+                    layer: cfg.layer,
+                    zoom: cfg.zoom,
+                    panX: cfg.panX,
+                    panY: cfg.panY,
+                });
+            }
             event.reply('vmix:action', {
                 ok: true,
                 action: 'applyComposite',
