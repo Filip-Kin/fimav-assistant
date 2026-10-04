@@ -29,6 +29,9 @@ const FMS_URL = 'http://10.0.100.5';
 // display alike.
 export const COMPANION_URL = 'http://127.0.0.1:8000';
 
+// The custom audience display is run by AudienceDisplayAddon on this machine.
+export const CUSTOM_AD_URL = 'http://127.0.0.1:3001';
+
 // #region Companion read
 
 type Opt = { value?: unknown; isExpression?: boolean } | unknown;

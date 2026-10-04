@@ -19,6 +19,7 @@ import Event from '../models/Event';
 import AutoAV from './addons/autoav';
 import LiveCaptions from './addons/live-captions';
 import YoutubeUploaderAddon from './addons/upload-helper';
+import AudienceDisplayAddon from './addons/audience-display';
 import getVmixBandwidth, { streamKeyFromUrl } from './vmixBandwidth';
 import { AutoAVStatus } from '../models/AutoAVStatus';
 import { MatchRecord } from '../models/MatchRecord';
@@ -29,6 +30,7 @@ import startStatusApi from './api/server';
 import {
     clearCompanionButton,
     COMPANION_URL,
+    CUSTOM_AD_URL,
     readCompanionLayout,
     readCustomAd,
     readFmsAutomation,
@@ -632,10 +634,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // #region Bitfocus tab
 
     const bitfocusSettings = () =>
-        store.get('bitfocus', {
-            customAdUrl: '',
-        });
-    const trimUrl = (u: string) => (u ?? '').trim().replace(/\/+$/, '');
+        store.get('bitfocus', { triggerSource: 'fms' as const });
 
     ipcMain.on('bitfocus:getSettings', (event) => {
         event.reply('bitfocus:settings', bitfocusSettings());
@@ -643,7 +642,8 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     ipcMain.on('bitfocus:saveSettings', (event, [settings]) => {
         store.set('bitfocus', {
-            customAdUrl: trimUrl(settings?.customAdUrl),
+            triggerSource:
+                settings?.triggerSource === 'customAd' ? 'customAd' : 'fms',
         });
         event.reply('bitfocus:settings', bitfocusSettings());
     });
@@ -701,16 +701,12 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     );
 
     ipcMain.on('bitfocus:getCustomAd', (event) =>
-        bitfocusReply(event, 'customAd', async () => {
-            const url = bitfocusSettings().customAdUrl;
-            if (!url) return null;
-            return readCustomAd(url);
-        })
+        bitfocusReply(event, 'customAd', () => readCustomAd(CUSTOM_AD_URL))
     );
 
     ipcMain.on('bitfocus:saveCustomAd', (event, [config]) =>
         bitfocusReply(event, 'customAd', () =>
-            saveCustomAd(bitfocusSettings().customAdUrl, config)
+            saveCustomAd(CUSTOM_AD_URL, config)
         )
     );
 
@@ -737,21 +733,81 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         eventKey: AutoAV.Instance.getStatus().currentEvent?.code ?? '',
     });
 
-    // The uploader follows the season: an event that turns out to be in-season
-    // (official) stops it, and a flip to off-season starts it. At boot the mode
-    // is the stored fallback until FMS reports the event, so the flip is what
-    // starts it for an off-season event.
-    let uploaderMode = AutoAV.Instance.getStatus().fileNameMode;
+    // The off-season addons (YouTube uploader, custom audience display)
+    // follow the season: an event that turns out to be in-season (official)
+    // stops them, and a flip to off-season starts them. At boot the mode is
+    // the stored fallback until FMS reports the event, so the flip is what
+    // starts them for an off-season event.
+    let seasonMode = AutoAV.Instance.getStatus().fileNameMode;
     AutoAV.Instance.on('status', (s: AutoAVStatus) => {
-        if (s.fileNameMode === uploaderMode) return;
-        uploaderMode = s.fileNameMode;
-        const uploader = YoutubeUploaderAddon.Instance;
-        const change =
-            s.fileNameMode === 'in-season' ? uploader.stop() : uploader.start();
-        change.catch((e) =>
-            log.error('YouTube uploader season change failed', e)
+        if (s.fileNameMode === seasonMode) return;
+        seasonMode = s.fileNameMode;
+        [YoutubeUploaderAddon.Instance, AudienceDisplayAddon.Instance].forEach(
+            (addon) => {
+                const change =
+                    s.fileNameMode === 'in-season'
+                        ? addon.stop()
+                        : addon.start();
+                change.catch((e) => log.error('Addon season change failed', e));
+            }
         );
     });
+
+    // #region Offseason AD tab (custom audience display)
+
+    const audienceDisplayStatus = () => ({
+        running: AudienceDisplayAddon.Instance.isRunning(),
+        version: AudienceDisplayAddon.Instance.getVersion(),
+    });
+
+    ipcMain.on('audienceDisplay:getStatus', (event) => {
+        event.reply('audienceDisplay:status', audienceDisplayStatus());
+    });
+
+    ipcMain.on('audienceDisplay:restart', async (event) => {
+        try {
+            await AudienceDisplayAddon.Instance.stop();
+            await AudienceDisplayAddon.Instance.start();
+        } catch (e) {
+            log.error('Audience display restart failed', e);
+        }
+        event.reply('audienceDisplay:status', audienceDisplayStatus());
+    });
+
+    ipcMain.on('audienceDisplay:stop', async (event) => {
+        try {
+            await AudienceDisplayAddon.Instance.stop();
+        } catch (e) {
+            log.error('Audience display stop failed', e);
+        }
+        event.reply('audienceDisplay:status', audienceDisplayStatus());
+    });
+
+    ipcMain.on('audienceDisplay:checkUpdate', async (event) => {
+        event.reply(
+            'audienceDisplay:updateInfo',
+            await AudienceDisplayAddon.Instance.checkForUpdate()
+        );
+    });
+
+    // Confirmed update: stop, start again (start() downloads the newest),
+    // then reload the vMix FMS browser input so it serves the new build.
+    ipcMain.on('audienceDisplay:update', async (event) => {
+        try {
+            await AudienceDisplayAddon.Instance.stop();
+            await AudienceDisplayAddon.Instance.start();
+            try {
+                await VmixService.Instance.ReloadBrowserInput('FMS');
+            } catch (e) {
+                log.warn('Could not reload vMix FMS input', e);
+            }
+        } catch (e) {
+            log.error('Audience display update failed', e);
+        }
+        event.reply('audienceDisplay:status', audienceDisplayStatus());
+    });
+
+    // #endregion Offseason AD tab
 
     ipcMain.on('upload:getStatus', (event) => {
         event.reply('upload:status', uploadStatus());

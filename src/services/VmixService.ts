@@ -183,9 +183,9 @@ export default class VmixService {
         // vMix needs the pipe + hex colour: "Colour|#RRGGBB". Bare "Colour" is
         // rejected and silently adds nothing.
         await fetch(
-            `${this.settings.baseUrl}?Function=AddInput&Value=${encodeURIComponent(
-                'Colour|#000000'
-            )}`,
+            `${
+                this.settings.baseUrl
+            }?Function=AddInput&Value=${encodeURIComponent('Colour|#000000')}`,
             { headers: this.createHeaders() }
         );
     }
@@ -263,9 +263,9 @@ export default class VmixService {
     // updated so the embedded page picks up the new build.
     async ReloadBrowserInput(name: string): Promise<void> {
         await fetch(
-            `${this.settings.baseUrl}?Function=BrowserReload&Input=${encodeURIComponent(
-                name
-            )}`,
+            `${
+                this.settings.baseUrl
+            }?Function=BrowserReload&Input=${encodeURIComponent(name)}`,
             { headers: this.createHeaders() }
         );
     }
@@ -316,8 +316,7 @@ export default class VmixService {
         const list = Array.isArray(inputs) ? inputs : [inputs].filter(Boolean);
         const match = list.find(
             (input: any) =>
-                input?.type === 'Browser' &&
-                input?.title === `Browser ${host}`
+                input?.type === 'Browser' && input?.title === `Browser ${host}`
         );
         if (!match) return null;
         await this.RenameInput(match.key, name);
@@ -337,10 +336,11 @@ export default class VmixService {
         const key = await this.addBrowserInputNamed(
             'http://10.0.100.5/AudienceDisplay',
             '10.0.100.5',
-            'Audience Display'
+            // "FMS": the name the custom audience display and FIM's Companion
+            // profiles use for this input too.
+            'FMS'
         );
-        if (!key)
-            throw new Error('Could not find the new Audience Display input');
+        if (!key) throw new Error('Could not find the new FMS input');
         await this.SetInputAudioAlwaysOn(key);
     }
 

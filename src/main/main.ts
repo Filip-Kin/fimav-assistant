@@ -85,7 +85,8 @@ const createWindow = async () => {
 
     mainWindow.loadURL(resolveHtmlPath('index.html'));
 
-    // The Live Captions settings page (served by live-captions on :3000) sends
+    // The Live Captions settings page (served by live-captions on :3000) and
+    // the custom audience display page (:3001) send
     // X-Frame-Options / a framing CSP that blocks it from loading in the tab's
     // iframe (white screen). Strip those headers for that origin only so it can
     // be embedded.
@@ -94,6 +95,8 @@ const createWindow = async () => {
             urls: [
                 'http://localhost:3000/*',
                 'http://127.0.0.1:3000/*',
+                'http://localhost:3001/*',
+                'http://127.0.0.1:3001/*',
             ],
         },
         (details, callback) => {

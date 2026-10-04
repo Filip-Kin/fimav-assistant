@@ -9,6 +9,7 @@ import AutoAV from './pages/autoav';
 import LiveCaptions from './pages/livecaptions';
 import Upload from './pages/upload';
 import Bitfocus from './pages/bitfocus';
+import AudienceDisplay from './pages/audiencedisplay';
 import Vmix from './pages/vmix';
 
 // Always use the hash router (both dev and prod load from a file/hash URL)
@@ -22,6 +23,7 @@ function AppRoutes() {
             <Route path="/autoav" element={<AutoAV />} />
             <Route path="/upload" element={<Upload />} />
             <Route path="/bitfocus" element={<Bitfocus />} />
+            <Route path="/audiencedisplay" element={<AudienceDisplay />} />
             <Route path="/vmix" element={<Vmix />} />
             <Route path="/livecaptions" element={<LiveCaptions />} />
 

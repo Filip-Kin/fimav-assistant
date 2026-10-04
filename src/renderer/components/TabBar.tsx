@@ -5,6 +5,7 @@ import {
     BellOutlined,
     AppstoreOutlined,
     CloudUploadOutlined,
+    DesktopOutlined,
     MessageOutlined,
     RobotOutlined,
     SettingOutlined,
@@ -53,6 +54,13 @@ const tabs: TabDef[] = [
         label: 'Bitfocus',
         icon: <AppstoreOutlined />,
         isActive: (p) => p.startsWith('/bitfocus'),
+    },
+    {
+        key: '/audiencedisplay',
+        label: 'Offseason AD',
+        icon: <DesktopOutlined />,
+        isActive: (p) => p.startsWith('/audiencedisplay'),
+        offSeasonOnly: true,
     },
     {
         key: '/upload',

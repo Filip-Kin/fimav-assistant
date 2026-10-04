@@ -5,6 +5,7 @@ export type AppConfig = {
     apiKey: unknown;
     liveCaptionsDownloadBase: string;
     youtubeUploaderDownloadBase: string;
+    audienceDisplayDownloadBase: string;
     runOnStartup: boolean;
     currentStep: number;
     stepsStartedAt: number;
@@ -45,10 +46,10 @@ export type AppConfig = {
         // producing a clean uploadable copy in a "Cut" subfolder.
         autoCut: boolean;
     };
-    // Bitfocus tab: where our custom audience display answers. (Companion is
-    // always on this machine.)
+    // Bitfocus tab: which audience display's triggers the tab edits. Both
+    // Companion and the custom display run on this machine.
     bitfocus: {
-        customAdUrl: string;
+        triggerSource: 'fms' | 'customAd';
     };
     // YouTube + TBA upload settings for the Upload tab. Persisted here and also
     // pushed to the youtube-tba-upload process via POST /api/upload/config.
@@ -112,6 +113,11 @@ export function createStore(): Store<AppConfig> {
                 type: 'string',
                 default:
                     'https://github.com/Filip-Kin/youtube-tba-upload/releases',
+            },
+            audienceDisplayDownloadBase: {
+                type: 'string',
+                default:
+                    'https://github.com/Filip-Kin/audience-display/releases',
             },
             runOnStartup: {
                 type: 'boolean',
@@ -190,10 +196,10 @@ export function createStore(): Store<AppConfig> {
             bitfocus: {
                 type: 'object',
                 properties: {
-                    customAdUrl: { type: 'string', default: '' },
+                    triggerSource: { type: 'string', default: 'fms' },
                 },
                 default: {
-                    customAdUrl: '',
+                    triggerSource: 'fms',
                 },
             },
             upload: {
