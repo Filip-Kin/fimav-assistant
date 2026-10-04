@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Badge } from 'antd';
 import {
     BellOutlined,
+    AppstoreOutlined,
     CloudUploadOutlined,
     MessageOutlined,
     RobotOutlined,
@@ -46,6 +47,12 @@ const tabs: TabDef[] = [
         label: 'Auto AV',
         icon: <RobotOutlined />,
         isActive: (p) => p.startsWith('/autoav'),
+    },
+    {
+        key: '/bitfocus',
+        label: 'Bitfocus',
+        icon: <AppstoreOutlined />,
+        isActive: (p) => p.startsWith('/bitfocus'),
     },
     {
         key: '/upload',

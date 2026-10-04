@@ -45,6 +45,11 @@ export type AppConfig = {
         // producing a clean uploadable copy in a "Cut" subfolder.
         autoCut: boolean;
     };
+    // Bitfocus tab: where Companion and our custom audience display answer.
+    bitfocus: {
+        companionUrl: string;
+        customAdUrl: string;
+    };
     // YouTube + TBA upload settings for the Upload tab. Persisted here and also
     // pushed to the youtube-tba-upload process via POST /api/upload/config.
     // Field shapes mirror the uploader's eventConfig (INTEGRATION.md §4).
@@ -180,6 +185,20 @@ export function createStore(): Store<AppConfig> {
                         type: 'boolean',
                         default: false,
                     },
+                },
+            },
+            bitfocus: {
+                type: 'object',
+                properties: {
+                    companionUrl: {
+                        type: 'string',
+                        default: 'http://127.0.0.1:8000',
+                    },
+                    customAdUrl: { type: 'string', default: '' },
+                },
+                default: {
+                    companionUrl: 'http://127.0.0.1:8000',
+                    customAdUrl: '',
                 },
             },
             upload: {

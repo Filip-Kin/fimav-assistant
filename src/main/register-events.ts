@@ -1,4 +1,10 @@
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import {
+    BrowserWindow,
+    dialog,
+    ipcMain,
+    IpcMainEvent,
+    shell,
+} from 'electron';
 import fs from 'fs';
 import log from 'electron-log';
 import HWPingResponse, { IpConfigState } from 'models/HWPingResponse';
@@ -26,6 +32,15 @@ import { listMatches } from './recordings/matchStore';
 import { StaticIpInfo } from '../models/HWCheckResponse';
 import { getCurrentEvent } from './util';
 import startStatusApi from './api/server';
+import {
+    clearCompanionButton,
+    readCompanionLayout,
+    readCustomAd,
+    readFmsAutomation,
+    saveCompanionButton,
+    saveCustomAd,
+    saveFmsAutomation,
+} from './bitfocus';
 
 // Use this file to register all events. For uniformity, all events should send their response as <event-name>-response
 
@@ -618,6 +633,108 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         }
         event.reply('liveCaptions:status', liveCaptionsStatus());
     });
+
+    // #region Bitfocus tab
+
+    const bitfocusSettings = () =>
+        store.get('bitfocus', {
+            companionUrl: 'http://127.0.0.1:8000',
+            customAdUrl: '',
+        });
+    const trimUrl = (u: string) => (u ?? '').trim().replace(/\/+$/, '');
+
+    ipcMain.on('bitfocus:getSettings', (event) => {
+        event.reply('bitfocus:settings', bitfocusSettings());
+    });
+
+    ipcMain.on('bitfocus:saveSettings', (event, [settings]) => {
+        store.set('bitfocus', {
+            companionUrl: trimUrl(settings?.companionUrl),
+            customAdUrl: trimUrl(settings?.customAdUrl),
+        });
+        event.reply('bitfocus:settings', bitfocusSettings());
+    });
+
+    // Every Bitfocus request answers on one channel with {op, ok, data|error},
+    // so the tab can show each failure next to the part it belongs to.
+    const bitfocusReply = async (
+        event: IpcMainEvent,
+        op: string,
+        run: () => Promise<unknown>
+    ) => {
+        try {
+            event.reply('bitfocus:result', { op, ok: true, data: await run() });
+        } catch (e: any) {
+            event.reply('bitfocus:result', {
+                op,
+                ok: false,
+                error: e?.message ?? String(e),
+            });
+        }
+    };
+
+    ipcMain.on('bitfocus:getLayout', (event) =>
+        bitfocusReply(event, 'layout', () =>
+            readCompanionLayout(bitfocusSettings().companionUrl)
+        )
+    );
+
+    ipcMain.on('bitfocus:saveButton', (event, [edit]) =>
+        bitfocusReply(event, 'saveButton', async () => {
+            const url = bitfocusSettings().companionUrl;
+            await saveCompanionButton(url, edit);
+            return readCompanionLayout(url);
+        })
+    );
+
+    ipcMain.on('bitfocus:clearButton', (event, [page, row, column]) =>
+        bitfocusReply(event, 'clearButton', async () => {
+            const url = bitfocusSettings().companionUrl;
+            await clearCompanionButton(url, page, row, column);
+            return readCompanionLayout(url);
+        })
+    );
+
+    ipcMain.on('bitfocus:getVmixInputs', (event) =>
+        bitfocusReply(event, 'vmixInputs', async () =>
+            (await VmixService.Instance.GetInputs()).map((i) => i.title)
+        )
+    );
+
+    ipcMain.on('bitfocus:getFms', (event) =>
+        bitfocusReply(event, 'fms', () => readFmsAutomation())
+    );
+
+    ipcMain.on('bitfocus:saveFms', (event, [automation]) =>
+        bitfocusReply(event, 'fms', () => saveFmsAutomation(automation))
+    );
+
+    ipcMain.on('bitfocus:getCustomAd', (event) =>
+        bitfocusReply(event, 'customAd', async () => {
+            const url = bitfocusSettings().customAdUrl;
+            if (!url) return null;
+            return readCustomAd(url);
+        })
+    );
+
+    ipcMain.on('bitfocus:saveCustomAd', (event, [config]) =>
+        bitfocusReply(event, 'customAd', () =>
+            saveCustomAd(bitfocusSettings().customAdUrl, config)
+        )
+    );
+
+    // The full Companion UI in its own window.
+    ipcMain.on('bitfocus:openCompanion', () => {
+        const win = new BrowserWindow({
+            width: 1400,
+            height: 900,
+            title: 'Companion',
+            autoHideMenuBar: true,
+        });
+        win.loadURL(bitfocusSettings().companionUrl);
+    });
+
+    // #endregion Bitfocus tab
 
     // #region Upload tab (youtube-tba-upload process)
 
