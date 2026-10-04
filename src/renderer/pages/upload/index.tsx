@@ -317,6 +317,7 @@ export function UploadSettingsDialog({
     onOpenChannel,
     onLogout,
     onRefreshPlaylists,
+    sample,
 }: {
     open: boolean;
     onClose: () => void;
@@ -328,8 +329,10 @@ export function UploadSettingsDialog({
     onOpenChannel: () => void;
     onLogout: () => void;
     onRefreshPlaylists: () => void;
+    sample: UploadRow | undefined;
 }) {
     const [form] = Form.useForm<UploadSettings>();
+    const titleTemplate = Form.useWatch('titleTemplate', form);
     const [loading, setLoading] = useState(true);
     const [thumbnail, setThumbnail] = useState('');
 
@@ -436,7 +439,35 @@ export function UploadSettingsDialog({
                         </Form.Item>
                     </Col>
                     <Col span={12}>
-                        <Form.Item label="Title template" name="titleTemplate">
+                        <Form.Item
+                            label={
+                                <Space size={4}>
+                                    Title template
+                                    <Tooltip
+                                        title={<TemplateVarsHelp title />}
+                                        overlayStyle={{ maxWidth: 360 }}
+                                    >
+                                        <QuestionCircleOutlined />
+                                    </Tooltip>
+                                </Space>
+                            }
+                            name="titleTemplate"
+                            extra={
+                                <Text
+                                    type="secondary"
+                                    className="file-name"
+                                    title={renderTitlePreview(
+                                        titleTemplate ?? '',
+                                        sample
+                                    )}
+                                >
+                                    {renderTitlePreview(
+                                        titleTemplate ?? '',
+                                        sample
+                                    ) || '\u00a0'}
+                                </Text>
+                            }
+                        >
                             <Input />
                         </Form.Item>
                     </Col>
@@ -473,7 +504,7 @@ export function UploadSettingsDialog({
                                 <Space size={4}>
                                     Description template
                                     <Tooltip
-                                        title={<TemplateVarsHelp />}
+                                        title={<TemplateVarsHelp title={false} />}
                                         overlayStyle={{ maxWidth: 360 }}
                                     >
                                         <QuestionCircleOutlined />
@@ -515,15 +546,73 @@ const TEMPLATE_VARS: [string, string][] = [
     ['{blue[0].name}', 'Blue team 1 name (0-2)'],
 ];
 
-function TemplateVarsHelp() {
+function TemplateVarsHelp({ title }: { title: boolean }) {
+    // {title} is the rendered title itself, so it has no meaning inside it.
+    const vars = title
+        ? TEMPLATE_VARS.filter(([token]) => token !== '{title}')
+        : TEMPLATE_VARS;
     return (
         <div>
-            {TEMPLATE_VARS.map(([token, desc]) => (
+            {vars.map(([token, desc]) => (
                 <div key={token}>
                     <code>{token}</code>: {desc}
                 </div>
             ))}
         </div>
+    );
+}
+
+// Sample match for the title preview when the folder has no videos yet.
+const PREVIEW_FALLBACK = {
+    prefix: '2026 Event',
+    level: 'Qualification',
+    number: 12,
+    play: 1,
+};
+
+// Renders a title template the way the uploader's renderTitle does (template.go),
+// against the first video in the table, or a stand-in match when there is
+// none. Unknown or empty variables render as nothing. Team numbers, team names
+// and scores are not in the upload rows, so they use stand-in values.
+function renderTitlePreview(tmpl: string, sample?: UploadRow): string {
+    const m = sample?.meta;
+    const prefix =
+        (
+            sample?.filename.match(
+                /^(.*?)\s*-?\s*(Qualification|Playoff|Final)\b/i
+            )?.[1] ?? ''
+        ).trim() || PREVIEW_FALLBACK.prefix;
+    const level = m?.match_level || PREVIEW_FALLBACK.level;
+    const number = m?.match_number || PREVIEW_FALLBACK.number;
+    const play = m?.play || PREVIEW_FALLBACK.play;
+    const year = /^\d{4} /.test(prefix) ? prefix.slice(0, 4) : '';
+    const vars: Record<string, string> = {
+        video_prefix: prefix,
+        event_name: prefix,
+        event_year: year,
+        match_level: level,
+        match_number: String(number),
+        match_label: m?.match_label || `${level} ${number}`,
+        play: String(play),
+        play_suffix: play > 1 ? ` Play ${play}` : '',
+        red_score: '112',
+        blue_score: '98',
+    };
+    const teams: Record<string, number[]> = {
+        red: [5577, 51, 1596],
+        blue: [5704, 201, 5152],
+    };
+    return tmpl.replace(
+        /\{([a-zA-Z_]+(?:\[\d+\]\.[a-zA-Z_]+)?)\}/g,
+        (_, name: string) => {
+            const arr = name.match(/^(red|blue)\[(\d)\]\.(number|name)$/);
+            if (arr) {
+                const n = teams[arr[1]]?.[Number(arr[2])];
+                if (n === undefined) return '';
+                return arr[3] === 'number' ? String(n) : `Team ${n}`;
+            }
+            return vars[name] ?? '';
+        }
     );
 }
 
@@ -575,13 +664,10 @@ export default function UploadPage() {
     useEffect(() => {
         if (!window.electron) return undefined;
         const { ipcRenderer } = window.electron;
-        const off = ipcRenderer.on(
-            'upload:status',
-            (s: UploadAddonStatus) => {
-                setStatus(s);
-                setBusy(false);
-            }
-        );
+        const off = ipcRenderer.on('upload:status', (s: UploadAddonStatus) => {
+            setStatus(s);
+            setBusy(false);
+        });
         const poll = () => ipcRenderer.sendMessage('upload:getStatus', []);
         poll();
         const timer = setInterval(poll, 3000);
@@ -780,8 +866,7 @@ export default function UploadPage() {
         [post]
     );
     const onSubmitTba = useCallback(
-        (filename: string) =>
-            post('/api/yt/submit-tba', filename, 'Submitted'),
+        (filename: string) => post('/api/yt/submit-tba', filename, 'Submitted'),
         [post]
     );
 
@@ -823,6 +908,7 @@ export default function UploadPage() {
                 onOpenChannel={openChannel}
                 onLogout={logoutYouTube}
                 onRefreshPlaylists={() => loadPlaylists(true)}
+                sample={rows.find((r) => r.meta?.match_number)}
             />
         </>
     );
