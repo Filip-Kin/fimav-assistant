@@ -80,6 +80,33 @@ const commandsAt = (
         (c) => c.Page === page && c.Row === row && c.Column === column
     );
 
+// Action picker options, one section per Companion connection.
+interface ActionGroup {
+    label: string;
+    options: { value: string; label: string }[];
+}
+
+function actionGroups(
+    defs: ActionDef[],
+    layout: CompanionLayout | null
+): ActionGroup[] {
+    const groups: ActionGroup[] = [];
+    defs.forEach((d) => {
+        const label =
+            d.module === 'internal'
+                ? 'Companion'
+                : layout?.connections.find((c) => c.module === d.module)
+                      ?.label ?? d.module;
+        let g = groups.find((x) => x.label === label);
+        if (!g) {
+            g = { label, options: [] };
+            groups.push(g);
+        }
+        g.options.push({ value: d.key, label: d.label });
+    });
+    return groups;
+}
+
 // #region Button editor
 
 interface EditAction {
@@ -89,13 +116,13 @@ interface EditAction {
 
 function ActionRow({
     action,
-    defs,
+    groups,
     vmixInputs,
     onChange,
     onRemove,
 }: {
     action: EditAction;
-    defs: ActionDef[];
+    groups: ActionGroup[];
     vmixInputs: string[];
     onChange: (_a: EditAction) => void;
     onRemove: () => void;
@@ -106,9 +133,12 @@ function ActionRow({
     return (
         <div className="bf-action">
             <Select
-                style={{ width: 150, flex: 'none' }}
+                style={{ width: 170, flex: 'none' }}
+                showSearch
+                optionFilterProp="label"
+                popupMatchSelectWidth={220}
                 value={action.key}
-                options={defs.map((d) => ({ value: d.key, label: d.label }))}
+                options={groups}
                 onChange={(key) => onChange({ key, options: {} })}
             />
             {def?.fields.map((f) => {
@@ -266,6 +296,8 @@ function ButtonEditor({
         [layout]
     );
 
+    const groups = useMemo(() => actionGroups(defs, layout), [defs, layout]);
+
     const editable = isEditable(button);
     const title = `${page?.name ?? ''} ${
         cell ? `${cell.row}/${cell.column}` : ''
@@ -335,7 +367,7 @@ function ButtonEditor({
                                     // eslint-disable-next-line react/no-array-index-key
                                     key={i}
                                     action={a}
-                                    defs={defs}
+                                    groups={groups}
                                     vmixInputs={vmixInputs}
                                     onChange={(next) =>
                                         setActions(
