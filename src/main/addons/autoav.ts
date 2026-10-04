@@ -364,8 +364,11 @@ export default class AutoAV {
                 ...(this.currentEvent ?? {}),
                 code: s.eventCode,
                 name: s.eventName || s.eventCode,
-                // Scrimmages and off-season events are not official.
-                isOfficial: !/OFF|SCRIM/i.test(s.eventType ?? ''),
+                // Off-season events report "Non-Advancement" (FTC Live 8.0);
+                // scrimmages and off-season types are not official either.
+                isOfficial: !/NON-?ADVANCEMENT|OFF|SCRIM/i.test(
+                    s.eventType ?? ''
+                ),
             } as Event;
         }
         this.emitStatus();
