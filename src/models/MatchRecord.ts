@@ -46,6 +46,10 @@ export interface MatchRecord {
     // v2 processing (reserved, not populated this session)
     processing?: MatchProcessing;
 
+    // FTC matches: FTC Live's short name and field. Their video is made by the
+    // FTC recorder (src/main/ftc/recorder.ts), not cut from one recording.
+    ftc?: { shortName: string; field: number };
+
     // Owned by the youtube-tba-upload process, never written by FIM-AV. Present
     // so the match store preserves it verbatim through a read-modify-write of the
     // shared manifest instead of dropping it. See matchStore's locked writes.

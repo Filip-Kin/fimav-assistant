@@ -10,8 +10,9 @@ import {
     EquipmentLogDetails,
     EquipmentLogType,
 } from '../../models/EquipmentLog';
-import FMSMatchStatus, { TournamentLevel } from '../../models/FMSMatchState';
+import FMSMatchStatus from '../../models/FMSMatchState';
 import FtcScorekeeper from '../ftc/scorekeeper';
+import FtcRecorder from '../ftc/recorder';
 import { FtcScorekeeperStatus, FtcUpdate } from '../../models/Ftc';
 import attemptRename, {
     FileNameMode,
@@ -169,7 +170,9 @@ export default class AutoAV {
                         matchData
                     );
 
-                    this.logRecording(`Renamed last recording to ${filename}`);
+                    this.logRecording(
+                        `Renamed last recording to ${path.basename(filename)}`
+                    );
 
                     // Persist the finished record into the manifest that lives
                     // in the event folder the file was filed into.
@@ -305,50 +308,24 @@ export default class AutoAV {
 
     // #region FTC
 
-    private ftcStopTimer: ReturnType<typeof setTimeout> | null = null;
-
     private ftcListening = false;
 
-    // FTC Live drives recording the same way FMS does for FRC: start on
-    // MATCH_START, stop on an abort. It sends no match-end event, so a
-    // recording stops at the configured match length plus a few seconds.
-    private async onFtcUpdate(u: FtcUpdate) {
-        if (u.type === 'MATCH_START') {
-            if (this.ftcStopTimer) clearTimeout(this.ftcStopTimer);
-            this.ftcStopTimer = null;
-            // One vMix recording at a time: a match starting on the other
-            // field while one is still recording ends the old one first.
-            if (this.weAreRecording) await this.stopRecording();
-            // Practice and qualification short names start P / Q; anything
-            // else is a playoff match.
-            let level: TournamentLevel = 'Playoff';
-            if (/^Q/i.test(u.shortName)) level = 'Qualification';
-            else if (/^P(R)?[-\d]/i.test(u.shortName)) level = 'Practice';
-            this.startRecording({
-                MatchState: 'GameSpecificData',
-                Level: level,
-                MatchNumber: u.number,
-                PlayNumber: 1,
-                ShortName: u.shortName || undefined,
-            });
-            const store = getStore();
-            const seconds =
-                store.get('ftc.matchSeconds', 158) +
-                store.get('ftc.tailSeconds', 5);
-            this.willStopRecording = true;
-            this.ftcStopTimer = setTimeout(() => {
-                this.ftcStopTimer = null;
-                this.stopRecording();
-            }, seconds * 1000);
-        } else if (u.type === 'MATCH_ABORT' && this.weAreRecording) {
-            if (this.ftcStopTimer) clearTimeout(this.ftcStopTimer);
-            this.willStopRecording = true;
-            // Same as an FRC cancelled match: keep the aftermath for a bit.
-            this.ftcStopTimer = setTimeout(() => {
-                this.ftcStopTimer = null;
-                this.stopRecording();
-            }, 10000);
-        }
+    // FTC recording: match plus score reveal, cut from vMix raw files.
+    private ftcRecorder = new FtcRecorder({
+        event: () => this.currentEvent,
+        folder: () => this.status.saveFolder,
+        log: (m) => this.logRecording(m),
+        setRecording: (on) => {
+            this.status.recordingActive = on;
+            this.status.vmix.recording = on;
+            this.emitStatus();
+        },
+        record: (rec) => this.emitter.emit('match', rec),
+    });
+
+    private onFtcUpdate(u: FtcUpdate) {
+        if (!this.isFtc()) return;
+        this.ftcRecorder.onUpdate(u);
     }
 
     // A new FTC event fills in the event name like a new FMS event does, and
@@ -446,6 +423,10 @@ export default class AutoAV {
                 // Update
                 this.lastState = info;
 
+                // At FTC events FTC Live drives recording, even when an FMS
+                // is also on the network.
+                if (this.isFtc()) return;
+
                 // Start recording when GameSpecificData is released (match starts)
                 if (info.MatchState === 'GameSpecificData') {
                     this.startRecording(info);
@@ -478,7 +459,7 @@ export default class AutoAV {
             );
 
             // VideoSwitchOption
-            if (configKey === 'VideoSwitchOption') {
+            if (configKey === 'VideoSwitchOption' && !this.isFtc()) {
                 this.logFMS(
                     'Video switch option changed, fetching update!',
                     undefined,
@@ -1037,7 +1018,12 @@ export default class AutoAV {
     // the auto-cut path and the manual Cut button.
     public queueCut(folder: string, recordId: string): void {
         const rec = getMatch(folder, recordId);
-        if (!rec || !rec.filePath) return;
+        if (!rec) return;
+        if (rec.ftc) {
+            this.ftcRecorder.remake(folder, recordId);
+            return;
+        }
+        if (!rec.filePath) return;
         if (rec.hasCard) {
             this.logRecording(
                 `Not cutting ${rec.fileName} (card issued, keeping explanation)`,

@@ -32,7 +32,7 @@ function run(
 
 // Read a file's duration (seconds) by parsing ffmpeg's own banner, so we don't
 // depend on ffprobe being present next to ffmpeg6.exe.
-async function probeDuration(file: string): Promise<number | null> {
+export async function probeDuration(file: string): Promise<number | null> {
     const { stderr } = await run(ffmpegPath(), ['-i', file]);
     const m = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr);
     if (!m) return null;
@@ -119,6 +119,71 @@ export default async function cutMatchVideo(
         log.error('cutMatchVideo ffmpeg failed', stderr);
         throw new Error(
             `ffmpeg exited ${code}: ${stderr.split('\n').slice(-3).join(' ').trim()}`
+        );
+    }
+    if (!fs.existsSync(outPath)) {
+        throw new Error('ffmpeg reported success but produced no output file');
+    }
+}
+
+// Join pieces of one or more files into one video: each piece is
+// {file, from, seconds}, in order. Frame-accurate re-encode with the same
+// settings as cutMatchVideo. Used for FTC, where a match's play and its score
+// reveal can sit in different raw files.
+export async function assembleClips(
+    pieces: { file: string; from: number; seconds: number }[],
+    outPath: string
+): Promise<void> {
+    const inputs: string[] = [];
+    let fc = '';
+    pieces.forEach((p, i) => {
+        inputs.push(
+            '-ss',
+            p.from.toFixed(3),
+            '-t',
+            p.seconds.toFixed(3),
+            '-i',
+            p.file
+        );
+        fc += `[${i}:v]setpts=PTS-STARTPTS[v${i}];[${i}:a]asetpts=PTS-STARTPTS[a${i}];`;
+    });
+    fc += `${pieces.map((_, i) => `[v${i}][a${i}]`).join('')}concat=n=${
+        pieces.length
+    }:v=1:a=1[v][a]`;
+    const args = [
+        '-y',
+        '-v',
+        'error',
+        ...inputs,
+        '-filter_complex',
+        fc,
+        '-map',
+        '[v]',
+        '-map',
+        '[a]',
+        '-c:v',
+        'libx264',
+        '-crf',
+        '20',
+        '-preset',
+        'medium',
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '192k',
+        outPath,
+    ];
+    const { code, stderr } = await run(ffmpegPath(), args);
+    if (code !== 0) {
+        log.error('assembleClips ffmpeg failed', stderr);
+        throw new Error(
+            `ffmpeg exited ${code}: ${stderr
+                .split('\n')
+                .slice(-3)
+                .join(' ')
+                .trim()}`
         );
     }
     if (!fs.existsSync(outPath)) {

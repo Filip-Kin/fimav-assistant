@@ -615,8 +615,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     // Manually cut the dead time out of a recorded match (the Cut button).
     ipcMain.on('autoav:cutMatch', (_event, [folder, id]) => {
-        // Dead-time cutting is an FRC off-season feature.
-        if (!AutoAV.Instance.isFrcOffSeason()) return;
+        // Dead-time cutting: FTC always, FRC off-season only.
+        if (!AutoAV.Instance.isFtc() && !AutoAV.Instance.isFrcOffSeason())
+            return;
         if (typeof folder === 'string' && typeof id === 'string') {
             AutoAV.Instance.queueCut(folder, id);
         }
@@ -837,9 +838,13 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // is what starts them.
     // The uploader value carries the program: it is launched with
     // -program frc|ftc, so a program change restarts it.
+    // The folder is part of the value too: the uploader watches the folder it
+    // was launched with, so a new event folder is a restart.
     const wanted = () => ({
         uploader: AutoAV.Instance.runsUploader()
-            ? AutoAV.Instance.getStatus().program
+            ? `${AutoAV.Instance.getStatus().program}|${
+                  AutoAV.Instance.getStatus().saveFolder ?? ''
+              }`
             : false,
         display: AutoAV.Instance.runsCustomAd(),
     });

@@ -43,7 +43,10 @@ export default function AppFooter() {
     return (
         <div className="app-footer">
             {/* AutoAV log */}
-            <span className="footer-item">
+            <span
+                className="footer-item footer-item--log"
+                title={status.auto_av_log ?? undefined}
+            >
                 <Text className="footer-label">
                     AutoAV: {status.auto_av_log ?? 'Unknown'}
                 </Text>

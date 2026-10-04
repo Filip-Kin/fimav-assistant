@@ -76,8 +76,9 @@ function CutCell({ record }: { record: MatchRecord }) {
     const reveal = (target?: string) =>
         window.electron?.ipcRenderer.sendMessage('autoav:revealFile', [target]);
 
-    // Only recorded matches with a file can be cut.
-    if (record.status !== 'recorded' || !record.filePath) {
+    // Only recorded matches with a file can be cut. An FTC match's video is
+    // made after its scores post, so it has no file until then.
+    if (record.status !== 'recorded' || (!record.filePath && !record.ftc)) {
         return <Text type="secondary">-</Text>;
     }
 
@@ -477,8 +478,8 @@ export default function AutoAVPage() {
             },
         },
     ];
-    // Dead-time cutting is an off-season feature.
-    if (offSeason) {
+    // Dead-time cutting: FTC always, FRC off-season.
+    if (offSeason || ftc) {
         columns.push({
             title: 'Cut',
             key: 'cut',

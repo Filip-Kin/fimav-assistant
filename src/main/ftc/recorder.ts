@@ -1,0 +1,598 @@
+import fs from 'fs';
+import path from 'path';
+import log from 'electron-log';
+import VmixService from '../../services/VmixService';
+import Event from '../../models/Event';
+import { TournamentLevel } from '../../models/FMSMatchState';
+import { MatchRecord } from '../../models/MatchRecord';
+import { FtcUpdate } from '../../models/Ftc';
+import { matchFileName } from '../../utils/recording';
+import { upsertMatch, updateMatch, getMatch } from '../recordings/matchStore';
+import { assembleClips, enqueueCut, probeDuration } from '../cutMatch';
+import { getStore } from '../store';
+
+// FTC match recording. Every match video is the match itself plus its score
+// reveal, with the dead time between cut out. In-season and off-season are the
+// same.
+//
+// vMix records "raw" files and this logs, against the wall clock, when each
+// match started and when FTC Live posted its scores. A match's video is then
+// cut out of whichever raw files cover two windows:
+//
+//   play    Match Start - 1 s  ->  Match Start + match length + tail
+//   reveal  MATCH_POST - 1 s   ->  MATCH_POST + 16 s
+//
+// Recording runs while anything still needs it: a match in play or waiting for
+// its scores (up to WAIT_FOR_POST), or an open reveal or abort window. So in
+// the usual order (scores posted before the next match) each match gets its own
+// raw file. When the next match starts first, the same raw file keeps running
+// and the late reveal is cut out of it, wherever it lands; nothing is stopped
+// in the middle of a match. A post that comes while nothing is recording starts
+// a recording just for the reveal.
+//
+// Raw files are moved into "<event folder>/Originals" and the timeline is saved
+// next to them (ftc-timeline.json), so a restart can still finish matches whose
+// footage is complete. A match's manifest record holds the upload (processing
+// "queued") until its video is final.
+//
+// An aborted match keeps its raw footage in Originals but gets no video of its
+// own: FTC Live replays it under the same name, and the replay is the match.
+
+const LEAD_SECONDS = 1;
+const REVEAL_SECONDS = 16;
+const ABORT_KEEP_SECONDS = 10;
+// How long a finished match waits for its scores before its video is made
+// without a reveal.
+const WAIT_FOR_POST_MS = 10 * 60 * 1000;
+
+interface RawFile {
+    // vMix's file while recording; the Originals copy once stopped.
+    path: string | null;
+    start: number; // epoch ms
+    end: number | null; // epoch ms, null while recording
+}
+
+interface FtcRun {
+    id: string; // manifest record id
+    shortName: string;
+    number: number;
+    field: number;
+    level: TournamentLevel;
+    start: number; // epoch ms
+    playEnd: number; // epoch ms
+    post: number | null;
+    abortAt: number | null;
+    gaveUp: boolean;
+    done: boolean;
+}
+
+interface Timeline {
+    folder: string;
+    raws: RawFile[];
+    runs: FtcRun[];
+}
+
+export interface FtcRecorderHost {
+    event(): Event | null;
+    // The event folder recordings are filed into, or null when unknown.
+    folder(): string | null;
+    log(_message: string): void;
+    setRecording(_on: boolean): void;
+    record(_rec: MatchRecord): void;
+}
+
+const logger = log.scope('ftc.recorder');
+
+function levelFor(shortName: string): TournamentLevel {
+    // Practice and qualification short names start P / Q; anything else is a
+    // playoff match.
+    if (/^Q/i.test(shortName)) return 'Qualification';
+    if (/^P(R)?[-\d]/i.test(shortName)) return 'Practice';
+    return 'Playoff';
+}
+
+export default class FtcRecorder {
+    private host: FtcRecorderHost;
+
+    private tl: Timeline | null = null;
+
+    private recording = false;
+
+    private timer: ReturnType<typeof setTimeout> | null = null;
+
+    // Every vMix start/stop and timeline change runs in order on this chain,
+    // so a stop and the next match's start never interleave.
+    private chain: Promise<void> = Promise.resolve();
+
+    constructor(host: FtcRecorderHost) {
+        this.host = host;
+    }
+
+    private run(task: () => Promise<void>) {
+        this.chain = this.chain.then(task).catch((e) => {
+            logger.error('FTC recorder step failed', e);
+            this.host.log(`FTC recorder error: ${e?.message ?? e}`);
+        });
+        return this.chain;
+    }
+
+    public onUpdate(u: FtcUpdate) {
+        const now = Date.now();
+        if (u.type === 'MATCH_START') this.run(() => this.onStart(u, now));
+        else if (u.type === 'MATCH_POST') this.run(() => this.onPost(u, now));
+        else if (u.type === 'MATCH_ABORT') this.run(() => this.onAbort(u, now));
+    }
+
+    // #region timeline
+
+    // eslint-disable-next-line class-methods-use-this
+    private timelinePath(folder: string) {
+        return path.join(folder, 'Originals', 'ftc-timeline.json');
+    }
+
+    // The timeline for the current event folder, loaded from disk the first
+    // time a folder is seen (finishing what a previous run left).
+    private async timeline(): Promise<Timeline | null> {
+        const folder = this.host.folder();
+        if (!folder) return null;
+        if (this.tl?.folder === folder) return this.tl;
+        let loaded: Timeline = { folder, raws: [], runs: [] };
+        try {
+            const p = this.timelinePath(folder);
+            if (fs.existsSync(p)) {
+                loaded = { ...JSON.parse(fs.readFileSync(p, 'utf8')), folder };
+            }
+        } catch (e) {
+            logger.warn('Could not read the FTC timeline', e);
+        }
+        this.tl = loaded;
+        await this.recover();
+        return this.tl;
+    }
+
+    private save() {
+        if (!this.tl) return;
+        try {
+            const dir = path.join(this.tl.folder, 'Originals');
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            const p = this.timelinePath(this.tl.folder);
+            fs.writeFileSync(`${p}.tmp`, JSON.stringify(this.tl, null, 2));
+            fs.renameSync(`${p}.tmp`, p);
+        } catch (e) {
+            logger.warn('Could not save the FTC timeline', e);
+        }
+    }
+
+    // After a restart: a raw file left open was cut off when the app stopped,
+    // so close it at its real length; nothing will post for the matches that
+    // were waiting, so they finish without a reveal.
+    private async recover() {
+        const { tl } = this;
+        if (!tl) return;
+        let changed = false;
+        // eslint-disable-next-line no-restricted-syntax
+        for (const raw of tl.raws) {
+            if (raw.end === null && !this.recording) {
+                // eslint-disable-next-line no-await-in-loop
+                const dur = raw.path ? await probeDuration(raw.path) : null;
+                raw.end = raw.start + (dur ?? 0) * 1000;
+                changed = true;
+            }
+        }
+        tl.runs.forEach((r) => {
+            if (!r.done && r.post === null && r.abortAt === null && !r.gaveUp) {
+                r.gaveUp = true;
+                changed = true;
+            }
+        });
+        if (changed) this.save();
+        this.finishReady();
+    }
+
+    // #endregion
+
+    // #region events
+
+    private async onStart(u: FtcUpdate, now: number) {
+        const tl = await this.timeline();
+        if (!tl) {
+            this.host.log('No event folder; FTC match not recorded');
+            return;
+        }
+        const store = getStore();
+        const seconds =
+            store.get('ftc.matchSeconds', 158) +
+            store.get('ftc.tailSeconds', 5);
+        const shortName = u.shortName || `Match ${u.number}`;
+        const run: FtcRun = {
+            id: `ftc_${shortName}_${now}`,
+            shortName,
+            number: u.number,
+            field: u.field,
+            level: levelFor(u.shortName),
+            start: now,
+            playEnd: now + seconds * 1000,
+            post: null,
+            abortAt: null,
+            gaveUp: false,
+            done: false,
+        };
+        tl.runs.push(run);
+        this.save();
+
+        const event = this.host.event();
+        const rec: MatchRecord = {
+            id: run.id,
+            level: run.level,
+            matchNumber: run.number,
+            playNumber: 1,
+            eventName: event?.name ?? 'Unknown Event',
+            eventCode: event?.code ?? null,
+            fileName: null,
+            filePath: null,
+            saveFolder: tl.folder,
+            startedAt: now,
+            endedAt: null,
+            status: 'recording',
+            ftc: { shortName, field: run.field },
+        };
+        upsertMatch(tl.folder, rec);
+        this.host.record(rec);
+        this.host.log(`Recording ${shortName} (field ${run.field})`);
+
+        await this.ensureRecording(now);
+        this.schedule();
+    }
+
+    private async onPost(u: FtcUpdate, now: number) {
+        const tl = await this.timeline();
+        if (!tl) return;
+        // The newest unfinished run of this match. A second post of the same
+        // match (a score edit) finds none and is ignored.
+        const run = [...tl.runs]
+            .reverse()
+            .find(
+                (r) =>
+                    r.shortName === (u.shortName || `Match ${u.number}`) &&
+                    r.post === null &&
+                    r.abortAt === null &&
+                    !r.done
+            );
+        if (!run) return;
+        run.post = Math.max(now, run.playEnd - LEAD_SECONDS * 1000);
+        run.gaveUp = false;
+        this.save();
+        this.host.log(`Scores posted for ${run.shortName}`);
+        await this.ensureRecording(now);
+        this.schedule();
+    }
+
+    private async onAbort(u: FtcUpdate, now: number) {
+        const tl = await this.timeline();
+        if (!tl) return;
+        const run = [...tl.runs]
+            .reverse()
+            .find(
+                (r) =>
+                    r.shortName === (u.shortName || `Match ${u.number}`) &&
+                    r.abortAt === null &&
+                    !r.done
+            );
+        if (!run) return;
+        run.abortAt = now;
+        this.save();
+        this.host.log(`${run.shortName} aborted`);
+        this.schedule();
+    }
+
+    // #endregion
+
+    // #region recording control
+
+    // Whether anything still needs vMix to record at this moment.
+    private needed(now: number): boolean {
+        const { tl } = this;
+        if (!tl) return false;
+        return tl.runs.some((r) => {
+            if (r.done) return false;
+            if (r.abortAt !== null)
+                return now < r.abortAt + ABORT_KEEP_SECONDS * 1000;
+            if (r.post !== null) return now < r.post + REVEAL_SECONDS * 1000;
+            if (r.gaveUp) return false;
+            // In play, or finished and waiting for its scores.
+            return now < r.playEnd + WAIT_FOR_POST_MS;
+        });
+    }
+
+    // The next moment `needed` can change on its own.
+    private nextDeadline(now: number): number | null {
+        const { tl } = this;
+        if (!tl) return null;
+        const times: number[] = [];
+        tl.runs.forEach((r) => {
+            if (r.done) return;
+            if (r.abortAt !== null)
+                times.push(r.abortAt + ABORT_KEEP_SECONDS * 1000);
+            else if (r.post !== null)
+                times.push(r.post + REVEAL_SECONDS * 1000);
+            else if (!r.gaveUp) {
+                times.push(r.playEnd);
+                times.push(r.playEnd + WAIT_FOR_POST_MS);
+            }
+        });
+        const future = times.filter((t) => t > now);
+        return future.length ? Math.min(...future) : null;
+    }
+
+    // Re-check now, and again at the next deadline.
+    private schedule() {
+        this.run(() => this.tick());
+    }
+
+    private arm() {
+        if (this.timer) clearTimeout(this.timer);
+        this.timer = null;
+        const now = Date.now();
+        const next = this.nextDeadline(now);
+        if (next !== null) {
+            this.timer = setTimeout(
+                () => this.run(() => this.tick()),
+                next - now + 50
+            );
+        }
+    }
+
+    private async tick() {
+        const { tl } = this;
+        if (!tl) return;
+        const now = Date.now();
+        let changed = false;
+        tl.runs.forEach((r) => {
+            if (
+                !r.done &&
+                r.post === null &&
+                r.abortAt === null &&
+                !r.gaveUp &&
+                now >= r.playEnd + WAIT_FOR_POST_MS
+            ) {
+                r.gaveUp = true;
+                changed = true;
+                this.host.log(`No scores posted for ${r.shortName}`);
+            }
+            // Play over: the record leaves "recording" and holds the upload
+            // until its video is made.
+            if (!r.done && now >= r.playEnd) this.markWaiting(r);
+        });
+        if (changed) this.save();
+        if (this.recording && !this.needed(now)) await this.stopRecording();
+        this.finishReady();
+        this.arm();
+    }
+
+    private markWaiting(r: FtcRun) {
+        const folder = this.tl?.folder;
+        if (!folder) return;
+        const rec = getMatch(folder, r.id);
+        if (!rec || rec.status !== 'recording') return;
+        const updated = updateMatch(folder, r.id, {
+            status: 'recorded',
+            endedAt: r.playEnd,
+            processing: { state: 'queued' },
+        });
+        if (updated) this.host.record(updated);
+    }
+
+    private async ensureRecording(now: number) {
+        if (this.recording || !this.needed(now)) return;
+        const { tl } = this;
+        if (!tl) return;
+        await VmixService.Instance.StartRecording();
+        this.recording = true;
+        const raw: RawFile = { path: null, start: Date.now(), end: null };
+        tl.raws.push(raw);
+        this.save();
+        this.host.setRecording(true);
+        this.host.log('Started recording');
+        // vMix names the file once it is writing.
+        setTimeout(() => {
+            this.run(async () => {
+                if (raw.end === null && !raw.path) {
+                    raw.path = await VmixService.Instance.GetCurrentRecording();
+                    this.save();
+                }
+            });
+        }, 3000);
+    }
+
+    private async stopRecording() {
+        const { tl } = this;
+        if (!tl) return;
+        const raw = tl.raws.find((r) => r.end === null);
+        if (raw && !raw.path) {
+            raw.path = await VmixService.Instance.GetCurrentRecording().catch(
+                () => null
+            );
+        }
+        await VmixService.Instance.StopRecording();
+        this.recording = false;
+        this.host.setRecording(false);
+        this.host.log('Stopped recording');
+        if (!raw) return;
+        raw.end = Date.now();
+        raw.path = await this.moveToOriginals(raw.path, tl.folder);
+        this.save();
+    }
+
+    // vMix holds the file for a moment after it stops; retry the move.
+    // eslint-disable-next-line class-methods-use-this
+    private async moveToOriginals(
+        file: string | null,
+        folder: string
+    ): Promise<string | null> {
+        if (!file) return null;
+        const dir = path.join(folder, 'Originals');
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const target = path.join(dir, `raw ${path.basename(file)}`);
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+            try {
+                if (!fs.existsSync(file)) return null;
+                try {
+                    fs.renameSync(file, target);
+                } catch (err) {
+                    if ((err as { code?: string }).code !== 'EXDEV') throw err;
+                    fs.copyFileSync(file, target);
+                    fs.unlinkSync(file);
+                }
+                return target;
+            } catch {
+                // eslint-disable-next-line no-await-in-loop
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 500);
+                });
+            }
+        }
+        logger.warn(`Could not move ${file} into Originals`);
+        return file;
+    }
+
+    // #endregion
+
+    // #region making the videos
+
+    // The windows a run's video is cut from, or null while one is still open.
+    // eslint-disable-next-line class-methods-use-this
+    private windows(r: FtcRun): [number, number][] | null {
+        const play: [number, number] = [
+            r.start - LEAD_SECONDS * 1000,
+            r.playEnd,
+        ];
+        if (r.post !== null) {
+            const from = Math.max(r.post - LEAD_SECONDS * 1000, r.playEnd);
+            return [play, [from, r.post + REVEAL_SECONDS * 1000]];
+        }
+        if (r.gaveUp) return [play];
+        return null;
+    }
+
+    // Make every video whose footage is complete: all its windows ended and
+    // covered by stopped raw files.
+    private finishReady() {
+        const { tl } = this;
+        if (!tl) return;
+        const open = tl.raws.find((r) => r.end === null);
+        tl.runs.forEach((r) => {
+            if (r.done) return;
+            if (r.abortAt !== null) {
+                // Footage stays in Originals; the replay is the match.
+                if (open && open.start < r.abortAt + ABORT_KEEP_SECONDS * 1000)
+                    return;
+                r.done = true;
+                this.save();
+                const { folder } = tl;
+                const updated = updateMatch(folder, r.id, {
+                    status: 'error',
+                    error: 'Aborted',
+                    endedAt: r.abortAt,
+                    processing: undefined,
+                });
+                if (updated) this.host.record(updated);
+                return;
+            }
+            const wins = this.windows(r);
+            if (!wins) return;
+            const lastEnd = Math.max(...wins.map((w) => w[1]));
+            // Footage still being written for one of the windows.
+            if (open && open.start < lastEnd) return;
+            r.done = true;
+            this.save();
+            this.make(r, wins);
+        });
+    }
+
+    // Cut the windows out of the raw files and join them into the match
+    // video. Queued with FRC's cuts, one encode at a time.
+    private make(r: FtcRun, wins: [number, number][]) {
+        const { tl } = this;
+        if (!tl) return;
+        const { folder } = tl;
+        const pieces: { file: string; from: number; seconds: number }[] = [];
+        wins.forEach(([a, b]) => {
+            tl.raws.forEach((raw) => {
+                if (!raw.path || raw.end === null) return;
+                const from = Math.max(a, raw.start);
+                const to = Math.min(b, raw.end);
+                // A sliver no longer than the lead is the end of an earlier
+                // file (an aborted match before its replay), not this match.
+                if (to - from <= LEAD_SECONDS * 1000 + 200) return;
+                pieces.push({
+                    file: raw.path,
+                    from: (from - raw.start) / 1000,
+                    seconds: (to - from) / 1000,
+                });
+            });
+        });
+
+        const event = this.host.event();
+        const fileName = matchFileName(event, {
+            MatchState: 'GameSpecificData',
+            Level: r.level,
+            MatchNumber: r.number,
+            PlayNumber: 1,
+            ShortName: r.shortName,
+        });
+        const target = path.join(folder, fileName);
+        const queued = updateMatch(folder, r.id, {
+            status: 'recorded',
+            endedAt: r.playEnd,
+            processing: { state: 'queued' },
+        });
+        if (queued) this.host.record(queued);
+
+        enqueueCut(async () => {
+            const started = updateMatch(folder, r.id, {
+                processing: { state: 'processing' },
+            });
+            if (started) this.host.record(started);
+            try {
+                if (!pieces.length)
+                    throw new Error('No footage for this match');
+                await assembleClips(pieces, target);
+                const done = updateMatch(folder, r.id, {
+                    fileName,
+                    filePath: target,
+                    processing: { state: 'done', outputPath: target },
+                });
+                if (done) this.host.record(done);
+                this.host.log(
+                    `${fileName}${wins.length > 1 ? '' : ' (no scores posted)'}`
+                );
+            } catch (e: any) {
+                // Stays "recorded" so the Auto AV tab offers a retry.
+                const failed = updateMatch(folder, r.id, {
+                    processing: {
+                        state: 'error',
+                        error: String(e?.message ?? e),
+                    },
+                });
+                if (failed) this.host.record(failed);
+                this.host.log(`Could not make ${fileName}: ${e?.message ?? e}`);
+            }
+        });
+    }
+
+    // Make a match's video again (the Cut button), from the same windows.
+    public remake(folder: string, id: string) {
+        this.run(async () => {
+            const tl = await this.timeline();
+            if (!tl || tl.folder !== folder) return;
+            const r = tl.runs.find((x) => x.id === id);
+            const wins = r && this.windows(r);
+            if (!r || !wins || r.abortAt !== null) return;
+            r.done = true;
+            this.save();
+            this.make(r, wins);
+        });
+    }
+
+    // #endregion
+}

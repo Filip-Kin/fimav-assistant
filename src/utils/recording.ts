@@ -90,6 +90,37 @@ export function sampleFileName(
     return fileNameBuilders[mode](event, sample);
 }
 
+// The mode the event's files are named in: FMS / FTC Live's official flag,
+// else the stored choice.
+function namingMode(event: Event | null): FileNameMode {
+    if (event?.isOfficial === false) return 'off-season';
+    if (event?.isOfficial === true) return 'in-season';
+    return getStore().get('autoAv.fileNameMode', 'in-season');
+}
+
+// A typed event name in settings always wins over the field system's.
+function withNameOverride(event: Event | null): Event | null {
+    const nameOverride = getStore().get('autoAv.eventNameOverride', '').trim();
+    return nameOverride
+        ? ({
+              ...(event ?? {}),
+              name: nameOverride,
+              code: nameOverride,
+          } as Event)
+        : event;
+}
+
+// The file name a match is filed under, the same as attemptRename picks.
+export function matchFileName(
+    event: Event | null,
+    matchStatus: FMSMatchStatus
+): string {
+    return fileNameBuilders[namingMode(event)](
+        withNameOverride(event),
+        matchStatus
+    );
+}
+
 export default async function attemptRename(
     event: Event | null,
     videoLocation: string | null,
