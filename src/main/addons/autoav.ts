@@ -83,6 +83,7 @@ export default class AutoAV {
         currentEvent: null,
         saveFolder: null,
         fileNameMode: 'in-season',
+        fileNameModeForced: false,
         sampleFileName: '',
         lastMessage: null,
     };
@@ -194,6 +195,7 @@ export default class AutoAV {
                         // Originals/), if enabled. Never cut a match with a card:
                         // the card explanation lives in the dead time we'd remove.
                         if (
+                            this.isOffSeason() &&
                             getStore().get('autoAv.autoCut', false) &&
                             hasCard !== true
                         ) {
@@ -655,6 +657,12 @@ export default class AutoAV {
         return getStore().get('autoAv.fileNameMode', 'in-season');
     }
 
+    // Off-season mode turns on the off-season-only features: the YouTube
+    // uploader, the Upload tab and dead-time cutting.
+    public isOffSeason(): boolean {
+        return this.effectiveFileNameMode() === 'off-season';
+    }
+
     // Build and broadcast the current status snapshot
     private emitStatus() {
         const store = getStore();
@@ -677,6 +685,8 @@ export default class AutoAV {
               }
             : null;
         this.status.fileNameMode = this.effectiveFileNameMode();
+        this.status.fileNameModeForced =
+            typeof this.currentEvent?.isOfficial === 'boolean';
         this.status.sampleFileName = sampleFileName(
             effectiveEvent,
             this.status.fileNameMode
@@ -770,10 +780,7 @@ export default class AutoAV {
     // Returns null rather than a wrong guess.
     private static readVmixConfigRecordFolder(): string | null {
         try {
-            const base = path.join(
-                process.env.LOCALAPPDATA || '',
-                'vMix'
-            );
+            const base = path.join(process.env.LOCALAPPDATA || '', 'vMix');
             const files = glob
                 .sync(path.join(base, 'vMix*', '*', 'user.config'))
                 .map((f) => ({ f, m: fs.statSync(f).mtimeMs }))
@@ -935,7 +942,9 @@ export default class AutoAV {
                 });
                 if (done) this.emitter.emit('match', done);
                 this.logRecording(
-                    `Cut ${path.basename(mainPath)}; original kept in Originals`,
+                    `Cut ${path.basename(
+                        mainPath
+                    )}; original kept in Originals`,
                     undefined,
                     EquipmentLogType.Debug
                 );

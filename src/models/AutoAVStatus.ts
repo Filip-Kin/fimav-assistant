@@ -15,8 +15,13 @@ export interface AutoAVStatus {
     currentEvent: { name: string; code: string | null } | null;
     // Folder recordings are filed into (the effective event folder)
     saveFolder: string | null;
-    // Effective file naming mode for this event
+    // Effective file naming mode for this event. Also the season switch: the
+    // off-season-only features (YouTube uploader, Upload tab, dead-time cutting)
+    // exist only in off-season mode.
     fileNameMode: FileNameMode;
+    // True when the event itself sets the mode (official = in-season,
+    // unofficial = off-season), so the stored fallback setting does nothing.
+    fileNameModeForced: boolean;
     // Example output filename for the current event + naming mode
     sampleFileName: string;
     // Last human-readable status line (mirrors the footer)

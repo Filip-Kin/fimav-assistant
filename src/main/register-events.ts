@@ -546,6 +546,8 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     // Manually cut the dead time out of a recorded match (the Cut button).
     ipcMain.on('autoav:cutMatch', (_event, [folder, id]) => {
+        // Dead-time cutting is an off-season feature.
+        if (!AutoAV.Instance.isOffSeason()) return;
         if (typeof folder === 'string' && typeof id === 'string') {
             AutoAV.Instance.queueCut(folder, id);
         }
@@ -625,6 +627,22 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         running: YoutubeUploaderAddon.Instance.isRunning(),
         version: YoutubeUploaderAddon.Instance.getVersion(),
         eventKey: AutoAV.Instance.getStatus().currentEvent?.code ?? '',
+    });
+
+    // The uploader follows the season: an event that turns out to be in-season
+    // (official) stops it, and a flip to off-season starts it. At boot the mode
+    // is the stored fallback until FMS reports the event, so the flip is what
+    // starts it for an off-season event.
+    let uploaderMode = AutoAV.Instance.getStatus().fileNameMode;
+    AutoAV.Instance.on('status', (s: AutoAVStatus) => {
+        if (s.fileNameMode === uploaderMode) return;
+        uploaderMode = s.fileNameMode;
+        const uploader = YoutubeUploaderAddon.Instance;
+        const change =
+            s.fileNameMode === 'in-season' ? uploader.stop() : uploader.start();
+        change.catch((e) =>
+            log.error('YouTube uploader season change failed', e)
+        );
     });
 
     ipcMain.on('upload:getStatus', (event) => {

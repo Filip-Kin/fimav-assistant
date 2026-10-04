@@ -44,12 +44,20 @@ function matchLabel(m: MatchRecord): string {
     return `${levelShort(m.level)} ${m.matchNumber}${play}`;
 }
 
-const STATUS_TAG: Record<MatchRecord['status'], { color: string; text: string }> =
-    {
-        recording: { color: 'processing', text: 'Recording' },
-        recorded: { color: 'success', text: 'Recorded' },
-        error: { color: 'error', text: 'Error' },
-    };
+const STATUS_TAG: Record<
+    MatchRecord['status'],
+    { color: string; text: string }
+> = {
+    recording: { color: 'processing', text: 'Recording' },
+    recorded: { color: 'success', text: 'Recorded' },
+    error: { color: 'error', text: 'Error' },
+};
+
+// The uploader writes its own state into the record's upload object.
+function isUploaded(m: MatchRecord): boolean {
+    const up = m.upload as { status?: string } | undefined;
+    return up?.status === 'uploaded';
+}
 
 // Merge an incoming record into the list (replace by id), newest first.
 function mergeMatch(list: MatchRecord[], rec: MatchRecord): MatchRecord[] {
@@ -183,32 +191,6 @@ function TeamCell({ teams }: { teams: MatchRecord['teams'] }) {
     );
 }
 
-function CardCell({ record }: { record: MatchRecord }) {
-    const carded = [
-        ...(record.teams?.red ?? []),
-        ...(record.teams?.blue ?? []),
-    ].filter((t) => t.card !== 'None');
-
-    if (record.teams && carded.length === 0) {
-        return <Text type="secondary">None</Text>;
-    }
-    if (carded.length === 0) {
-        return <Text type="secondary">-</Text>;
-    }
-    return (
-        <Space size={4} wrap>
-            {carded.map((t) => (
-                <Tag
-                    key={t.teamNumber}
-                    color={t.card === 'Red' ? 'red' : 'gold'}
-                >
-                    {t.teamNumber} {t.card}
-                </Tag>
-            ))}
-        </Space>
-    );
-}
-
 interface AutoAvSettings {
     fileNameMode: 'in-season' | 'off-season';
     eventNameOverride: string;
@@ -219,9 +201,13 @@ interface AutoAvSettings {
 function SettingsDialog({
     open,
     onClose,
+    offSeason,
+    modeForced,
 }: {
     open: boolean;
     onClose: () => void;
+    offSeason: boolean;
+    modeForced: boolean;
 }) {
     const [form] = Form.useForm<AutoAvSettings>();
     const [loading, setLoading] = useState(true);
@@ -231,13 +217,10 @@ function SettingsDialog({
         if (!open || !window.electron) return undefined;
         const { ipcRenderer } = window.electron;
         setLoading(true);
-        const off = ipcRenderer.on(
-            'autoav:settings',
-            (s: AutoAvSettings) => {
-                form.setFieldsValue(s);
-                setLoading(false);
-            }
-        );
+        const off = ipcRenderer.on('autoav:settings', (s: AutoAvSettings) => {
+            form.setFieldsValue(s);
+            setLoading(false);
+        });
         ipcRenderer.sendMessage('autoav:getSettings', []);
         return off;
     }, [open, form]);
@@ -309,11 +292,15 @@ function SettingsDialog({
                 <Form.Item
                     label="File naming style"
                     name="fileNameMode"
+                    hidden={modeForced}
                     tooltip="Official events force in-season naming automatically; this is the fallback. In-season: QM13_Event.mp4. Off-season: 2026 Event - Qualification Match 13.mp4."
                 >
                     <Select
                         options={[
-                            { value: 'in-season', label: 'In-season (short codes)' },
+                            {
+                                value: 'in-season',
+                                label: 'In-season (short codes)',
+                            },
                             {
                                 value: 'off-season',
                                 label: 'Off-season (readable)',
@@ -326,6 +313,7 @@ function SettingsDialog({
                     label="Auto-cut dead time"
                     name="autoCut"
                     valuePropName="checked"
+                    hidden={!offSeason}
                     tooltip="After each match records, remove the dead time and keep the trimmed video in the event folder; the raw original is moved into an Originals subfolder. Matches with a card are always kept whole so the card explanation survives. Re-encodes on this machine, so leave off if vMix needs all the CPU during the event."
                 >
                     <Switch />
@@ -352,9 +340,7 @@ export default function AutoAVPage() {
         const offMatches = ipcRenderer.on(
             'autoav:matches',
             (list: MatchRecord[]) =>
-                setMatches(
-                    [...list].sort((a, b) => b.startedAt - a.startedAt)
-                )
+                setMatches([...list].sort((a, b) => b.startedAt - a.startedAt))
         );
         const offMatch = ipcRenderer.on('autoav:match', (rec: MatchRecord) =>
             setMatches((prev) => mergeMatch(prev, rec))
@@ -385,6 +371,7 @@ export default function AutoAVPage() {
     }, []);
 
     const working = !!status?.fmsConnected && !!status?.vmix.reachable;
+    const offSeason = status?.fileNameMode === 'off-season';
 
     const columns: ColumnsType<MatchRecord> = [
         {
@@ -398,19 +385,11 @@ export default function AutoAVPage() {
             render: (_, m) => <TeamCell teams={m.teams} />,
         },
         {
-            title: 'Cards',
-            key: 'cards',
-            render: (_, m) => <CardCell record={m} />,
-        },
-        {
             title: 'File',
             key: 'file',
             render: (_, m) =>
                 m.fileName ? (
-                    <Text
-                        className="file-name"
-                        title={m.filePath ?? undefined}
-                    >
+                    <Text className="file-name" title={m.filePath ?? undefined}>
                         {m.fileName}
                     </Text>
                 ) : (
@@ -430,6 +409,9 @@ export default function AutoAVPage() {
             title: 'Status',
             key: 'status',
             render: (_, m) => {
+                if (isUploaded(m)) {
+                    return <Tag color="success">Uploaded</Tag>;
+                }
                 const tag = STATUS_TAG[m.status] ?? {
                     color: 'default',
                     text: m.status ?? 'Unknown',
@@ -441,12 +423,15 @@ export default function AutoAVPage() {
                 );
             },
         },
-        {
+    ];
+    // Dead-time cutting is an off-season feature.
+    if (offSeason) {
+        columns.push({
             title: 'Cut',
             key: 'cut',
             render: (_, m) => <CutCell record={m} />,
-        },
-    ];
+        });
+    }
 
     let statusLabel = 'Stopped';
     if (working) statusLabel = 'Working';
@@ -464,91 +449,94 @@ export default function AutoAVPage() {
                 busy={addonBusy}
             />
             <div className="autoav-page">
-            <div className="autoav-cards">
-                <Card size="small" title="Status">
-                    <Space direction="vertical" size={8}>
-                        <StatusBadge
-                            ok={!!status?.fmsConnected}
-                            label="FMS connected"
-                        />
-                        <StatusBadge
-                            ok={!!status?.vmix.reachable}
-                            label="vMix reachable"
-                        />
-                        <RecordingBadge
-                            recording={!!status?.vmix.recording}
-                        />
-                        {recordingMatch && (
-                            <Text type="warning">
-                                Recording now: {matchLabel(recordingMatch)}
-                            </Text>
-                        )}
-                    </Space>
-                </Card>
-
-                <Card size="small" title="Recording settings">
-                    <Space direction="vertical" size={8}>
-                        <Text strong>
-                            {status?.currentEvent?.name ?? 'No event detected'}
-                        </Text>
-                        <Text
-                            type="secondary"
-                            className="file-name"
-                            title={status?.sampleFileName || undefined}
-                        >
-                            {status?.sampleFileName
-                                ? `Filename: ${status.sampleFileName}`
-                                : 'Filename: -'}
-                        </Text>
-                        <Space size={6} align="start">
-                            <Button
-                                type="text"
-                                size="small"
-                                icon={<FolderOpenOutlined />}
-                                onClick={() => {
-                                    if (status?.saveFolder) {
-                                        window.electron?.ipcRenderer.sendMessage(
-                                            'autoav:openFolder',
-                                            []
-                                        );
-                                    } else {
-                                        setSettingsOpen(true);
-                                    }
-                                }}
-                                style={{ padding: 0, height: 'auto' }}
+                <div className="autoav-cards">
+                    <Card size="small" title="Status">
+                        <Space direction="vertical" size={8}>
+                            <StatusBadge
+                                ok={!!status?.fmsConnected}
+                                label="FMS connected"
                             />
+                            <StatusBadge
+                                ok={!!status?.vmix.reachable}
+                                label="vMix reachable"
+                            />
+                            <RecordingBadge
+                                recording={!!status?.vmix.recording}
+                            />
+                            {recordingMatch && (
+                                <Text type="warning">
+                                    Recording now: {matchLabel(recordingMatch)}
+                                </Text>
+                            )}
+                        </Space>
+                    </Card>
+
+                    <Card size="small" title="Recording settings">
+                        <Space direction="vertical" size={8}>
+                            <Text strong>
+                                {status?.currentEvent?.name ??
+                                    'No event detected'}
+                            </Text>
                             <Text
                                 type="secondary"
                                 className="file-name"
-                                title={status?.saveFolder ?? undefined}
+                                title={status?.sampleFileName || undefined}
                             >
-                                {status?.saveFolder ??
-                                    'Set a save folder in Settings, or it appears here after the first recorded match'}
+                                {status?.sampleFileName
+                                    ? `Filename: ${status.sampleFileName}`
+                                    : 'Filename: -'}
                             </Text>
+                            <Space size={6} align="start">
+                                <Button
+                                    type="text"
+                                    size="small"
+                                    icon={<FolderOpenOutlined />}
+                                    onClick={() => {
+                                        if (status?.saveFolder) {
+                                            window.electron?.ipcRenderer.sendMessage(
+                                                'autoav:openFolder',
+                                                []
+                                            );
+                                        } else {
+                                            setSettingsOpen(true);
+                                        }
+                                    }}
+                                    style={{ padding: 0, height: 'auto' }}
+                                />
+                                <Text
+                                    type="secondary"
+                                    className="file-name"
+                                    title={status?.saveFolder ?? undefined}
+                                >
+                                    {status?.saveFolder ??
+                                        'Set a save folder in Settings, or it appears here after the first recorded match'}
+                                </Text>
+                            </Space>
                         </Space>
-                    </Space>
-                </Card>
-            </div>
+                    </Card>
+                </div>
 
-            <Title level={5} style={{ margin: '16px 0 8px' }}>
-                Recorded matches ({matches.length})
-            </Title>
+                <Title level={5} style={{ margin: '16px 0 8px' }}>
+                    Recorded matches ({matches.length})
+                </Title>
 
-            {matches.length === 0 ? (
-                <Empty description="No matches recorded yet" />
-            ) : (
-                <Table
-                    rowKey="id"
-                    size="small"
-                    pagination={false}
-                    columns={columns}
-                    dataSource={matches}
-                />
-            )}
+                {matches.length === 0 ? (
+                    <Empty description="No matches recorded yet" />
+                ) : (
+                    <Table
+                        rowKey="id"
+                        size="small"
+                        pagination={false}
+                        columns={columns}
+                        dataSource={matches}
+                    />
+                )}
             </div>
             <SettingsDialog
                 open={settingsOpen}
                 onClose={() => setSettingsOpen(false)}
+                offSeason={offSeason}
+                modeForced={!!status?.fileNameModeForced}
             />
         </>
     );

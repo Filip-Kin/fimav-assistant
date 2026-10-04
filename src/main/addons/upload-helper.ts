@@ -156,6 +156,13 @@ export default class YoutubeUploaderAddon {
     public async start(): Promise<boolean> {
         this.killExisting();
 
+        // Match-video uploads are an off-season feature.
+        if (!AutoAV.Instance.isOffSeason()) {
+            this.logs.out.log('In-season event; YouTube uploader off');
+            this.running = false;
+            return false;
+        }
+
         const videoDir = this.videoDir();
         if (!videoDir) {
             this.logs.out.log(
@@ -227,10 +234,7 @@ export default class YoutubeUploaderAddon {
 
     // Launch the exe and confirm it's serving before reporting running. Retries
     // once (with a fresh port sweep) so Restart can recover a wedged instance.
-    private async launch(
-        exePath: string,
-        videoDir: string
-    ): Promise<boolean> {
+    private async launch(exePath: string, videoDir: string): Promise<boolean> {
         const args = [
             '-video-dir',
             videoDir,
@@ -304,10 +308,13 @@ export default class YoutubeUploaderAddon {
     // handlers are identity-guarded, so the fallback kill is harmless.
     public async stop(): Promise<boolean> {
         try {
-            await fetch(`http://127.0.0.1:${YoutubeUploaderAddon.PORT}/api/shutdown`, {
-                method: 'POST',
-                signal: AbortSignal.timeout(5000),
-            });
+            await fetch(
+                `http://127.0.0.1:${YoutubeUploaderAddon.PORT}/api/shutdown`,
+                {
+                    method: 'POST',
+                    signal: AbortSignal.timeout(5000),
+                }
+            );
             // Give it a moment to exit on its own before the sweep.
             await new Promise((resolve) => {
                 setTimeout(resolve, 800);
