@@ -25,6 +25,10 @@ import {
 
 const FMS_URL = 'http://10.0.100.5';
 
+// Companion runs on the AV machine itself, for FIM-AV and for the FMS audience
+// display alike.
+export const COMPANION_URL = 'http://127.0.0.1:8000';
+
 // #region Companion read
 
 type Opt = { value?: unknown; isExpression?: boolean } | unknown;
@@ -383,7 +387,13 @@ export async function saveFmsAutomation(
         (c: any) => c.ConfigId === 'Primary'
     );
     if (!primary) throw new Error('FMS: no Primary audience display config');
-    const next = { ...primary.ConfigValue, AutomationConfig: automation };
+    const next = {
+        ...primary.ConfigValue,
+        AutomationConfig: {
+            ...automation,
+            BitfocusIntegrationAddress: COMPANION_URL,
+        },
+    };
     const save = await fetch(
         `${FMS_URL}/api/v1.0/audience/set/SaveAudienceDisplayConfig/Primary`,
         {

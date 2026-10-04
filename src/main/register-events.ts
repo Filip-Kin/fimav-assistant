@@ -1,10 +1,4 @@
-import {
-    BrowserWindow,
-    dialog,
-    ipcMain,
-    IpcMainEvent,
-    shell,
-} from 'electron';
+import { BrowserWindow, dialog, ipcMain, IpcMainEvent, shell } from 'electron';
 import fs from 'fs';
 import log from 'electron-log';
 import HWPingResponse, { IpConfigState } from 'models/HWPingResponse';
@@ -34,6 +28,7 @@ import { getCurrentEvent } from './util';
 import startStatusApi from './api/server';
 import {
     clearCompanionButton,
+    COMPANION_URL,
     readCompanionLayout,
     readCustomAd,
     readFmsAutomation,
@@ -638,7 +633,6 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     const bitfocusSettings = () =>
         store.get('bitfocus', {
-            companionUrl: 'http://127.0.0.1:8000',
             customAdUrl: '',
         });
     const trimUrl = (u: string) => (u ?? '').trim().replace(/\/+$/, '');
@@ -649,7 +643,6 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     ipcMain.on('bitfocus:saveSettings', (event, [settings]) => {
         store.set('bitfocus', {
-            companionUrl: trimUrl(settings?.companionUrl),
             customAdUrl: trimUrl(settings?.customAdUrl),
         });
         event.reply('bitfocus:settings', bitfocusSettings());
@@ -674,14 +667,12 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     };
 
     ipcMain.on('bitfocus:getLayout', (event) =>
-        bitfocusReply(event, 'layout', () =>
-            readCompanionLayout(bitfocusSettings().companionUrl)
-        )
+        bitfocusReply(event, 'layout', () => readCompanionLayout(COMPANION_URL))
     );
 
     ipcMain.on('bitfocus:saveButton', (event, [edit]) =>
         bitfocusReply(event, 'saveButton', async () => {
-            const url = bitfocusSettings().companionUrl;
+            const url = COMPANION_URL;
             await saveCompanionButton(url, edit);
             return readCompanionLayout(url);
         })
@@ -689,7 +680,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     ipcMain.on('bitfocus:clearButton', (event, [page, row, column]) =>
         bitfocusReply(event, 'clearButton', async () => {
-            const url = bitfocusSettings().companionUrl;
+            const url = COMPANION_URL;
             await clearCompanionButton(url, page, row, column);
             return readCompanionLayout(url);
         })
@@ -731,7 +722,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             title: 'Companion',
             autoHideMenuBar: true,
         });
-        win.loadURL(bitfocusSettings().companionUrl);
+        win.loadURL(COMPANION_URL);
     });
 
     // #endregion Bitfocus tab

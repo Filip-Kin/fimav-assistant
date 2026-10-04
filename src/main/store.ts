@@ -45,9 +45,9 @@ export type AppConfig = {
         // producing a clean uploadable copy in a "Cut" subfolder.
         autoCut: boolean;
     };
-    // Bitfocus tab: where Companion and our custom audience display answer.
+    // Bitfocus tab: where our custom audience display answers. (Companion is
+    // always on this machine.)
     bitfocus: {
-        companionUrl: string;
         customAdUrl: string;
     };
     // YouTube + TBA upload settings for the Upload tab. Persisted here and also
@@ -190,14 +190,9 @@ export function createStore(): Store<AppConfig> {
             bitfocus: {
                 type: 'object',
                 properties: {
-                    companionUrl: {
-                        type: 'string',
-                        default: 'http://127.0.0.1:8000',
-                    },
                     customAdUrl: { type: 'string', default: '' },
                 },
                 default: {
-                    companionUrl: 'http://127.0.0.1:8000',
                     customAdUrl: '',
                 },
             },

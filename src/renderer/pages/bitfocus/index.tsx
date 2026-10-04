@@ -43,7 +43,6 @@ import './index.css';
 const { Text } = Typography;
 
 interface BitfocusSettings {
-    companionUrl: string;
     customAdUrl: string;
 }
 
@@ -650,15 +649,12 @@ function SettingsDialog({
     onSaveFms: (_c: FmsAutomationConfig) => void;
     onClose: () => void;
 }) {
-    const [form] = Form.useForm<
-        BitfocusSettings & { fmsEnabled: boolean; fmsAddress: string }
-    >();
+    const [form] = Form.useForm<BitfocusSettings & { fmsEnabled: boolean }>();
     useEffect(() => {
         if (open) {
             form.setFieldsValue({
                 ...settings,
                 fmsEnabled: fms?.BitfocusIntegrationEnabled ?? false,
-                fmsAddress: fms?.BitfocusIntegrationAddress ?? '',
             });
         }
     }, [open, settings, fms, form]);
@@ -671,18 +667,12 @@ function SettingsDialog({
             onOk={async () => {
                 const v = await form.validateFields();
                 send('bitfocus:saveSettings', {
-                    companionUrl: v.companionUrl,
                     customAdUrl: v.customAdUrl,
                 });
-                if (
-                    fms &&
-                    (v.fmsEnabled !== fms.BitfocusIntegrationEnabled ||
-                        v.fmsAddress !== fms.BitfocusIntegrationAddress)
-                ) {
+                if (fms && v.fmsEnabled !== fms.BitfocusIntegrationEnabled) {
                     onSaveFms({
                         ...fms,
                         BitfocusIntegrationEnabled: v.fmsEnabled,
-                        BitfocusIntegrationAddress: v.fmsAddress,
                     });
                 }
                 onClose();
@@ -690,25 +680,17 @@ function SettingsDialog({
             destroyOnClose
         >
             <Form form={form} layout="vertical">
-                <Form.Item label="Companion" name="companionUrl">
-                    <Input placeholder="http://127.0.0.1:8000" />
-                </Form.Item>
                 <Form.Item label="Custom audience display" name="customAdUrl">
                     <Input placeholder="http://10.0.100.20:3001" />
                 </Form.Item>
                 {fms && (
-                    <>
-                        <Form.Item
-                            label="FMS audience display"
-                            name="fmsEnabled"
-                            valuePropName="checked"
-                        >
-                            <Switch />
-                        </Form.Item>
-                        <Form.Item label="Companion (FMS)" name="fmsAddress">
-                            <Input placeholder="http://127.0.0.1:8000" />
-                        </Form.Item>
-                    </>
+                    <Form.Item
+                        label="FMS Automations"
+                        name="fmsEnabled"
+                        valuePropName="checked"
+                    >
+                        <Switch />
+                    </Form.Item>
                 )}
             </Form>
         </Modal>
@@ -719,7 +701,6 @@ function SettingsDialog({
 
 export default function Bitfocus() {
     const [settings, setSettings] = useState<BitfocusSettings>({
-        companionUrl: '',
         customAdUrl: '',
     });
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -893,7 +874,6 @@ export default function Bitfocus() {
                         />
                         <Button
                             icon={<ExportOutlined />}
-                            disabled={!settings.companionUrl}
                             onClick={() => send('bitfocus:openCompanion')}
                         >
                             Companion
