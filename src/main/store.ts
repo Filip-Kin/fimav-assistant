@@ -35,8 +35,8 @@ export type AppConfig = {
         // FMS event code the name was last auto-filled from. The name is only
         // replaced again when FMS reports a different code, so a hand edit
         // sticks for the rest of the event.
-        lastFmsEventCode: string;
-        lastFtcEventCode: string;
+        // program:code of the event last seen (see AutoAV.noteEvent)
+        lastEventKey: string;
         // Destination folder for renamed match videos; blank = alongside the
         // vMix recording
         saveFolder: string;
@@ -49,11 +49,11 @@ export type AppConfig = {
     };
     // FRC / FTC override from Settings; 'auto' follows detection.
     program: 'auto' | 'frc' | 'ftc';
-    // Bitfocus tab: which audience display's triggers the tab edits. Both
-    // Companion and the custom display run on this machine.
-    bitfocus: {
-        triggerSource: 'fms' | 'customAd' | 'ftc';
-    };
+    // FRC off-season: which audience display is used, the official FMS one
+    // or our custom one (Settings; back to 'fms' on every new event). It
+    // decides whether the custom display runs, which display the vMix input
+    // shows and whose Bitfocus triggers the tab edits.
+    frcAudienceDisplay: 'fms' | 'customAd';
     // FTC Live scorekeeper: where it is, which event, and the Bitfocus
     // triggers FIM-AV presses for it.
     ftc: {
@@ -195,11 +195,7 @@ export function createStore(): Store<AppConfig> {
                         type: 'string',
                         default: '',
                     },
-                    lastFmsEventCode: {
-                        type: 'string',
-                        default: '',
-                    },
-                    lastFtcEventCode: {
+                    lastEventKey: {
                         type: 'string',
                         default: '',
                     },
@@ -218,15 +214,7 @@ export function createStore(): Store<AppConfig> {
                 },
             },
             program: { type: 'string', default: 'auto' },
-            bitfocus: {
-                type: 'object',
-                properties: {
-                    triggerSource: { type: 'string', default: 'fms' },
-                },
-                default: {
-                    triggerSource: 'fms',
-                },
-            },
+            frcAudienceDisplay: { type: 'string', default: 'fms' },
             ftc: {
                 type: 'object',
                 properties: {

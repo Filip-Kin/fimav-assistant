@@ -20,13 +20,15 @@ const send = (channel: string, ...args: unknown[]) =>
     window.electron?.ipcRenderer.sendMessage(channel, args);
 
 // App-wide settings, opened from "Settings" in the menu bar: FRC / FTC
-// (detected, with an override) and the FTC Live scorekeeper. FTC recording
+// (detected, with an override), the FRC off-season audience display (reset
+// to FMS at each new event) and the FTC Live scorekeeper. FTC recording
 // length lives in Auto AV's settings.
 export default function GlobalSettings() {
     const [open, setOpen] = useState(false);
     const [program, setProgram] = useState<ProgramSetting>('auto');
     const [detected, setDetected] =
         useState<AutoAVStatus['programDetected']>(null);
+    const [frcAd, setFrcAd] = useState<'fms' | 'customAd'>('fms');
     const [address, setAddress] = useState('');
     const [ftcStatus, setFtcStatus] = useState<FtcScorekeeperStatus | null>(
         null
@@ -45,8 +47,15 @@ export default function GlobalSettings() {
                 send('ftc:getState');
                 send('autoav:getState');
             }),
-            ipcRenderer.on('app:settings', (s: { program: ProgramSetting }) =>
-                setProgram(s.program)
+            ipcRenderer.on(
+                'app:settings',
+                (s: {
+                    program: ProgramSetting;
+                    frcAudienceDisplay: 'fms' | 'customAd';
+                }) => {
+                    setProgram(s.program);
+                    setFrcAd(s.frcAudienceDisplay);
+                }
             ),
             ipcRenderer.on('ftc:settings', (s: FtcSettings) => {
                 setAddress(s.address);
@@ -77,7 +86,7 @@ export default function GlobalSettings() {
     };
 
     const save = () => {
-        send('app:saveSettings', { program });
+        send('app:saveSettings', { program, frcAudienceDisplay: frcAd });
         if (program !== 'frc') {
             send('ftc:saveSettings', { address });
         }
@@ -113,6 +122,21 @@ export default function GlobalSettings() {
                         ]}
                     />
                 </Form.Item>
+                {program !== 'ftc' && (
+                    <Form.Item label="FRC audience display">
+                        <Select
+                            value={frcAd}
+                            onChange={setFrcAd}
+                            options={[
+                                { value: 'fms', label: 'FMS' },
+                                {
+                                    value: 'customAd',
+                                    label: 'Custom AD (off-season)',
+                                },
+                            ]}
+                        />
+                    </Form.Item>
+                )}
                 {program !== 'frc' && (
                     <Form.Item label="FTC scorekeeper">
                         <Space.Compact style={{ width: '100%' }}>

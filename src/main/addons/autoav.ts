@@ -37,14 +37,14 @@ import { invokeExpectResponse, invokeLog } from '../window_components/signalR';
 
 // Events AutoAV emits to the renderer: a human status line, a structured
 // status snapshot, a single match-record upsert, and the full match list for
-// the current event folder, plus a notice that the event name was auto-filled
-// from FMS (so the settings dialog can reload it).
+// the current event folder, plus eventChanged when the field system (FMS or
+// the FTC scorekeeper) moves to a different event (see noteEvent).
 export type AutoAVEvent =
     | 'info'
     | 'status'
     | 'match'
     | 'matches'
-    | 'eventNameChanged';
+    | 'eventChanged';
 
 export default class AutoAV {
     private static instance: AutoAV;
@@ -89,6 +89,7 @@ export default class AutoAV {
         ftcConnected: false,
         program: 'frc',
         programDetected: null,
+        frcAudienceDisplay: 'fms',
         sampleFileName: '',
         lastMessage: null,
     };
@@ -358,14 +359,7 @@ export default class AutoAV {
             this.emitStatus();
             return;
         }
-        const store = getStore();
-        if (s.eventCode !== store.get('autoAv.lastFtcEventCode', '')) {
-            const name = s.eventName || s.eventCode;
-            store.set('autoAv.lastFtcEventCode', s.eventCode);
-            store.set('autoAv.eventNameOverride', name);
-            this.log(`FTC event is now ${s.eventCode}; event name "${name}"`);
-            this.emitter.emit('eventNameChanged', name);
-        }
+        this.noteEvent('ftc', s.eventCode, s.eventName || s.eventCode);
         if (!this.currentEvent || this.currentEvent.code === s.eventCode) {
             this.currentEvent = {
                 ...(this.currentEvent ?? {}),
@@ -764,6 +758,15 @@ export default class AutoAV {
         return !this.isFtc() && this.isOffSeason();
     }
 
+    // The custom audience display runs at FRC off-season events when it is
+    // the chosen display in Settings.
+    public runsCustomAd(): boolean {
+        return (
+            this.isFrcOffSeason() &&
+            getStore().get('frcAudienceDisplay', 'fms') === 'customAd'
+        );
+    }
+
     // The YouTube uploader runs at FTC events in either season and at FRC
     // off-season events.
     public runsUploader(): boolean {
@@ -811,6 +814,10 @@ export default class AutoAV {
             override === 'frc' || override === 'ftc'
                 ? override
                 : detected ?? this.status.program;
+        this.status.frcAudienceDisplay =
+            store.get('frcAudienceDisplay', 'fms') === 'customAd'
+                ? 'customAd'
+                : 'fms';
         this.status.fileNameModeForced =
             typeof this.currentEvent?.isOfficial === 'boolean';
         this.status.sampleFileName = sampleFileName(
@@ -885,19 +892,28 @@ export default class AutoAV {
     private async checkFmsEvent() {
         const info = await FmsApi.Instance.getEventInfo();
         if (!info) return;
-        const store = getStore();
-        if (info.eventCode === store.get('autoAv.lastFmsEventCode', '')) return;
+        this.noteEvent('frc', info.eventCode, info.eventName || info.eventCode);
+    }
 
-        const name = info.eventName || info.eventCode;
-        const previous = store.get('autoAv.eventNameOverride', '');
-        store.set('autoAv.lastFmsEventCode', info.eventCode);
+    // The one place a new event is detected. Both field systems report their
+    // event here (FMS through checkFmsEvent, the FTC scorekeeper through
+    // onFtcStatus). A different program:code than last time is a new event:
+    // the event name is refilled from the field system, per-event choices go
+    // back to their defaults (the FRC audience display to the official FMS
+    // display), and eventChanged tells everything else. The same event again
+    // changes nothing, so a volunteer's hand edits survive until the next one.
+    private noteEvent(program: Program, code: string, name: string) {
+        const store = getStore();
+        const key = `${program}:${code}`;
+        if (key === store.get('autoAv.lastEventKey', '')) return;
+        const previous = store.get('autoAv.lastEventKey', '');
+        store.set('autoAv.lastEventKey', key);
         store.set('autoAv.eventNameOverride', name);
-        this.log(
-            `FMS event is now ${info.eventCode}; event name "${previous}" -> "${name}"`
-        );
+        store.set('frcAudienceDisplay', 'fms');
+        this.log(`Event is now ${key} (was ${previous || 'none'}): "${name}"`);
         this.emitStatus();
         this.emitMatches();
-        this.emitter.emit('eventNameChanged', name);
+        this.emitter.emit('eventChanged', { program, code, name });
     }
 
     // Read vMix's configured recording folder from its .NET user.config (the

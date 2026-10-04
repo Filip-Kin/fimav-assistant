@@ -21,8 +21,8 @@ import AutoAV from './autoav';
 // (audience-display-<version>.exe) from the GitHub releases into the app's
 // userData dir, keeps the newest one, and updates on launch. The exe's own
 // auto-update is turned off (AUTO_UPDATE=0) so this addon stays the one thing
-// that decides which version runs. It is an off-season feature: in-season the
-// FMS audience display is used, so start() refuses.
+// that decides which version runs. It runs only at FRC off-season events with
+// "Custom AD" picked in Settings; otherwise start() refuses.
 export default class AudienceDisplayAddon {
     private static instance: AudienceDisplayAddon;
 
@@ -138,11 +138,10 @@ export default class AudienceDisplayAddon {
     public async start(): Promise<boolean> {
         this.killExisting();
 
-        // The custom display is an FRC off-season feature.
-        if (!AutoAV.Instance.isFrcOffSeason()) {
-            this.logs.out.log(
-                'Not an FRC off-season event; audience display off'
-            );
+        // The custom display runs at FRC off-season events when Settings
+        // picks it over the official FMS display.
+        if (!AutoAV.Instance.runsCustomAd()) {
+            this.logs.out.log('Custom audience display not selected; off');
             this.running = false;
             return false;
         }

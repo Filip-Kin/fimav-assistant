@@ -130,8 +130,9 @@ flowchart LR
 FIM-AV asks FMS `GetEventInfo` every 30 s. `isOfficial` true = in-season (short file names, FMS
 audience display, no uploader, no cutting). `isOfficial` false = off-season (readable file names,
 custom audience display, uploader, cutting, Upload and Offseason AD tabs). No FMS answer = the
-stored fallback. The Bitfocus tab's trigger source (FMS display vs custom display) is a separate
-setting.
+stored fallback. At FRC off-season events the audience display (FMS or custom) is a choice in
+Settings; it goes back to FMS whenever a new event is detected (`AutoAV.noteEvent`, the one place
+FMS and FTC events are compared with the last one).
 
 ## FTC today
 

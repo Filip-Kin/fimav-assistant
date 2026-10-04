@@ -18,6 +18,9 @@ export interface AutoAVStatus {
     program: Program;
     // What detection alone says, or null when neither answers
     programDetected: Program | null;
+    // FRC off-season audience display (Settings): the official FMS display or
+    // our custom one. In-season it is always the FMS display.
+    frcAudienceDisplay: 'fms' | 'customAd';
     // vMix reachability + whether it is currently recording
     vmix: { reachable: boolean; recording: boolean };
     // Whether AutoAV itself kicked off the current recording

@@ -484,10 +484,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
                 name: 'Scoring',
             };
         }
-        const customAd =
-            AutoAV.Instance.isFrcOffSeason() &&
-            store.get('bitfocus', { triggerSource: 'fms' }).triggerSource ===
-                'customAd';
+        const customAd = AutoAV.Instance.runsCustomAd();
         return {
             url: customAd
                 ? 'http://127.0.0.1:3001/display'
@@ -683,22 +680,6 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     // #region Bitfocus tab
 
-    const bitfocusSettings = () =>
-        store.get('bitfocus', { triggerSource: 'fms' as const });
-
-    ipcMain.on('bitfocus:getSettings', (event) => {
-        event.reply('bitfocus:settings', bitfocusSettings());
-    });
-
-    ipcMain.on('bitfocus:saveSettings', (event, [settings]) => {
-        store.set('bitfocus', {
-            triggerSource: ['customAd', 'ftc'].includes(settings?.triggerSource)
-                ? settings.triggerSource
-                : 'fms',
-        });
-        event.reply('bitfocus:settings', bitfocusSettings());
-    });
-
     // Every Bitfocus request answers on one channel with {op, ok, data|error},
     // so the tab can show each failure next to the part it belongs to.
     const bitfocusReply = async (
@@ -850,7 +831,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         uploader: AutoAV.Instance.runsUploader()
             ? AutoAV.Instance.getStatus().program
             : false,
-        display: AutoAV.Instance.isFrcOffSeason(),
+        display: AutoAV.Instance.runsCustomAd(),
     });
     let running = wanted();
     AutoAV.Instance.on('status', () => {
@@ -870,18 +851,33 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         running = next;
     });
 
-    // Global Settings (menu bar): FRC/FTC override. The FTC scorekeeper
-    // address lives on the ftc:* channels.
+    // Global Settings (menu bar): FRC/FTC override and the FRC off-season
+    // audience display. The FTC scorekeeper address lives on the ftc:*
+    // channels.
+    const appSettings = () => ({
+        program: store.get('program', 'auto'),
+        frcAudienceDisplay: store.get('frcAudienceDisplay', 'fms'),
+    });
+
     ipcMain.on('app:getSettings', (event) => {
-        event.reply('app:settings', { program: store.get('program', 'auto') });
+        event.reply('app:settings', appSettings());
     });
 
     ipcMain.on('app:saveSettings', (event, [s]) => {
         if (['auto', 'frc', 'ftc'].includes(s?.program)) {
             store.set('program', s.program);
-            AutoAV.Instance.applySettings();
         }
-        event.reply('app:settings', { program: store.get('program', 'auto') });
+        if (['fms', 'customAd'].includes(s?.frcAudienceDisplay)) {
+            store.set('frcAudienceDisplay', s.frcAudienceDisplay);
+        }
+        // Re-emits status, which starts or stops the custom display.
+        AutoAV.Instance.applySettings();
+        event.reply('app:settings', appSettings());
+    });
+
+    // The Offseason AD tab opens Settings when the custom display is off.
+    ipcMain.on('app:requestOpenSettings', () => {
+        window?.webContents.send('app:openSettings');
     });
 
     // #region Offseason AD tab (custom audience display)
@@ -1078,10 +1074,11 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         autoCut: store.get('autoAv.autoCut', false),
     });
 
-    // FMS moved to a new event and AutoAV filled in its name: refresh an open
-    // settings dialog so it doesn't save the old name back.
-    AutoAV.Instance.on('eventNameChanged', () => {
+    // A new event refilled the event name and reset the audience display:
+    // refresh open settings dialogs so they don't save the old values back.
+    AutoAV.Instance.on('eventChanged', () => {
         window?.webContents.send('autoav:settings', autoAvSettings());
+        window?.webContents.send('app:settings', appSettings());
     });
 
     ipcMain.on('autoav:getSettings', (event) => {

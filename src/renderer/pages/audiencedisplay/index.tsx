@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Empty, Modal, message } from 'antd';
+import { Button, Empty, Modal, message } from 'antd';
+import { AutoAVStatus } from 'models/AutoAVStatus';
 import AddonControlRow from '../../components/AddonControlRow';
 import './index.css';
 
@@ -14,6 +15,8 @@ const PAGE_URL = 'http://127.0.0.1:3001/';
 export default function AudienceDisplayPage() {
     const [status, setStatus] = useState<AudienceDisplayStatus | null>(null);
     const [busy, setBusy] = useState(false);
+    // The custom display only runs when Settings picks it over the FMS one.
+    const [selected, setSelected] = useState(false);
 
     useEffect(() => {
         if (!window.electron) return undefined;
@@ -25,12 +28,17 @@ export default function AudienceDisplayPage() {
                 setBusy(false);
             }
         );
+        const offAutoav = ipcRenderer.on('autoav:status', (s: AutoAVStatus) =>
+            setSelected(s.frcAudienceDisplay === 'customAd')
+        );
+        ipcRenderer.sendMessage('autoav:getState', []);
         const poll = () =>
             ipcRenderer.sendMessage('audienceDisplay:getStatus', []);
         poll();
         const timer = setInterval(poll, 3000);
         return () => {
             off();
+            offAutoav();
             clearInterval(timer);
         };
     }, []);
@@ -88,13 +96,30 @@ export default function AudienceDisplayPage() {
                 onStart={restart}
                 onRestart={restart}
                 onStop={stop}
-                busy={busy}
+                busy={busy || !selected}
             />
             <div className="ad-frame">
-                {running ? (
-                    <iframe title="Audience display" src={PAGE_URL} />
-                ) : (
+                {running && <iframe title="Audience display" src={PAGE_URL} />}
+                {!running && selected && (
                     <Empty description="Stopped" style={{ marginTop: 64 }} />
+                )}
+                {!running && !selected && (
+                    <Empty
+                        description="Custom AD off in Settings"
+                        style={{ marginTop: 64 }}
+                    >
+                        <Button
+                            type="primary"
+                            onClick={() =>
+                                window.electron?.ipcRenderer.sendMessage(
+                                    'app:requestOpenSettings',
+                                    []
+                                )
+                            }
+                        >
+                            Settings
+                        </Button>
+                    </Empty>
                 )}
             </div>
         </div>

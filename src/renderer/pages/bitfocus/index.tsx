@@ -50,13 +50,9 @@ import './index.css';
 
 const { Text } = Typography;
 
-// Which audience display's triggers the tab edits: the official FMS display
-// (in-season) or our custom one (off-season). Both run on this machine.
+// Whose triggers the tab edits: the FTC scorekeeper, the official FMS
+// audience display, or our custom one (FRC off-season, picked in Settings).
 type TriggerSource = 'fms' | 'customAd' | 'ftc';
-
-interface BitfocusSettings {
-    triggerSource: TriggerSource;
-}
 
 // An FMS trigger is a BitfocusStateTypes number; a custom AD trigger is its
 // event id string.
@@ -522,9 +518,7 @@ function ButtonGrid({
 
 function SettingsDialog({
     open,
-    program,
-    offSeason,
-    settings,
+    source,
     fms,
     customAd,
     ftc,
@@ -533,9 +527,7 @@ function SettingsDialog({
     onClose,
 }: {
     open: boolean;
-    program: Program;
-    offSeason: boolean;
-    settings: BitfocusSettings;
+    source: TriggerSource;
     fms: FmsAutomationConfig | null;
     customAd: CustomAdState | null;
     ftc: FtcSettings | null;
@@ -543,34 +535,18 @@ function SettingsDialog({
     onSaveCustomAd: (_c: CustomAdConfig) => void;
     onClose: () => void;
 }) {
-    // FTC events have one trigger source; FRC picks the audience display.
-    const frcSource = (src: TriggerSource): TriggerSource =>
-        src === 'ftc' ? 'fms' : src;
-    const [source, setSource] = useState<TriggerSource>('fms');
     const [automations, setAutomations] = useState(false);
 
-    const enabledFor = (src: TriggerSource) => {
-        if (src === 'fms') return fms?.BitfocusIntegrationEnabled ?? false;
-        if (src === 'customAd') return customAd?.config.enabled ?? false;
-        return ftc?.automations ?? true;
-    };
-    const loaded = (src: TriggerSource) => {
-        if (src === 'fms') return fms !== null;
-        if (src === 'customAd') return customAd !== null;
-        return ftc !== null;
-    };
+    let enabled = ftc?.automations ?? true;
+    if (source === 'fms') enabled = fms?.BitfocusIntegrationEnabled ?? false;
+    else if (source === 'customAd') enabled = customAd?.config.enabled ?? false;
+    let loaded = ftc !== null;
+    if (source === 'fms') loaded = fms !== null;
+    else if (source === 'customAd') loaded = customAd !== null;
 
     useEffect(() => {
-        if (open) {
-            let src: TriggerSource = frcSource(settings.triggerSource);
-            if (program === 'ftc') src = 'ftc';
-            else if (!offSeason) src = 'fms';
-            setSource(src);
-            setAutomations(enabledFor(src));
-        }
-        // enabledFor reads fms/customAd/ftc, which are deps here already.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open, program, offSeason, settings, fms, customAd, ftc]);
+        if (open) setAutomations(enabled);
+    }, [open, enabled]);
 
     return (
         <Modal
@@ -581,26 +557,17 @@ function SettingsDialog({
             onOk={() => {
                 if (source === 'ftc') {
                     send('ftc:saveSettings', { automations });
-                } else {
-                    // In-season the source is fixed, so keep the stored
-                    // off-season choice.
-                    if (offSeason) {
-                        send('bitfocus:saveSettings', {
-                            triggerSource: source,
+                } else if (loaded && automations !== enabled) {
+                    if (source === 'fms' && fms) {
+                        onSaveFms({
+                            ...fms,
+                            BitfocusIntegrationEnabled: automations,
                         });
-                    }
-                    if (loaded(source) && automations !== enabledFor(source)) {
-                        if (source === 'fms' && fms) {
-                            onSaveFms({
-                                ...fms,
-                                BitfocusIntegrationEnabled: automations,
-                            });
-                        } else if (customAd) {
-                            onSaveCustomAd({
-                                ...customAd.config,
-                                enabled: automations,
-                            });
-                        }
+                    } else if (customAd) {
+                        onSaveCustomAd({
+                            ...customAd.config,
+                            enabled: automations,
+                        });
                     }
                 }
                 onClose();
@@ -608,24 +575,6 @@ function SettingsDialog({
             destroyOnClose
         >
             <Form layout="vertical">
-                {program === 'frc' && offSeason && (
-                    <Form.Item label="Triggers">
-                        <Select
-                            value={source}
-                            options={[
-                                {
-                                    value: 'fms',
-                                    label: 'FMS audience display',
-                                },
-                                { value: 'customAd', label: 'Custom AD' },
-                            ]}
-                            onChange={(v: TriggerSource) => {
-                                setSource(v);
-                                setAutomations(enabledFor(v));
-                            }}
-                        />
-                    </Form.Item>
-                )}
                 <Form.Item
                     label={
                         {
@@ -635,7 +584,7 @@ function SettingsDialog({
                         }[source]
                     }
                 >
-                    {loaded(source) ? (
+                    {loaded ? (
                         <Switch
                             checked={automations}
                             onChange={setAutomations}
@@ -652,9 +601,6 @@ function SettingsDialog({
 // #endregion
 
 export default function Bitfocus() {
-    const [settings, setSettings] = useState<BitfocusSettings>({
-        triggerSource: 'fms',
-    });
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [layout, setLayout] = useState<CompanionLayout | null>(null);
     const [layoutError, setLayoutError] = useState<string | null>(null);
@@ -682,6 +628,7 @@ export default function Bitfocus() {
     const [ftc, setFtc] = useState<FtcSettings | null>(null);
     const [program, setProgram] = useState<Program>('frc');
     const [offSeason, setOffSeason] = useState(false);
+    const [frcAd, setFrcAd] = useState<'fms' | 'customAd'>('fms');
     const [ftcStatus, setFtcStatus] = useState<FtcScorekeeperStatus | null>(
         null
     );
@@ -699,13 +646,6 @@ export default function Bitfocus() {
     useEffect(() => {
         if (!window.electron) return undefined;
         const { ipcRenderer } = window.electron;
-        const offSettings = ipcRenderer.on(
-            'bitfocus:settings',
-            (s: BitfocusSettings) => {
-                setSettings(s);
-                loadAll();
-            }
-        );
         const offResult = ipcRenderer.on('bitfocus:result', (r: Result) => {
             if (
                 r.op === 'layout' ||
@@ -775,13 +715,13 @@ export default function Bitfocus() {
             (st: AutoAVStatus) => {
                 setProgram(st.program);
                 setOffSeason(st.fileNameMode === 'off-season');
+                setFrcAd(st.frcAudienceDisplay);
             }
         );
         send('autoav:getState');
-        send('bitfocus:getSettings');
+        loadAll();
         return () => {
             offAutoav();
-            offSettings();
             offResult();
             offFtc();
             offFtcStatus();
@@ -843,13 +783,11 @@ export default function Bitfocus() {
         });
     };
 
-    // Triggers: FTC events use the scorekeeper; FRC uses the audience
-    // display chosen in settings.
     // FTC: the scorekeeper. FRC in-season: the FMS audience display only.
-    // FRC off-season: the audience display chosen in settings.
-    let { triggerSource } = settings;
+    // FRC off-season: the audience display chosen in Settings.
+    let triggerSource: TriggerSource = 'fms';
     if (program === 'ftc') triggerSource = 'ftc';
-    else if (!offSeason || triggerSource === 'ftc') triggerSource = 'fms';
+    else if (offSeason && frcAd === 'customAd') triggerSource = 'customAd';
     const ftcFields = ftcStatus?.connected ? ftcStatus.fieldCount : 2;
     let triggerOptions: TriggerOption[] | null = null;
     if (triggerSource === 'fms') triggerOptions = fms && FMS_BITFOCUS_EVENTS;
@@ -1016,9 +954,7 @@ export default function Bitfocus() {
             />
             <SettingsDialog
                 open={settingsOpen}
-                program={program}
-                offSeason={offSeason}
-                settings={settings}
+                source={triggerSource}
                 fms={fms}
                 customAd={customAd}
                 ftc={ftc}
