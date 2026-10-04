@@ -14,6 +14,7 @@ import {
     Switch,
     Tabs,
     Tag,
+    Tooltip,
     Typography,
     message,
 } from 'antd';
@@ -203,29 +204,31 @@ function ActionRow({
             {def?.fields.map((f) => {
                 const v = action.options[f.key];
                 if (f.type === 'vmixInput') {
+                    // Red, with a tooltip, when vMix has no input by that
+                    // name (only once vMix has answered with its inputs).
+                    const missing =
+                        !!v &&
+                        vmixInputs.length > 0 &&
+                        !vmixInputs.includes(v as string);
                     return (
-                        <AutoComplete
+                        <Tooltip
                             key={f.key}
-                            style={{ flex: 1, minWidth: 0 }}
-                            // Red when vMix has no input by that name (only
-                            // once vMix has answered with its inputs).
-                            status={
-                                v &&
-                                vmixInputs.length > 0 &&
-                                !vmixInputs.includes(v as string)
-                                    ? 'error'
-                                    : undefined
-                            }
-                            placeholder={f.label}
-                            value={(v as string) ?? ''}
-                            options={vmixInputs.map((i) => ({ value: i }))}
-                            filterOption={(input, o) =>
-                                String(o?.value ?? '')
-                                    .toLowerCase()
-                                    .includes(input.toLowerCase())
-                            }
-                            onChange={(x) => setOpt(f.key, x)}
-                        />
+                            title={missing ? 'Not an input in vMix' : undefined}
+                        >
+                            <AutoComplete
+                                style={{ flex: 1, minWidth: 0 }}
+                                status={missing ? 'error' : undefined}
+                                placeholder={f.label}
+                                value={(v as string) ?? ''}
+                                options={vmixInputs.map((i) => ({ value: i }))}
+                                filterOption={(input, o) =>
+                                    String(o?.value ?? '')
+                                        .toLowerCase()
+                                        .includes(input.toLowerCase())
+                                }
+                                onChange={(x) => setOpt(f.key, x)}
+                            />
+                        </Tooltip>
                     );
                 }
                 if (f.type === 'select') {
