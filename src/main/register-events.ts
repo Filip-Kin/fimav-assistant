@@ -866,6 +866,21 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         running = next;
     });
 
+    // The uploader starts an event's scan and upload loops on the first
+    // request that names the event. Without this, uploads waited until someone
+    // opened the Upload tab (its polling was the first request). Asking every
+    // 15 s also covers an uploader restart and a new event.
+    setInterval(() => {
+        const eventKey = AutoAV.Instance.getStatus().currentEvent?.code ?? '';
+        if (!eventKey || !YoutubeUploaderAddon.Instance.isRunning()) return;
+        fetch(
+            `http://localhost:8807/api/upload/state?event_key=${encodeURIComponent(
+                eventKey
+            )}`,
+            { signal: AbortSignal.timeout(3000) }
+        ).catch(() => undefined);
+    }, 15000);
+
     // Global Settings (menu bar): FRC/FTC override and the FRC off-season
     // audience display. The FTC scorekeeper address lives on the ftc:*
     // channels.
