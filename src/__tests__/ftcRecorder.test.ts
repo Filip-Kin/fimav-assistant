@@ -131,7 +131,7 @@ describe('FTC recorder', () => {
                 out: '2026 Test - Q1.mp4',
                 p: [
                     ['raw capture1.mp4', 0, 163],
-                    ['raw capture1.mp4', 199, 17],
+                    ['raw capture1.mp4', 200, 16],
                 ],
             },
         ]);
@@ -161,14 +161,14 @@ describe('FTC recorder', () => {
                 out: '2026 Test - Q1.mp4',
                 p: [
                     ['raw capture1.mp4', 0, 163],
-                    ['raw capture1.mp4', 189, 17],
+                    ['raw capture1.mp4', 190, 16],
                 ],
             },
             {
                 out: '2026 Test - Q2.mp4',
                 p: [
                     ['raw capture1.mp4', 179, 164],
-                    ['raw capture1.mp4', 399, 17],
+                    ['raw capture1.mp4', 400, 16],
                 ],
             },
         ]);
@@ -227,7 +227,7 @@ describe('FTC recorder', () => {
                 out: '2026 Test - Q1.mp4',
                 p: [
                     ['raw capture2.mp4', 0, 163],
-                    ['raw capture2.mp4', 208, 17],
+                    ['raw capture2.mp4', 209, 16],
                 ],
             },
         ]);
@@ -267,7 +267,7 @@ describe('FTC recorder', () => {
                 out: '2026 Test - Q1.mp4',
                 p: [
                     ['raw capture1.mp4', 0, 163],
-                    ['raw capture1.mp4', 169, 17],
+                    ['raw capture1.mp4', 170, 16],
                 ],
             },
         ]);

@@ -26,7 +26,7 @@ import { getStore } from '../store';
 // cut out of whichever raw files cover two windows:
 //
 //   play    Match Start - 1 s  ->  Match Start + match length + tail
-//   reveal  MATCH_POST - 1 s   ->  MATCH_POST + 16 s
+//   reveal  MATCH_POST         ->  MATCH_POST + 16 s
 //
 // Recording runs while anything still needs it: a match in play or waiting for
 // its scores (up to RECORD_WAIT_MS), or an open reveal or abort window. So in
@@ -490,7 +490,9 @@ export default class FtcRecorder {
             r.playEnd,
         ];
         if (r.post !== null) {
-            const from = Math.max(r.post - LEAD_SECONDS * 1000, r.playEnd);
+            // No lead here: the second before a post still shows the
+            // previous screen (another match's results or timer).
+            const from = Math.max(r.post, r.playEnd);
             return [play, [from, r.post + REVEAL_SECONDS * 1000]];
         }
         if (r.gaveUp) return [play];
