@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Badge } from 'antd';
 import {
     BellOutlined,
+    SafetyCertificateOutlined,
     AppstoreOutlined,
     DesktopOutlined,
     MessageOutlined,
@@ -13,6 +14,8 @@ import {
 } from '@ant-design/icons';
 import AlertsResponse from 'models/AlertsResponse';
 import { AutoAVStatus } from 'models/AutoAVStatus';
+import { isAlerting } from 'models/Checks';
+import useChecks from '../hooks/checks';
 import './TabBar.css';
 
 interface TabDef {
@@ -30,6 +33,12 @@ const tabs: TabDef[] = [
         label: 'Setup',
         icon: <SettingOutlined />,
         isActive: (p) => p === '/' || p.startsWith('/step'),
+    },
+    {
+        key: '/checks',
+        label: 'Checks',
+        icon: <SafetyCertificateOutlined />,
+        isActive: (p) => p.startsWith('/checks'),
     },
     {
         key: '/vmix',
@@ -91,6 +100,16 @@ export default function TabBar() {
         return off;
     }, []);
 
+    const alerting = (useChecks() ?? []).some(isAlerting);
+
+    // A click on a check notification opens its page.
+    useEffect(() => {
+        if (!window.electron) return undefined;
+        return window.electron.ipcRenderer.on('app:navigate', (to: string) =>
+            nav(to)
+        );
+    }, [nav]);
+
     const shown = (t: TabDef) => !t.showIf || (!!status && t.showIf(status));
 
     // Leave a page whose tab no longer applies (event turned in-season, or
@@ -135,7 +154,15 @@ export default function TabBar() {
                         }`}
                         onClick={() => nav(t.key)}
                     >
-                        <span className="tab-icon">{t.icon}</span>
+                        <span className="tab-icon">
+                            {t.key === '/checks' ? (
+                                <Badge dot={alerting} offset={[2, -2]}>
+                                    {t.icon}
+                                </Badge>
+                            ) : (
+                                t.icon
+                            )}
+                        </span>
                         <span>{t.label}</span>
                     </button>
                 );

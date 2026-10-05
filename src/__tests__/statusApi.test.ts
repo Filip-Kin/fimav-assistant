@@ -61,6 +61,10 @@ jest.mock('../main/bitfocus', () => ({
     readCustomAd: jest.fn(),
     readFmsAutomation: jest.fn(),
 }));
+jest.mock('../main/checks/engine', () => ({
+    __esModule: true,
+    default: { Instance: { list: () => [] } },
+}));
 jest.mock('../main/store', () => ({
     getStore: () => ({ get: (_k: string, d: unknown) => d }),
 }));
@@ -179,6 +183,7 @@ describe('status API', () => {
             [
                 'autoav',
                 'captions',
+                'checks',
                 'companion',
                 'display',
                 'ftc',

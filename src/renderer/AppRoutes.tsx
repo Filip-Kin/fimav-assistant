@@ -1,4 +1,5 @@
 import { HashRouter, Routes, Route } from 'react-router-dom';
+import Checks from './pages/checks';
 import HWCheck from './pages/hwcheck';
 import Welcome from './pages/welcome';
 import InternetSetup from './pages/internet_setup';
@@ -25,6 +26,7 @@ function AppRoutes() {
             <Route path="/bitfocus" element={<Bitfocus />} />
             <Route path="/audiencedisplay" element={<AudienceDisplay />} />
             <Route path="/vmix" element={<Vmix />} />
+            <Route path="/checks" element={<Checks />} />
             <Route path="/livecaptions" element={<LiveCaptions />} />
 
             {/* Each Step should be defined here, and each step handles itself. Use this to rearrange steps */}

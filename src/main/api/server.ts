@@ -16,6 +16,7 @@ import {
     readFmsAutomation,
 } from '../bitfocus';
 import { getStore } from '../store';
+import Checks from '../checks/engine';
 
 // Read-only status API on the LAN, one endpoint per subsystem, for Companion
 // or anything else on the cart network to poll. No auth by design: every
@@ -68,6 +69,8 @@ function localIpv4() {
 
 export default function startStatusApi(sources: StatusApiSources) {
     const routes: Record<string, () => Promise<unknown> | unknown> = {
+        // Stream and audio checks (the Checks tab).
+        checks: () => Checks.Instance.list(),
         network: () => ({
             ...HWPing.Instance.currentStatus,
             interfaces: localIpv4(),

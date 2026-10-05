@@ -53,6 +53,8 @@ export type AppConfig = {
     // decides whether the custom display runs, which display the vMix input
     // shows and whose Bitfocus triggers the tab edits.
     frcAudienceDisplay: 'fms' | 'customAd';
+    // Stream checks: check id -> epoch ms until which "Ignore 6 h" holds.
+    checks: { ignoredUntil: Record<string, number> };
     // FTC Live scorekeeper: where it is, which event, and the Bitfocus
     // triggers FIM-AV presses for it.
     ftc: {
@@ -205,6 +207,13 @@ export function createStore(): Store<AppConfig> {
             },
             program: { type: 'string', default: 'auto' },
             frcAudienceDisplay: { type: 'string', default: 'fms' },
+            checks: {
+                type: 'object',
+                properties: {
+                    ignoredUntil: { type: 'object', default: {} },
+                },
+                default: { ignoredUntil: {} },
+            },
             ftc: {
                 type: 'object',
                 properties: {

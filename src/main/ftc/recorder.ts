@@ -16,6 +16,7 @@ import {
     waitForFinishedVideo,
 } from '../cutMatch';
 import { getStore } from '../store';
+import { queueLoudness } from '../checks/loudness';
 
 // FTC match recording. Every match video is the match itself plus its score
 // reveal, with the dead time between cut out. In-season and off-season are the
@@ -671,6 +672,9 @@ export default class FtcRecorder {
                     processing: { state: 'done', outputPath: target },
                 });
                 if (done) this.host.record(done);
+                queueLoudness(folder, r.id, target, (rec) =>
+                    this.host.record(rec)
+                );
                 this.host.log(
                     `${fileName}${wins.length > 1 ? '' : ' (no scores posted)'}`
                 );
@@ -686,6 +690,18 @@ export default class FtcRecorder {
                 this.host.log(`Could not make ${fileName}: ${e?.message ?? e}`);
             }
         });
+    }
+
+    // The match being played right now (start to start + match length), or
+    // null. An aborted match is not in play.
+    public inPlay(): { shortName: string; level: string } | null {
+        const now = Date.now();
+        const r = [...(this.tl?.runs ?? [])]
+            .reverse()
+            .find(
+                (x) => x.start <= now && now < x.playEnd && x.abortAt === null
+            );
+        return r ? { shortName: r.shortName, level: r.level } : null;
     }
 
     // For the status API: whether vMix is recording for FTC, matches still

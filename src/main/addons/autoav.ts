@@ -33,6 +33,7 @@ import {
     listMatches,
 } from '../recordings/matchStore';
 import cutMatchVideo, { enqueueCut } from '../cutMatch';
+import { queueLoudness } from '../checks/loudness';
 import { getStore } from '../store';
 import { invokeExpectResponse, invokeLog } from '../window_components/signalR';
 
@@ -216,7 +217,12 @@ export default class AutoAV {
                             getStore().get('autoAv.autoCut', false) &&
                             hasCard !== true
                         ) {
+                            // Loudness is measured once the cut is made.
                             this.queueCut(saveFolder, recordId);
+                        } else {
+                            queueLoudness(saveFolder, recordId, filename, (r) =>
+                                this.emitter.emit('match', r)
+                            );
                         }
                     }
                 } catch (err: any) {
@@ -335,6 +341,31 @@ export default class AutoAV {
         },
         record: (rec) => this.emitter.emit('match', rec),
     });
+
+    // A qualification or playoff match being played right now, FRC or FTC,
+    // for the stream checks; null between matches and for practice/test.
+    public matchInPlay(): { label: string; level: string } | null {
+        if (this.isFtc()) {
+            const m = this.ftcRecorder.inPlay();
+            if (!m || !['Qualification', 'Playoff'].includes(m.level))
+                return null;
+            return { label: m.shortName, level: m.level };
+        }
+        const st = this.lastState;
+        if (
+            !st ||
+            !['Qualification', 'Playoff'].includes(st.Level) ||
+            ![
+                'GameSpecificData',
+                'MatchAuto',
+                'MatchTransition',
+                'MatchTeleop',
+            ].includes(st.MatchState)
+        )
+            return null;
+        const prefix = st.Level === 'Qualification' ? 'Q' : 'P';
+        return { label: `${prefix}${st.MatchNumber}`, level: st.Level };
+    }
 
     public ftcRecorderSummary() {
         return this.ftcRecorder.summary();
@@ -1109,6 +1140,9 @@ export default class AutoAV {
                     processing: { state: 'done', outputPath: mainPath },
                 });
                 if (done) this.emitter.emit('match', done);
+                queueLoudness(folder, recordId, mainPath, (r) =>
+                    this.emitter.emit('match', r)
+                );
                 this.logRecording(
                     `Cut ${path.basename(
                         mainPath

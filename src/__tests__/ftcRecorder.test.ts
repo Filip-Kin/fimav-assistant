@@ -42,6 +42,7 @@ jest.mock('../main/cutMatch', () => ({
     waitForFinishedVideo: jest.fn(async () => true),
     moveVideo: jest.fn(async (a: string, b: string) => fs.renameSync(a, b)),
 }));
+jest.mock('../main/checks/loudness', () => ({ queueLoudness: jest.fn() }));
 jest.mock('../main/store', () => ({
     getStore: () => ({
         get: (k: string, d: unknown) =>

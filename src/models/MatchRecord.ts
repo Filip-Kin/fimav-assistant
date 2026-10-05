@@ -46,6 +46,11 @@ export interface MatchRecord {
     // v2 processing (reserved, not populated this session)
     processing?: MatchProcessing;
 
+    // Loudness of the final video's audio (the stream's Bus A mix), measured
+    // with ffmpeg's ebur128 once the video is final: integrated LUFS and true
+    // peak in dBTP.
+    loudness?: { lufs: number; truePeak: number | null };
+
     // FTC matches: FTC Live's short name and field. Their video is made by the
     // FTC recorder (src/main/ftc/recorder.ts), not cut from one recording.
     ftc?: { shortName: string; field: number };

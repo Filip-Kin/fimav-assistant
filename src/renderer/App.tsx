@@ -7,6 +7,7 @@ import BackendStatusSync from './components/BackendStatusSync';
 import AppFooter from './components/Footer';
 import TabBar from './components/TabBar';
 import GlobalSettings from './components/GlobalSettings';
+import CheckBanner from './components/CheckBanner';
 
 export default function App() {
     const [status, setStatus] = useState<StatusContextType>({
@@ -50,6 +51,7 @@ export default function App() {
                             overflowY: 'auto',
                         }}
                     >
+                        <CheckBanner />
                         <AppRoutes />
                     </div>
                 </AppRouter>

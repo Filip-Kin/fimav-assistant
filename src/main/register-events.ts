@@ -1,10 +1,18 @@
-import { BrowserWindow, dialog, ipcMain, IpcMainEvent, shell } from 'electron';
+import {
+    BrowserWindow,
+    dialog,
+    ipcMain,
+    IpcMainEvent,
+    Notification,
+    shell,
+} from 'electron';
 import fs from 'fs';
 import log from 'electron-log';
 import HWPingResponse, { IpConfigState } from 'models/HWPingResponse';
 import { EquipmentLogCategory, EquipmentLogType } from '../models/EquipmentLog';
 import VmixService from '../services/VmixService';
 import HWCheck, { enableDhcp } from './events/HWCheck';
+import Checks from './checks/engine';
 import Alerts from './events/Alerts';
 import {
     dismissAlert,
@@ -959,6 +967,41 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     });
 
     // The Offseason AD tab opens Settings when the custom display is off.
+    // #region Stream and audio checks
+
+    Checks.Instance.on('checks', (results) => {
+        window?.webContents.send('checks:list', results);
+    });
+    // A check that starts failing (and is not ignored): a Windows
+    // notification, since FIM-AV is often behind vMix. Clicking it brings
+    // FIM-AV forward on the Checks tab.
+    Checks.Instance.on('alert', (r) => {
+        if (!Notification.isSupported()) return;
+        const n = new Notification({
+            title: r.label,
+            body: r.detail,
+            urgency: r.state === 'critical' ? 'critical' : 'normal',
+        });
+        n.on('click', () => {
+            if (window?.isMinimized()) window.restore();
+            window?.focus();
+            window?.webContents.send('app:navigate', '/checks');
+        });
+        n.show();
+    });
+    ipcMain.on('checks:get', (event) => {
+        event.reply('checks:list', Checks.Instance.list());
+    });
+    ipcMain.on('checks:ignore', (_event, [id]) => {
+        if (typeof id === 'string') Checks.Instance.ignore(id);
+    });
+    ipcMain.on('checks:unignore', (_event, [id]) => {
+        if (typeof id === 'string') Checks.Instance.unignore(id);
+    });
+    Checks.Instance.start();
+
+    // #endregion
+
     ipcMain.on('app:requestOpenSettings', () => {
         window?.webContents.send('app:openSettings');
     });

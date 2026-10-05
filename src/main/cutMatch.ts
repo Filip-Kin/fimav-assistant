@@ -15,7 +15,7 @@ export function ffmpegPath(): string {
     return 'ffmpeg';
 }
 
-function run(
+export function run(
     bin: string,
     args: string[]
 ): Promise<{ code: number | null; stderr: string }> {

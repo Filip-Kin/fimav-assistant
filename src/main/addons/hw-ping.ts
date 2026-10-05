@@ -78,6 +78,11 @@ export default class HWPing {
         this.cartNumber = getCartNumberFromHostname();
     }
 
+    // The cart's X-Air mixer (192.168.25.<cart>3), or null off a cart.
+    public mixerAddress(): string | null {
+        return this.cartNumber ? `192.168.25.${this.cartNumber}3` : null;
+    }
+
     public start() {
         // Start HWPing
         this.log('HWPing Service Started');
