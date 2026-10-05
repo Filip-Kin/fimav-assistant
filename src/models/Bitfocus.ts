@@ -74,7 +74,7 @@ export interface ActionDef {
     fixed?: Record<string, string>;
 }
 
-const OVERLAY_FUNCTIONS = [1, 2, 3, 4].flatMap((n) => [
+const OVERLAY_FUNCTIONS = [1, 2, 3, 4, 5, 6, 7, 8].flatMap((n) => [
     { value: `OverlayInput${n}`, label: `Overlay ${n} toggle` },
     { value: `OverlayInput${n}In`, label: `Overlay ${n} in` },
     { value: `OverlayInput${n}Out`, label: `Overlay ${n} out` },

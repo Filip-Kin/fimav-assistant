@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import FtcRecorder from '../main/ftc/recorder';
-import { assembleClips } from '../main/cutMatch';
+import { assembleClips, waitForFinishedVideo } from '../main/cutMatch';
 import { listMatches } from '../main/recordings/matchStore';
 import { FtcUpdate } from '../models/Ftc';
 
@@ -39,6 +39,8 @@ jest.mock('../main/cutMatch', () => ({
     ),
     enqueueCut: jest.fn((task: () => Promise<void>) => task()),
     probeDuration: jest.fn(async () => 100),
+    waitForFinishedVideo: jest.fn(async () => true),
+    moveVideo: jest.fn(async (a: string, b: string) => fs.renameSync(a, b)),
 }));
 jest.mock('../main/store', () => ({
     getStore: () => ({
@@ -218,5 +220,33 @@ describe('FTC recorder', () => {
         expect(vmixRecording).toBe(false);
         expect(vmixFile).toBe(1);
         expect(pieces()).toHaveLength(1);
+    });
+
+    it('a match start is not held up while vMix finishes the last file', async () => {
+        (waitForFinishedVideo as jest.Mock).mockImplementationOnce(
+            () =>
+                new Promise((resolve) => {
+                    setTimeout(() => resolve(true), 30000);
+                })
+        );
+        upd('MATCH_START', 'Q1');
+        await at(170);
+        upd('MATCH_POST', 'Q1');
+        await at(187); // Q1 stopped; its file takes 30 s to finish
+        expect(vmixRecording).toBe(false);
+        upd('MATCH_START', 'Q2');
+        await at(188);
+        expect(vmixRecording).toBe(true);
+        expect(pieces()).toHaveLength(0); // Q1 waits for its file
+        await at(220);
+        expect(pieces()).toEqual([
+            {
+                out: '2026 Test - Q1.mp4',
+                p: [
+                    ['raw capture1.mp4', 0, 163],
+                    ['raw capture1.mp4', 169, 17],
+                ],
+            },
+        ]);
     });
 });

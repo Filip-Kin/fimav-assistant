@@ -3,6 +3,7 @@ import path from 'path';
 import Event from 'models/Event';
 import FMSMatchStatus from 'models/FMSMatchState';
 import { getStore } from '../main/store';
+import { moveVideo, waitForFinishedVideo } from '../main/cutMatch';
 
 export type FileNameMode = 'in-season' | 'off-season';
 
@@ -126,92 +127,50 @@ export default async function attemptRename(
     videoLocation: string | null,
     matchStatus: FMSMatchStatus
 ): Promise<string> {
-    return new Promise((resolve, reject) => {
-        try {
-            // Check if video location exists
-            if (videoLocation === null) {
-                reject(new Error('Video location is null'));
-                return;
-            }
+    // Check if video location exists
+    if (videoLocation === null) {
+        throw new Error('Video location is null');
+    }
 
-            // VMix video location exists
-            if (!fs.existsSync(videoLocation)) {
-                reject(new Error('Video location does not exist'));
-                return;
-            }
+    // VMix video location exists
+    if (!fs.existsSync(videoLocation)) {
+        throw new Error('Video location does not exist');
+    }
 
-            let builder: FileNameMode = getStore().get(
-                'autoAv.fileNameMode',
-                'in-season'
-            );
-            if (event?.isOfficial === false) {
-                builder = 'off-season';
-            } else if (event?.isOfficial === true) {
-                builder = 'in-season';
-            }
+    // vMix finishes the file (its MP4 index) after it reports the recording
+    // stopped; moving it before then leaves an unreadable copy.
+    if (!(await waitForFinishedVideo(videoLocation))) {
+        throw new Error('vMix never finished writing the recording');
+    }
 
-            // Manual overrides from settings: a typed event name always wins,
-            // and an explicit save folder redirects where files land.
-            const nameOverride = getStore()
-                .get('autoAv.eventNameOverride', '')
-                .trim();
-            const saveFolderOverride = getStore()
-                .get('autoAv.saveFolder', '')
-                .trim();
+    // Manual overrides from settings: a typed event name always wins, and an
+    // explicit save folder redirects where files land.
+    const saveFolderOverride = getStore().get('autoAv.saveFolder', '').trim();
+    const effectiveEvent = withNameOverride(event);
+    const newFileName = matchFileName(event, matchStatus);
 
-            const effectiveEvent: Event | null = nameOverride
-                ? ({
-                      ...(event ?? {}),
-                      name: nameOverride,
-                      code: nameOverride,
-                  } as Event)
-                : event;
+    // Event-named folder, under the configured save folder if set, otherwise
+    // alongside the vMix recording (videoLocation ends in the file name, so
+    // "../" gives its directory).
+    const baseFolder = saveFolderOverride
+        ? path.resolve(saveFolderOverride)
+        : path.resolve(videoLocation, '../');
+    const eventFolder = path.resolve(
+        baseFolder,
+        `${new Date().getFullYear()} ${effectiveEvent?.name ?? 'Unknown Event'}`
+    );
+    if (!fs.existsSync(eventFolder)) {
+        fs.mkdirSync(eventFolder, { recursive: true });
+    }
 
-            const newFileName = fileNameBuilders[builder](
-                effectiveEvent,
-                matchStatus
-            );
+    const target = path.resolve(eventFolder, newFileName);
 
-            // Event-named folder, under the configured save folder if set,
-            // otherwise alongside the vMix recording (videoLocation ends in the
-            // file name, so "../" gives its directory).
-            const baseFolder = saveFolderOverride
-                ? path.resolve(saveFolderOverride)
-                : path.resolve(videoLocation, '../');
-            const eventFolder = path.resolve(
-                baseFolder,
-                `${new Date().getFullYear()} ${
-                    effectiveEvent?.name ?? 'Unknown Event'
-                }`
-            );
-            if (!fs.existsSync(eventFolder)) {
-                fs.mkdirSync(eventFolder, { recursive: true });
-            }
+    // Rename, or copy + check + delete across drives.
+    await moveVideo(path.resolve(videoLocation), target);
 
-            const target = path.resolve(eventFolder, newFileName);
-            const source = path.resolve(videoLocation);
+    // Remember the real folder so the Auto AV tab can show the exact path
+    // even when no save folder is configured.
+    getStore().set('autoAv.lastSaveFolder', eventFolder);
 
-            // Rename/move the file; fall back to copy+delete across drives
-            // (renameSync throws EXDEV when the save folder is on another disk).
-            try {
-                fs.renameSync(source, target);
-            } catch (err) {
-                if ((err as { code?: string }).code === 'EXDEV') {
-                    fs.copyFileSync(source, target);
-                    fs.unlinkSync(source);
-                } else {
-                    throw err;
-                }
-            }
-
-            // Remember the real folder so the Auto AV tab can show the exact
-            // path even when no save folder is configured.
-            getStore().set('autoAv.lastSaveFolder', eventFolder);
-
-            // Resolve
-            resolve(target);
-        } catch (e) {
-            reject(e);
-        }
-    });
+    return target;
 }

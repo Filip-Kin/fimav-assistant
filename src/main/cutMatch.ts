@@ -126,6 +126,54 @@ export default async function cutMatchVideo(
     }
 }
 
+// Wait until vMix has finished writing a recording. vMix writes the MP4
+// index (moov atom) last, after its API already reports the recording
+// stopped; a copy taken before that has no index and cannot be read. Done
+// when ffmpeg can read the duration and the size has stopped changing.
+// Returns false on timeout.
+export async function waitForFinishedVideo(
+    file: string,
+    timeoutMs = 60000
+): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    let lastSize = -1;
+    while (Date.now() < deadline) {
+        let size = -1;
+        try {
+            size = fs.statSync(file).size;
+        } catch {
+            // not there yet
+        }
+        // eslint-disable-next-line no-await-in-loop
+        if (size > 0 && size === lastSize && (await probeDuration(file))) {
+            return true;
+        }
+        lastSize = size;
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => {
+            setTimeout(resolve, 1000);
+        });
+    }
+    return false;
+}
+
+// Move a finished recording, copying across drives. The source is only
+// deleted once the copy reads as a video, so a bad copy never loses footage.
+export async function moveVideo(source: string, target: string) {
+    try {
+        fs.renameSync(source, target);
+        return;
+    } catch (err) {
+        if ((err as { code?: string }).code !== 'EXDEV') throw err;
+    }
+    fs.copyFileSync(source, target);
+    if (!(await probeDuration(target))) {
+        fs.unlinkSync(target);
+        throw new Error(`Copy of ${source} does not read as a video`);
+    }
+    fs.unlinkSync(source);
+}
+
 // Join pieces of one or more files into one video: each piece is
 // {file, from, seconds}, in order. Frame-accurate re-encode with the same
 // settings as cutMatchVideo. Used for FTC, where a match's play and its score

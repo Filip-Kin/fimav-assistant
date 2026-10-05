@@ -8,7 +8,13 @@ import { MatchRecord } from '../../models/MatchRecord';
 import { FtcUpdate } from '../../models/Ftc';
 import { matchFileName } from '../../utils/recording';
 import { upsertMatch, updateMatch, getMatch } from '../recordings/matchStore';
-import { assembleClips, enqueueCut, probeDuration } from '../cutMatch';
+import {
+    assembleClips,
+    enqueueCut,
+    moveVideo,
+    probeDuration,
+    waitForFinishedVideo,
+} from '../cutMatch';
 import { getStore } from '../store';
 
 // FTC match recording. Every match video is the match itself plus its score
@@ -50,6 +56,9 @@ interface RawFile {
     path: string | null;
     start: number; // epoch ms
     end: number | null; // epoch ms, null while recording
+    // False from the stop until vMix has finished the file and it is in
+    // Originals. Absent in timelines from before this field: ready.
+    ready?: boolean;
 }
 
 interface FtcRun {
@@ -179,6 +188,13 @@ export default class FtcRecorder {
                 changed = true;
             }
         }
+        // A move cut short by the restart: use the file where it is.
+        tl.raws.forEach((raw) => {
+            if (raw.ready === false) {
+                raw.ready = true;
+                changed = true;
+            }
+        });
         tl.runs.forEach((r) => {
             if (!r.done && r.post === null && r.abortAt === null && !r.gaveUp) {
                 r.gaveUp = true;
@@ -419,40 +435,48 @@ export default class FtcRecorder {
         this.host.log('Stopped recording');
         if (!raw) return;
         raw.end = Date.now();
-        raw.path = await this.moveToOriginals(raw.path, tl.folder);
+        raw.ready = false;
         this.save();
+        // vMix finishes the file after it reports stopped; the wait runs off
+        // the event chain so a Match Start meanwhile is not held up.
+        const { folder } = tl;
+        this.moveToOriginals(raw.path, folder)
+            .catch(() => raw.path)
+            .then((moved) =>
+                this.run(async () => {
+                    raw.path = moved;
+                    raw.ready = true;
+                    if (this.tl?.folder === folder) {
+                        this.save();
+                        this.finishReady();
+                    }
+                })
+            )
+            .catch((e) => logger.error('Raw file move failed', e));
     }
 
-    // vMix holds the file for a moment after it stops; retry the move.
+    // Move a stopped raw file into Originals once vMix has finished it. If it
+    // never finishes or the move fails, the file stays where vMix put it.
     // eslint-disable-next-line class-methods-use-this
     private async moveToOriginals(
         file: string | null,
         folder: string
     ): Promise<string | null> {
         if (!file) return null;
+        if (!(await waitForFinishedVideo(file))) {
+            logger.warn(`${file} never finished writing; left in place`);
+            return file;
+        }
         const dir = path.join(folder, 'Originals');
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         const target = path.join(dir, `raw ${path.basename(file)}`);
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-            try {
-                if (!fs.existsSync(file)) return null;
-                try {
-                    fs.renameSync(file, target);
-                } catch (err) {
-                    if ((err as { code?: string }).code !== 'EXDEV') throw err;
-                    fs.copyFileSync(file, target);
-                    fs.unlinkSync(file);
-                }
-                return target;
-            } catch {
-                // eslint-disable-next-line no-await-in-loop
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 500);
-                });
-            }
+        try {
+            await moveVideo(file, target);
+            return target;
+        } catch (e) {
+            logger.warn(`Could not move ${file} into Originals`, e);
+            return file;
         }
-        logger.warn(`Could not move ${file} into Originals`);
-        return file;
     }
 
     // #endregion
@@ -479,7 +503,8 @@ export default class FtcRecorder {
     private finishReady() {
         const { tl } = this;
         if (!tl) return;
-        const open = tl.raws.find((r) => r.end === null);
+        // Footage still being written, or finished but not yet in Originals.
+        const open = tl.raws.find((r) => r.end === null || r.ready === false);
         tl.runs.forEach((r) => {
             if (r.done) return;
             if (r.abortAt !== null) {
