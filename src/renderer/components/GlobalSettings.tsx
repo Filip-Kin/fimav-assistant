@@ -62,9 +62,11 @@ export default function GlobalSettings() {
             ipcRenderer.on('ftc:settings', (s: FtcSettings) => {
                 setAddress(s.address);
             }),
-            ipcRenderer.on('ftc:status', (s: FtcScorekeeperStatus) =>
-                setFtcStatus(s)
-            ),
+            ipcRenderer.on('ftc:status', (s: FtcScorekeeperStatus) => {
+                setFtcStatus(s);
+                // Several found by the automatic scan: offer them.
+                if (s.found?.length > 1) setFound((prev) => prev ?? s.found);
+            }),
             ipcRenderer.on('autoav:status', (s: AutoAVStatus) =>
                 setDetected(s.programDetected)
             ),

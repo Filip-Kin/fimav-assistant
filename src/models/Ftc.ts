@@ -42,6 +42,8 @@ export interface FtcScorekeeperStatus {
     fieldCount: number;
     lastUpdate: FtcUpdate | null;
     error: string | null;
+    // Scorekeepers the last scan found (manual or automatic).
+    found: string[];
 }
 
 // Bitfocus triggers: "<updateType>:<field>" -> Companion button location.

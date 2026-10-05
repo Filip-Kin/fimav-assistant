@@ -793,6 +793,14 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         event.reply('ftc:settings', after);
     });
 
+    // With neither field system answering, look for a scorekeeper on the
+    // network (not when Settings forces FRC).
+    FtcScorekeeper.Instance.startAutoScan(() => {
+        if (store.get('program', 'auto') === 'frc') return false;
+        const st = AutoAV.Instance.getStatus();
+        return !st.fmsConnected && !st.ftcConnected;
+    });
+
     ipcMain.on('ftc:scan', async (event) => {
         event.reply('ftc:scanResult', await FtcScorekeeper.Instance.scan());
     });
