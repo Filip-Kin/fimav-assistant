@@ -336,6 +336,10 @@ export default class AutoAV {
         record: (rec) => this.emitter.emit('match', rec),
     });
 
+    public ftcRecorderSummary() {
+        return this.ftcRecorder.summary();
+    }
+
     private onFtcUpdate(u: FtcUpdate) {
         if (!this.isFtc()) return;
         this.ftcRecorder.onUpdate(u);

@@ -6,6 +6,16 @@ import AutoAV from '../addons/autoav';
 import LiveCaptions from '../addons/live-captions';
 import getVmixBandwidth, { VmixBandwidth } from '../vmixBandwidth';
 import { listMatches } from '../recordings/matchStore';
+import FtcScorekeeper from '../ftc/scorekeeper';
+import YoutubeUploaderAddon from '../addons/upload-helper';
+import AudienceDisplayAddon from '../addons/audience-display';
+import {
+    COMPANION_URL,
+    CUSTOM_AD_URL,
+    readCustomAd,
+    readFmsAutomation,
+} from '../bitfocus';
+import { getStore } from '../store';
 
 // Read-only status API on the LAN, one endpoint per subsystem, for Companion
 // or anything else on the cart network to poll. No auth by design: every
@@ -36,6 +46,16 @@ async function bandwidth(): Promise<VmixBandwidth> {
     if (!bw.warming) return bw;
     await sleep(2100);
     return getVmixBandwidth();
+}
+
+// GET a local JSON endpoint, or null when it does not answer.
+async function getJson(url: string): Promise<any> {
+    try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+        return res.ok ? await res.json() : null;
+    } catch {
+        return null;
+    }
 }
 
 function localIpv4() {
@@ -90,6 +110,87 @@ export default function startStatusApi(sources: StatusApiSources) {
             running: LiveCaptions.Instance.isRunning(),
             version: LiveCaptions.Instance.getVersion(),
         }),
+        // FTC Live scorekeeper connection and the FTC recorder.
+        ftc: () => ({
+            ...FtcScorekeeper.Instance.getStatus(),
+            recorder: AutoAV.Instance.ftcRecorderSummary(),
+        }),
+        // YouTube uploader: state and queue counts only. Its settings hold
+        // the TBA secret and TOA key, so nothing else is passed through.
+        upload: async () => {
+            const running = YoutubeUploaderAddon.Instance.isRunning();
+            const base = `http://127.0.0.1:${YoutubeUploaderAddon.PORT}`;
+            const eventKey = AutoAV.Instance.getStatus().currentEvent?.code;
+            const [health, state] = running
+                ? await Promise.all([
+                      getJson(`${base}/api/health`),
+                      eventKey
+                          ? getJson(
+                                `${base}/api/upload/state?event_key=${encodeURIComponent(
+                                    eventKey
+                                )}`
+                            )
+                          : null,
+                  ])
+                : [null, null];
+            const queue: Record<string, number> = {};
+            Object.values<{ status?: string }>(state?.videos ?? {}).forEach(
+                (v) => {
+                    const k = v?.status ?? 'unknown';
+                    queue[k] = (queue[k] ?? 0) + 1;
+                }
+            );
+            return {
+                running,
+                version: YoutubeUploaderAddon.Instance.getVersion(),
+                program: health?.program ?? null,
+                signedIn: health ? !!health.signed_in : null,
+                channel: health?.channel_name ?? null,
+                watching: health?.watching ?? null,
+                queue: state ? queue : null,
+            };
+        },
+        // Custom audience display (FRC off-season).
+        display: () => ({
+            running: AudienceDisplayAddon.Instance.isRunning(),
+            version: AudienceDisplayAddon.Instance.getVersion(),
+            selected: AutoAV.Instance.runsCustomAd(),
+        }),
+        // Companion and which field system presses its buttons.
+        companion: async () => {
+            let reachable = false;
+            try {
+                const res = await fetch(`${COMPANION_URL}/`, {
+                    signal: AbortSignal.timeout(2000),
+                });
+                reachable = res.status < 500;
+            } catch {
+                reachable = false;
+            }
+            let triggerSource: 'fms' | 'customAd' | 'ftc' = 'fms';
+            if (AutoAV.Instance.isFtc()) triggerSource = 'ftc';
+            else if (AutoAV.Instance.runsCustomAd()) triggerSource = 'customAd';
+            let automations: boolean | null = null;
+            try {
+                if (triggerSource === 'ftc') {
+                    automations = getStore().get('ftc.automations', true);
+                } else if (triggerSource === 'customAd') {
+                    automations = (await readCustomAd(CUSTOM_AD_URL)).config
+                        .enabled;
+                } else {
+                    automations = (await readFmsAutomation())
+                        .BitfocusIntegrationEnabled;
+                }
+            } catch {
+                automations = null;
+            }
+            return {
+                reachable,
+                url: COMPANION_URL,
+                triggerSource,
+                automations,
+            };
+        },
     };
 
     const all = async () => {

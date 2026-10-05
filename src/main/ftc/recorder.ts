@@ -688,6 +688,27 @@ export default class FtcRecorder {
         });
     }
 
+    // For the status API: whether vMix is recording for FTC, matches still
+    // waiting for their scores, and matches whose video is not made yet.
+    public summary() {
+        const { tl } = this;
+        const open = (tl?.runs ?? []).filter((r) => !r.done);
+        return {
+            recording: this.recording,
+            folder: tl?.folder ?? null,
+            waitingForScores: open
+                .filter(
+                    (r) => r.post === null && r.abortAt === null && !r.gaveUp
+                )
+                .map((r) => ({
+                    match: r.shortName,
+                    field: r.field,
+                    startedAt: r.start,
+                })),
+            pendingVideos: open.map((r) => r.shortName),
+        };
+    }
+
     // Make a match's video again (the Cut button), from the same windows.
     public remake(folder: string, id: string) {
         this.run(async () => {

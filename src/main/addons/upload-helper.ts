@@ -51,7 +51,7 @@ export default class YoutubeUploaderAddon {
 
     // The port the uploader serves its HTTP API on (matches the Go -listen
     // default and the Upload tab's fetch base).
-    private static readonly PORT = 8807;
+    public static readonly PORT = 8807;
 
     // FMS + TBA base URLs the uploader needs (Go defaults; passed explicitly so
     // the spawn is self-documenting). FMS is the same field controller AutoAV

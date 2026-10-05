@@ -18,9 +18,82 @@ jest.mock('../main/addons/hw-ping', () => ({
 }));
 jest.mock('../main/addons/autoav', () => ({
     Instance: {
-        getStatus: () => ({ running: true, saveFolder: null }),
+        getStatus: () => ({
+            running: true,
+            saveFolder: null,
+            currentEvent: { name: 'Test', code: 'TEST' },
+        }),
+        ftcRecorderSummary: () => ({
+            recording: true,
+            folder: null,
+            waitingForScores: [{ match: 'Q4', field: 2, startedAt: 1 }],
+            pendingVideos: ['Q4'],
+        }),
+        isFtc: () => true,
+        runsCustomAd: () => false,
     },
 }));
+jest.mock('../main/ftc/scorekeeper', () => ({
+    Instance: {
+        getStatus: () => ({
+            address: '127.0.0.1:8080',
+            connected: true,
+            eventCode: 'fimavtest',
+        }),
+    },
+}));
+jest.mock('../main/addons/upload-helper', () => ({
+    __esModule: true,
+    default: {
+        PORT: 8807,
+        Instance: { isRunning: () => true, getVersion: () => '0.1.11' },
+    },
+}));
+jest.mock('../main/addons/audience-display', () => ({
+    __esModule: true,
+    default: {
+        Instance: { isRunning: () => false, getVersion: () => '26.7.6' },
+    },
+}));
+jest.mock('../main/bitfocus', () => ({
+    COMPANION_URL: 'http://127.0.0.1:8000',
+    CUSTOM_AD_URL: 'http://127.0.0.1:3001',
+    readCustomAd: jest.fn(),
+    readFmsAutomation: jest.fn(),
+}));
+jest.mock('../main/store', () => ({
+    getStore: () => ({ get: (_k: string, d: unknown) => d }),
+}));
+
+// jsdom has neither AbortSignal.timeout nor Response (Electron's main
+// process has both); minimal stand-ins are enough here.
+if (!(AbortSignal as any).timeout) {
+    (AbortSignal as any).timeout = () => new AbortController().signal;
+}
+const reply = (body: unknown) => ({
+    ok: true,
+    status: 200,
+    json: async () => body,
+});
+
+// The uploader's state carries its settings, secrets included.
+const realFetch = global.fetch;
+global.fetch = jest.fn(async (url: any) => {
+    const u = String(url);
+    if (u.startsWith('http://127.0.0.1:8807/api/health'))
+        return reply({ signed_in: true, channel_name: 'FIM', program: 'ftc' });
+    if (u.startsWith('http://127.0.0.1:8807/api/upload/state'))
+        return reply({
+            config: { tba_secret: 'TBASECRET', toa_api_key: 'TOAKEY' },
+            videos: {
+                a: { status: 'uploaded' },
+                b: { status: 'uploaded' },
+                c: { status: 'queued' },
+            },
+        });
+    if (u.startsWith('http://127.0.0.1:8000')) return reply('ok');
+    return realFetch(url);
+}) as any;
 jest.mock('../main/addons/live-captions', () => ({
     Instance: { isRunning: () => true, getVersion: () => '1.2.3' },
 }));
@@ -103,8 +176,39 @@ describe('status API', () => {
     it('combines everything at /api/status', async () => {
         const { body } = await get('/api/status');
         expect(Object.keys(body).sort()).toEqual(
-            ['autoav', 'captions', 'network', 'stream', 'vmix'].sort()
+            [
+                'autoav',
+                'captions',
+                'companion',
+                'display',
+                'ftc',
+                'network',
+                'stream',
+                'upload',
+                'vmix',
+            ].sort()
         );
+    });
+
+    it('serves FTC, uploader, display and Companion status', async () => {
+        const ftc = (await get('/api/status/ftc')).body;
+        expect(ftc.eventCode).toBe('fimavtest');
+        expect(ftc.recorder.waitingForScores[0].match).toBe('Q4');
+        const upload = (await get('/api/status/upload')).body;
+        expect(upload).toMatchObject({
+            running: true,
+            version: '0.1.11',
+            signedIn: true,
+            queue: { uploaded: 2, queued: 1 },
+        });
+        expect(JSON.stringify(upload)).not.toMatch(/TBASECRET|TOAKEY/);
+        expect((await get('/api/status/display')).body.selected).toBe(false);
+        const companion = (await get('/api/status/companion')).body;
+        expect(companion).toMatchObject({
+            reachable: true,
+            triggerSource: 'ftc',
+            automations: true,
+        });
     });
 
     it('404s unknown and prototype names', async () => {
