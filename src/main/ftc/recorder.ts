@@ -29,12 +29,12 @@ import { getStore } from '../store';
 //   reveal  MATCH_POST - 1 s   ->  MATCH_POST + 16 s
 //
 // Recording runs while anything still needs it: a match in play or waiting for
-// its scores (up to WAIT_FOR_POST), or an open reveal or abort window. So in
+// its scores (up to RECORD_WAIT_MS), or an open reveal or abort window. So in
 // the usual order (scores posted before the next match) each match gets its own
 // raw file. When the next match starts first, the same raw file keeps running
 // and the late reveal is cut out of it, wherever it lands; nothing is stopped
 // in the middle of a match. A post that comes while nothing is recording starts
-// a recording just for the reveal.
+// a recording just for the reveal; a match waits GIVE_UP_MS for its scores.
 //
 // Raw files are moved into "<event folder>/Originals" and the timeline is saved
 // next to them (ftc-timeline.json), so a restart can still finish matches whose
@@ -47,9 +47,12 @@ import { getStore } from '../store';
 const LEAD_SECONDS = 1;
 const REVEAL_SECONDS = 16;
 const ABORT_KEEP_SECONDS = 10;
-// How long a finished match waits for its scores before its video is made
-// without a reveal.
-const WAIT_FOR_POST_MS = 10 * 60 * 1000;
+// How long recording runs on after a match while its scores are not posted.
+// A later post still gets its reveal: it starts a recording just for it.
+const RECORD_WAIT_MS = 10 * 60 * 1000;
+// How long a finished match waits for its scores (its upload held) before
+// its video is made without a reveal.
+const GIVE_UP_MS = 30 * 60 * 1000;
 
 interface RawFile {
     // vMix's file while recording; the Originals copy once stopped.
@@ -173,8 +176,7 @@ export default class FtcRecorder {
     }
 
     // After a restart: a raw file left open was cut off when the app stopped,
-    // so close it at its real length; nothing will post for the matches that
-    // were waiting, so they finish without a reveal.
+    // so close it at its real length.
     private async recover() {
         const { tl } = this;
         if (!tl) return;
@@ -195,12 +197,8 @@ export default class FtcRecorder {
                 changed = true;
             }
         });
-        tl.runs.forEach((r) => {
-            if (!r.done && r.post === null && r.abortAt === null && !r.gaveUp) {
-                r.gaveUp = true;
-                changed = true;
-            }
-        });
+        // Matches still waiting for scores keep waiting: FTC Live can still
+        // post them, and tick gives up on them at GIVE_UP_MS.
         if (changed) this.save();
         this.finishReady();
     }
@@ -316,7 +314,7 @@ export default class FtcRecorder {
             if (r.post !== null) return now < r.post + REVEAL_SECONDS * 1000;
             if (r.gaveUp) return false;
             // In play, or finished and waiting for its scores.
-            return now < r.playEnd + WAIT_FOR_POST_MS;
+            return now < r.playEnd + RECORD_WAIT_MS;
         });
     }
 
@@ -333,7 +331,8 @@ export default class FtcRecorder {
                 times.push(r.post + REVEAL_SECONDS * 1000);
             else if (!r.gaveUp) {
                 times.push(r.playEnd);
-                times.push(r.playEnd + WAIT_FOR_POST_MS);
+                times.push(r.playEnd + RECORD_WAIT_MS);
+                times.push(r.playEnd + GIVE_UP_MS);
             }
         });
         const future = times.filter((t) => t > now);
@@ -369,7 +368,7 @@ export default class FtcRecorder {
                 r.post === null &&
                 r.abortAt === null &&
                 !r.gaveUp &&
-                now >= r.playEnd + WAIT_FOR_POST_MS
+                now >= r.playEnd + GIVE_UP_MS
             ) {
                 r.gaveUp = true;
                 changed = true;

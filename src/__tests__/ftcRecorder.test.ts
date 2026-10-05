@@ -174,16 +174,39 @@ describe('FTC recorder', () => {
         ]);
     });
 
-    it('no scores ever: play only after 10 minutes', async () => {
+    it('no scores ever: recording stops at 10 min, play only at 30', async () => {
         upd('MATCH_START', 'Q1');
         await at(163 + 600 - 5);
         expect(vmixRecording).toBe(true);
         await at(163 + 600 + 2);
         expect(vmixRecording).toBe(false);
+        expect(pieces()).toHaveLength(0); // still waiting for scores
+        await at(163 + 1800 + 2);
         expect(pieces()).toEqual([
             {
                 out: '2026 Test - Q1.mp4',
                 p: [['raw capture1.mp4', 0, 163]],
+            },
+        ]);
+    });
+
+    it('scores posted after recording stopped: a recording for the reveal', async () => {
+        upd('MATCH_START', 'Q1');
+        await at(163 + 600 + 2);
+        expect(vmixRecording).toBe(false);
+        upd('MATCH_POST', 'Q1'); // 13.5 min after the match
+        await at(163 + 600 + 5);
+        expect(vmixRecording).toBe(true);
+        await at(163 + 600 + 25);
+        expect(vmixRecording).toBe(false);
+        expect(vmixFile).toBe(2);
+        expect(pieces()).toEqual([
+            {
+                out: '2026 Test - Q1.mp4',
+                p: [
+                    ['raw capture1.mp4', 0, 163],
+                    ['raw capture2.mp4', 0, 16],
+                ],
             },
         ]);
     });
