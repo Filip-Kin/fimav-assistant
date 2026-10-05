@@ -32,7 +32,7 @@ const COMPANION_URL = 'http://127.0.0.1:8000';
 
 // Ports FTC Live uses: 80 by default, 28080 when 80 is taken (Linux
 // launcher), 8080 on a Windows install next to FMS (which holds 80).
-const PORTS = [80, 28080, 8080];
+const PORTS = [80, 8080, 28080];
 
 const logger = log.scope('ftc');
 
@@ -208,13 +208,18 @@ export default class FtcScorekeeper extends EventEmitter {
 
     // Look for a scorekeeper on its own: 10 s after startup (FMS gets a
     // moment to answer first), then every 30 s, while `wanted` says
-    // nothing is connected. One scorekeeper found is saved and connected;
-    // several are left for Settings to offer.
+    // nothing is connected. Each try covers one port, in turn 80, 8080,
+    // 28080, then 80 again, so a try is ~254 probes per subnet. One
+    // scorekeeper found is saved and connected; several are left for
+    // Settings to offer.
     public startAutoScan(wanted: () => boolean) {
         if (this.autoScanTimer) return;
+        let next = 0;
         const tick = async () => {
             if (!wanted()) return;
-            const found = await this.scan();
+            const port = PORTS[next % PORTS.length];
+            next += 1;
+            const found = await this.scan([port]);
             const current = getStore().get('ftc.address', '').trim();
             if (found.length === 1 && found[0] !== current && wanted()) {
                 logger.info(`Found FTC Live at ${found[0]}`);
@@ -235,9 +240,19 @@ export default class FtcScorekeeper extends EventEmitter {
     }
 
     // One scan at a time: a Scan click during an automatic scan shares it.
-    public scan(): Promise<string[]> {
+    // With no port given (the Scan button) the ports are tried in order and
+    // the scan stops at the first port that finds something.
+    public scan(ports?: number[]): Promise<string[]> {
         if (!this.scanning) {
-            this.scanning = this.scanSubnets()
+            this.scanning = (async () => {
+                // eslint-disable-next-line no-restricted-syntax
+                for (const port of ports ?? PORTS) {
+                    // eslint-disable-next-line no-await-in-loop
+                    const found = await this.scanSubnets(port);
+                    if (found.length) return found;
+                }
+                return [];
+            })()
                 .then((found) => {
                     this.setStatus({ found });
                     return found;
@@ -249,10 +264,10 @@ export default class FtcScorekeeper extends EventEmitter {
         return this.scanning;
     }
 
-    // Find FTC Live on this machine's subnets: every /24 of a non-internal
-    // private IPv4 interface, on each port FTC Live uses.
+    // Find FTC Live on this machine's subnets on one port: every /24 of a
+    // non-internal private IPv4 interface.
     // eslint-disable-next-line class-methods-use-this
-    private async scanSubnets(): Promise<string[]> {
+    private async scanSubnets(port: number): Promise<string[]> {
         const prefixes = new Set<string>(['127.0.0']);
         Object.values(os.networkInterfaces()).forEach((list) =>
             (list ?? []).forEach((i) => {
@@ -276,11 +291,7 @@ export default class FtcScorekeeper extends EventEmitter {
                     ? [1]
                     : [...Array(254).keys()].map((n) => n + 1);
             hosts.forEach((h) =>
-                PORTS.forEach((port) =>
-                    targets.push(
-                        port === 80 ? `${p}.${h}` : `${p}.${h}:${port}`
-                    )
-                )
+                targets.push(port === 80 ? `${p}.${h}` : `${p}.${h}:${port}`)
             );
         });
 
