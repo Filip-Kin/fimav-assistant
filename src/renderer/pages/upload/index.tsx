@@ -10,7 +10,6 @@ import {
     Row,
     Select,
     Space,
-    Switch,
     Table,
     Tag,
     Tooltip,
@@ -77,16 +76,13 @@ export interface Playlist {
 export interface UploadSettings {
     tbaAuthId: string;
     tbaSecret: string;
-    autoSubmitTba: boolean;
     toaApiKey: string;
     toaEventKey: string;
-    autoSubmitToa: boolean;
     playlistId: string;
     playlistName: string;
     titleTemplate: string;
     descriptionTemplate: string;
     thumbnailPath: string;
-    headless: boolean;
     visibility: 'PUBLIC' | 'UNLISTED' | 'PRIVATE';
     // Name of the event's own playlist, from the uploader; not a stored setting.
     eventPlaylistName: string;
@@ -596,17 +592,6 @@ export function UploadSettingsDialog({
                         </Form.Item>
                     </Col>
                 </Row>
-                <ToggleRow
-                    label="Auto-submit to TBA"
-                    name="autoSubmitTba"
-                    hidden={ftc}
-                />
-                <ToggleRow
-                    label="Auto-submit to TOA"
-                    name="autoSubmitToa"
-                    hidden={!ftc}
-                />
-                <ToggleRow label="Headless" name="headless" hidden={false} />
             </Form>
         </Modal>
     );
@@ -709,28 +694,6 @@ function renderTitlePreview(tmpl: string, sample?: UploadRow): string {
 // A settings toggle laid out as [label ...... switch], right-aligned so every
 // switch lines up on the right edge of the dialog.
 // hidden keeps the field registered (and its value saved) while not shown.
-function ToggleRow({
-    label,
-    name,
-    hidden,
-}: {
-    label: string;
-    name: string;
-    hidden: boolean;
-}) {
-    return (
-        <div
-            className="upload-toggle-row"
-            style={hidden ? { display: 'none' } : undefined}
-        >
-            <span className="upload-toggle-row__label">{label}</span>
-            <Form.Item name={name} valuePropName="checked" noStyle>
-                <Switch />
-            </Form.Item>
-        </div>
-    );
-}
-
 interface UploadAddonStatus {
     running: boolean;
     version: string;

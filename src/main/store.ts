@@ -73,19 +73,14 @@ export type AppConfig = {
         // TBA event trusted-API credentials
         tbaAuthId: string;
         tbaSecret: string;
-        // Post the YouTube URL to TBA automatically after each upload
-        autoSubmitTba: boolean;
         // FTC: The Orange Alliance submission (FTC's TBA)
         toaApiKey: string;
         toaEventKey: string;
-        autoSubmitToa: boolean;
         // Title / description templates the uploader fills per match
         titleTemplate: string;
         descriptionTemplate: string;
         // Thumbnail image applied to each upload
         thumbnailPath: string;
-        // Run the upload browser hidden (default). Sign-in is always headed.
-        headless: boolean;
         // YouTube visibility for uploaded videos
         visibility: 'PUBLIC' | 'UNLISTED' | 'PRIVATE';
     };
@@ -234,10 +229,8 @@ export function createStore(): Store<AppConfig> {
                 properties: {
                     tbaAuthId: { type: 'string', default: '' },
                     tbaSecret: { type: 'string', default: '' },
-                    autoSubmitTba: { type: 'boolean', default: true },
                     toaApiKey: { type: 'string', default: '' },
                     toaEventKey: { type: 'string', default: '' },
-                    autoSubmitToa: { type: 'boolean', default: true },
                     titleTemplate: {
                         type: 'string',
                         default: DEFAULT_TITLE_TEMPLATE,
@@ -247,20 +240,16 @@ export function createStore(): Store<AppConfig> {
                         default: DEFAULT_DESCRIPTION_TEMPLATE,
                     },
                     thumbnailPath: { type: 'string', default: '' },
-                    headless: { type: 'boolean', default: true },
                     visibility: { type: 'string', default: 'UNLISTED' },
                 },
                 default: {
                     tbaAuthId: '',
                     tbaSecret: '',
-                    autoSubmitTba: true,
                     toaApiKey: '',
                     toaEventKey: '',
-                    autoSubmitToa: true,
                     titleTemplate: DEFAULT_TITLE_TEMPLATE,
                     descriptionTemplate: DEFAULT_DESCRIPTION_TEMPLATE,
                     thumbnailPath: '',
-                    headless: true,
                     visibility: 'UNLISTED',
                 },
             },
@@ -311,14 +300,12 @@ export function createStore(): Store<AppConfig> {
                 store.set('upload', {
                     tbaAuthId: existing.tbaAuthId ?? '',
                     tbaSecret: existing.tbaSecret ?? '',
-                    autoSubmitTba: existing.autoSubmitTba ?? true,
                     titleTemplate:
                         existing.titleTemplate || DEFAULT_TITLE_TEMPLATE,
                     descriptionTemplate:
                         existing.descriptionTemplate ||
                         DEFAULT_DESCRIPTION_TEMPLATE,
                     thumbnailPath: existing.thumbnailPath ?? '',
-                    headless: existing.headless ?? true,
                     visibility: existing.visibility ?? 'UNLISTED',
                 });
             },
