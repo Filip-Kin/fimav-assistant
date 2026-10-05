@@ -144,7 +144,7 @@ beforeEach(() => {
     match = null;
     bandwidth = {
         supported: true,
-        streams: [{ index: 1, liveKbps: 6000, targetKbps: 6000 }],
+        streams: [{ index: 1, liveKbps: 6000, targetKbps: 6000, speed: 1 }],
     };
     mixer = fimMixer();
     captionsRunning = true;
@@ -214,6 +214,56 @@ describe('stream checks', () => {
         expect(get('stream-health').state).toBe('ok');
         await tick(15);
         expect(get('stream-health').state).toBe('critical');
+    });
+
+    it('low bitrate is fine (VBR); under real time is a stall', async () => {
+        bandwidth = {
+            supported: true,
+            streams: [{ index: 1, liveKbps: 300, targetKbps: 6000, speed: 1 }],
+        };
+        await tick(25);
+        expect(get('stream-health').state).toBe('ok');
+        bandwidth = {
+            supported: true,
+            streams: [
+                { index: 1, liveKbps: 2000, targetKbps: 6000, speed: 0.62 },
+            ],
+        };
+        await tick(25);
+        expect(get('stream-health')).toMatchObject({
+            state: 'critical',
+            detail: 'Stalled: 0.62x real time',
+        });
+    });
+
+    it('a quiet stream during a match is not an alarm', async () => {
+        const v = fimVmix();
+        (v.inputs.input[0] as any).meterF1 = 0.5;
+        vmix = v;
+        match = { label: 'Q14', level: 'Qualification' };
+        // The start sound reaches Bus A, then nobody talks for a minute.
+        await tick(5);
+        const quiet = fimVmix({
+            audio: { busA: { muted: 'False', meterF1: 0, meterF2: 0 } },
+        });
+        vmix = quiet;
+        await tick(60);
+        expect(get('stream-audio').state).toBe('ok');
+    });
+
+    it('start sound on the FMS input but not on Bus A', async () => {
+        await tick(1);
+        const v = fimVmix({
+            audio: { busA: { muted: 'False', meterF1: 0, meterF2: 0 } },
+        });
+        (v.inputs.input[0] as any).meterF1 = 0.5;
+        vmix = v;
+        match = { label: 'Q16', level: 'Qualification' };
+        await tick(6);
+        expect(get('stream-audio')).toMatchObject({
+            state: 'critical',
+            detail: 'No Q16 start sound on Bus A',
+        });
     });
 
     it('DJ sent to the Live Stream bus', async () => {

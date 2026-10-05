@@ -10,6 +10,10 @@ export interface VmixStream {
     maxrateKbps: number | null;
     // Live bitrate in kbps = the last bitrate= value in the ffmpeg log
     liveKbps: number | null;
+    // ffmpeg's speed= on the same status line: 1.0 = keeping up with real
+    // time. Under 1 means it cannot send as fast as vMix produces (network
+    // trouble); with variable bitrate this, not the bitrate, shows a stall.
+    speed: number | null;
     // Friendly destination label (e.g. "YouTube (primary)")
     destination: string;
     // Full rtmp URL ffmpeg is streaming to (includes the stream key)
@@ -160,8 +164,12 @@ export default function getVmixBandwidth(): Promise<VmixBandwidth> {
                     (last[2].toLowerCase() === 'm' ? 1000 : 1);
             }
 
+            const sp = [...parts.tail.matchAll(/speed=\s*([\d.]+)x/gi)];
+            const speed = sp.length ? parseFloat(sp[sp.length - 1][1]) : null;
+
             streams.push({
                 index,
+                speed,
                 targetKbps: parseKbps(cmd, '-b:v'),
                 maxrateKbps: parseKbps(cmd, '-maxrate:v'),
                 liveKbps: kbps != null ? Math.max(0, kbps) : null,

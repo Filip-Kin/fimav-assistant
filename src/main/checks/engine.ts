@@ -15,7 +15,7 @@ import { CheckResult, CheckState } from '../../models/Checks';
 // FTC Live match state, the match manifest) and nothing records or decodes
 // audio or video live. Light by design:
 //  - vMix API: every 2 s during a match, every 5 s otherwise
-//  - stream logs: every 5 s
+//  - stream logs: every 5 s (ffmpeg's speed=, not bitrate: the stream is VBR)
 //  - X-Air settings: ~30 tiny UDP queries every 10 s (network, not USB)
 //  - X-Air meters: subscribed only while a qual/playoff match is in play
 //  - loudness: one audio-only ffmpeg pass per finished match (loudness.ts)
@@ -213,8 +213,17 @@ export default class Checks extends EventEmitter {
     private lastMatch: string | null = null;
 
     // Match start sound: samples of the FMS input meter after a start.
-    private buzzer: { label: string; until: number; peakDb: number } | null =
-        null;
+    private buzzer: {
+        label: string;
+        until: number;
+        peakDb: number;
+        busPeakDb: number;
+        streaming: boolean;
+    } | null = null;
+
+    // Set when the last match start sound reached the FMS input but not Bus
+    // A (the stream); kept until the next match start.
+    private busMissedStart: string | null = null;
 
     // Mics and match-sound levels on the stream bus during the current match.
     private balance: { label: string; mic: number[]; game: number[] } | null =
@@ -367,21 +376,21 @@ export default class Checks extends EventEmitter {
         // read, so a stalled stream drops out of the list.
         const live = bw.streams;
         const kbps = live.reduce((t, s) => t + (s.liveKbps ?? 0), 0);
-        const target = live.reduce((t, s) => t + (s.targetKbps ?? 0), 0);
+        // Stalled: no stream log growing (vMix's ffmpeg stopped writing), or
+        // every stream running under real time. Bitrate is not used: the
+        // stream is variable bitrate, so a static scene is legitimately low.
         const stalled =
             live.length === 0 ||
-            live.every(
-                (s) =>
-                    (s.liveKbps ?? 0) <
-                    (s.targetKbps ? s.targetKbps * 0.3 : 300)
-            );
+            live.every((s) => s.speed !== null && s.speed < 0.9);
         const mbps = (k: number) => (k / 1000).toFixed(1);
         if (this.held('stream-stall', stalled, 20000)) {
             this.set(
                 'stream-health',
                 'critical',
                 live.length
-                    ? `Stalled: ${mbps(kbps)} of ${mbps(target)} Mbps`
+                    ? `Stalled: ${Math.min(
+                          ...live.map((x) => x.speed ?? 1)
+                      ).toFixed(2)}x real time`
                     : 'Stalled: no data going out'
             );
         } else {
@@ -437,8 +446,8 @@ export default class Checks extends EventEmitter {
         const live = streaming && !!match;
         if (live && truthy(bus.muted)) {
             this.set('stream-audio', 'critical', 'Bus A muted');
-        } else if (this.held('stream-silent', live && db < -60, 30000)) {
-            this.set('stream-audio', 'critical', 'Bus A silent');
+        } else if (this.busMissedStart) {
+            this.set('stream-audio', 'critical', this.busMissedStart);
         } else if (this.held('stream-clip', live && db > -0.5, 6000)) {
             this.set('stream-audio', 'warning', 'Bus A clipping');
         } else {
@@ -600,11 +609,26 @@ export default class Checks extends EventEmitter {
                 meterDb(input.meterF2)
             );
         }
+        const bus = v?.audio?.busA;
+        if (bus) {
+            b.busPeakDb = Math.max(
+                b.busPeakDb,
+                meterDb(bus.meterF1),
+                meterDb(bus.meterF2)
+            );
+        }
         if (Date.now() < b.until) return;
         if (!input) this.set('match-buzzer', 'unknown', 'No FMS input in vMix');
         else if (b.peakDb < -50)
             this.set('match-buzzer', 'warning', `No sound at ${b.label} start`);
         else this.set('match-buzzer', 'ok', `Heard at ${b.label} start`);
+        // The start sound played (FMS input) but never reached the stream
+        // mix: the path vMix -> X-Air -> Bus A is broken. A quiet room cannot
+        // trip this, unlike a silence timer.
+        this.busMissedStart =
+            b.streaming && b.peakDb >= -50 && b.busPeakDb < -50
+                ? `No ${b.label} start sound on Bus A`
+                : null;
         this.buzzer = null;
     }
 
@@ -643,7 +667,13 @@ export default class Checks extends EventEmitter {
     // #region match start / end
 
     private beginMatch(label: string, host: string | null) {
-        this.buzzer = { label, until: Date.now() + 4000, peakDb: -Infinity };
+        this.buzzer = {
+            label,
+            until: Date.now() + 4000,
+            peakDb: -Infinity,
+            busPeakDb: -Infinity,
+            streaming: !!this.vmix && truthy(this.vmix.streaming),
+        };
         if (!host || !this.mixer?.reachable) return;
         this.meters.start(host);
         this.balance = { label, mic: [], game: [] };
