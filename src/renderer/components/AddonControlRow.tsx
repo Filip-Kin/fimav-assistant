@@ -24,8 +24,10 @@ interface AddonControlRowProps {
     onStop?: () => void;
     // Settings gear - only rendered when provided
     onSettings?: () => void;
-    // Disable buttons while an action is in flight
+    // Disable buttons while an action is in flight (with a spinner)
     busy?: boolean;
+    // Lifecycle buttons unavailable in this state (no spinner)
+    disabled?: boolean;
     // Extra actions rendered before the controls
     extra?: ReactNode;
 }
@@ -44,6 +46,7 @@ export default function AddonControlRow({
     onStop,
     onSettings,
     busy = false,
+    disabled = false,
     extra,
 }: AddonControlRowProps) {
     const label = statusLabel ?? (running ? 'Running' : 'Stopped');
@@ -69,6 +72,7 @@ export default function AddonControlRow({
                     icon={<ReloadOutlined />}
                     onClick={onRestart}
                     loading={busy}
+                    disabled={disabled}
                 >
                     Restart
                 </Button>
@@ -76,7 +80,7 @@ export default function AddonControlRow({
                     icon={<StopOutlined />}
                     danger
                     onClick={onStop}
-                    disabled={busy}
+                    disabled={busy || disabled}
                 >
                     Stop
                 </Button>
@@ -87,6 +91,7 @@ export default function AddonControlRow({
                 icon={<CaretRightOutlined />}
                 onClick={onStart}
                 loading={busy}
+                disabled={disabled}
             >
                 Start
             </Button>
@@ -139,5 +144,6 @@ AddonControlRow.defaultProps = {
     onStop: undefined,
     onSettings: undefined,
     busy: false,
+    disabled: false,
     extra: undefined,
 };

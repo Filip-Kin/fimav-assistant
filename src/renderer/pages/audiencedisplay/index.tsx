@@ -16,7 +16,8 @@ export default function AudienceDisplayPage() {
     const [status, setStatus] = useState<AudienceDisplayStatus | null>(null);
     const [busy, setBusy] = useState(false);
     // The custom display only runs when Settings picks it over the FMS one.
-    const [selected, setSelected] = useState(false);
+    // null until the first status, so the blocked state never flashes.
+    const [selected, setSelected] = useState<boolean | null>(null);
 
     useEffect(() => {
         if (!window.electron) return undefined;
@@ -96,14 +97,15 @@ export default function AudienceDisplayPage() {
                 onStart={restart}
                 onRestart={restart}
                 onStop={stop}
-                busy={busy || !selected}
+                busy={busy}
+                disabled={selected !== true}
             />
             <div className="ad-frame">
                 {running && <iframe title="Audience display" src={PAGE_URL} />}
                 {!running && selected && (
                     <Empty description="Stopped" style={{ marginTop: 64 }} />
                 )}
-                {!running && !selected && (
+                {!running && selected === false && (
                     <Empty
                         description="Custom AD off in Settings"
                         style={{ marginTop: 64 }}

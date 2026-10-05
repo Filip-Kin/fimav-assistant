@@ -68,6 +68,10 @@ export default class AutoAV {
     // Current event name
     private currentEvent: Event | null = null;
 
+    // The FTC scorekeeper's event. Kept apart from currentEvent (fim-admin)
+    // so it only names and sets the season of recordings in FTC mode.
+    private ftcEvent: Event | null = null;
+
     // Track whether or not we're recording (rather than someone in vMix clicking record)
     public weAreRecording = false;
 
@@ -312,7 +316,7 @@ export default class AutoAV {
 
     // FTC recording: match plus score reveal, cut from vMix raw files.
     private ftcRecorder = new FtcRecorder({
-        event: () => this.currentEvent,
+        event: () => this.event(),
         folder: () => this.status.saveFolder,
         log: (m) => this.logRecording(m),
         setRecording: (on) => {
@@ -329,25 +333,25 @@ export default class AutoAV {
     }
 
     // A new FTC event fills in the event name like a new FMS event does, and
-    // stands in as the current event when fim-admin has none.
+    // is the event in FTC mode unless fim-admin names a different one.
     private onFtcStatus(s: FtcScorekeeperStatus) {
         // Connecting or dropping can change the detected program.
         if (!s.eventCode) {
             this.emitStatus();
             return;
         }
-        this.noteEvent('ftc', s.eventCode, s.eventName || s.eventCode);
-        if (!this.currentEvent || this.currentEvent.code === s.eventCode) {
-            this.currentEvent = {
-                ...(this.currentEvent ?? {}),
-                code: s.eventCode,
-                name: s.eventName || s.eventCode,
-                // Off-season events report "Non-Advancement" (FTC Live 8.0);
-                // scrimmages and off-season types are not official either.
-                isOfficial: !/NON-?ADVANCEMENT|OFF|SCRIM/i.test(
-                    s.eventType ?? ''
-                ),
-            } as Event;
+        this.ftcEvent = {
+            code: s.eventCode,
+            name: s.eventName || s.eventCode,
+            // Off-season events report "Non-Advancement" (FTC Live 8.0);
+            // scrimmages and off-season types are not official either.
+            isOfficial: !/NON-?ADVANCEMENT|OFF|SCRIM/i.test(s.eventType ?? ''),
+        } as Event;
+        // Program detection first: the scorekeeper's event only counts as a
+        // new event in FTC mode (see checkFmsEvent).
+        this.emitStatus();
+        if (this.isFtc()) {
+            this.noteEvent('ftc', s.eventCode, s.eventName || s.eventCode);
         }
         this.emitStatus();
         this.emitMatches();
@@ -712,6 +716,16 @@ export default class AutoAV {
         this.emitStatus();
     }
 
+    // The event recordings are named and seasoned by: fim-admin's, except in
+    // FTC mode, where the scorekeeper's event stands in when fim-admin has
+    // none or names the same event.
+    private event(): Event | null {
+        if (!this.isFtc() || !this.ftcEvent) return this.currentEvent;
+        if (this.currentEvent && this.currentEvent.code !== this.ftcEvent.code)
+            return this.currentEvent;
+        return { ...(this.currentEvent ?? {}), ...this.ftcEvent } as Event;
+    }
+
     // Apply settings changed from the Auto AV settings dialog: re-emit status
     // (picks up a new naming mode) and re-check vMix with the new connection.
     public applySettings(): void {
@@ -724,8 +738,9 @@ export default class AutoAV {
     // Effective file naming mode: official events are always in-season,
     // unofficial always off-season, otherwise fall back to the stored setting.
     private effectiveFileNameMode(): FileNameMode {
-        if (this.currentEvent?.isOfficial === false) return 'off-season';
-        if (this.currentEvent?.isOfficial === true) return 'in-season';
+        const event = this.event();
+        if (event?.isOfficial === false) return 'off-season';
+        if (event?.isOfficial === true) return 'in-season';
         return getStore().get('autoAv.fileNameMode', 'in-season');
     }
 
@@ -766,22 +781,6 @@ export default class AutoAV {
         const nameOverride = store.get('autoAv.eventNameOverride', '').trim();
         const saveFolderOverride = store.get('autoAv.saveFolder', '').trim();
 
-        // The event actually used for naming: a typed override always wins.
-        const effectiveEvent: Event | null = nameOverride
-            ? ({
-                  ...(this.currentEvent ?? {}),
-                  name: nameOverride,
-                  code: nameOverride,
-              } as Event)
-            : this.currentEvent;
-
-        this.status.currentEvent = effectiveEvent
-            ? {
-                  name: effectiveEvent.name,
-                  code: effectiveEvent.code ?? null,
-              }
-            : null;
-        this.status.fileNameMode = this.effectiveFileNameMode();
         // FRC or FTC. Detection: the scorekeeper answering and FMS not = FTC;
         // FMS answering = FRC; neither = keep what it was. Settings override.
         const ftcConnected = FtcScorekeeper.Instance.getStatus().connected;
@@ -795,12 +794,28 @@ export default class AutoAV {
             override === 'frc' || override === 'ftc'
                 ? override
                 : detected ?? this.status.program;
+        // The event actually used for naming: a typed override always wins.
+        const effectiveEvent: Event | null = nameOverride
+            ? ({
+                  ...(this.event() ?? {}),
+                  name: nameOverride,
+                  code: nameOverride,
+              } as Event)
+            : this.event();
+
+        this.status.currentEvent = effectiveEvent
+            ? {
+                  name: effectiveEvent.name,
+                  code: effectiveEvent.code ?? null,
+              }
+            : null;
+        this.status.fileNameMode = this.effectiveFileNameMode();
         this.status.frcAudienceDisplay =
             store.get('frcAudienceDisplay', 'fms') === 'customAd'
                 ? 'customAd'
                 : 'fms';
         this.status.fileNameModeForced =
-            typeof this.currentEvent?.isOfficial === 'boolean';
+            typeof this.event()?.isOfficial === 'boolean';
         this.status.sampleFileName = sampleFileName(
             effectiveEvent,
             this.status.fileNameMode
@@ -872,7 +887,10 @@ export default class AutoAV {
     // name alone, so a volunteer's hand edit survives until the next event.
     private async checkFmsEvent() {
         const info = await FmsApi.Instance.getEventInfo();
-        if (!info) return;
+        // With FMS and the FTC scorekeeper both up, each reports its own
+        // event; only the active program's counts, or the two would take
+        // turns being "new".
+        if (!info || this.isFtc()) return;
         this.noteEvent('frc', info.eventCode, info.eventName || info.eventCode);
     }
 

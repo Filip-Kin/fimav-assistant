@@ -60,6 +60,8 @@ export interface UploadVideo {
     meta?: UploadVideoMeta;
     tba_submitted?: boolean;
     tba_submit_error?: string;
+    toa_submitted?: boolean;
+    toa_submit_error?: string;
 }
 
 export interface UploadRow extends UploadVideo {
@@ -135,10 +137,13 @@ export function UploadTable({
     rows,
     onRetry,
     onSubmitTba,
+    ftc,
 }: {
     rows: UploadRow[];
     onRetry?: (_filename: string) => void;
     onSubmitTba?: (_filename: string) => void;
+    // FTC events link videos on The Orange Alliance, not TBA.
+    ftc?: boolean;
 }) {
     const columns: ColumnsType<UploadRow> = [
         {
@@ -168,16 +173,18 @@ export function UploadTable({
             },
         },
         {
-            title: 'TBA',
+            title: ftc ? 'TOA' : 'TBA',
             key: 'tba',
             render: (_, v) => {
-                if (v.tba_submitted) {
+                const submitted = ftc ? v.toa_submitted : v.tba_submitted;
+                const error = ftc ? v.toa_submit_error : v.tba_submit_error;
+                if (submitted) {
                     return <Tag color="success">Submitted</Tag>;
                 }
-                if (v.tba_submit_error) {
+                if (error) {
                     return (
                         <Space size={8}>
-                            <span title={v.tba_submit_error}>
+                            <span title={error}>
                                 <Tag color="error">Error</Tag>
                             </span>
                             {onSubmitTba && (
@@ -242,6 +249,7 @@ export function UploadTable({
 UploadTable.defaultProps = {
     onRetry: undefined,
     onSubmitTba: undefined,
+    ftc: false,
 };
 
 const VISIBILITY_OPTIONS = [
@@ -732,6 +740,7 @@ function sortRows(videos: Record<string, UploadVideo>): UploadRow[] {
 export default function UploadPage() {
     // FRC or FTC: TBA vs The Orange Alliance in settings.
     const [program, setProgram] = useState<Program>('frc');
+    const ftc = program === 'ftc';
     useEffect(() => {
         if (!window.electron) return undefined;
         const { ipcRenderer } = window.electron;
@@ -985,8 +994,13 @@ export default function UploadPage() {
         [post]
     );
     const onSubmitTba = useCallback(
-        (filename: string) => post('/api/yt/submit-tba', filename, 'Submitted'),
-        [post]
+        (filename: string) =>
+            post(
+                ftc ? '/api/yt/submit-toa' : '/api/yt/submit-tba',
+                filename,
+                'Submitted'
+            ),
+        [post, ftc]
     );
 
     const statusLabel = useMemo(() => {
@@ -1014,6 +1028,7 @@ export default function UploadPage() {
                     rows={rows}
                     onRetry={onRetry}
                     onSubmitTba={onSubmitTba}
+                    ftc={ftc}
                 />
             </div>
             <UploadSettingsDialog
@@ -1029,7 +1044,7 @@ export default function UploadPage() {
                 onRefreshPlaylists={() => loadPlaylists(true)}
                 onCreatePlaylist={createPlaylist}
                 sample={rows.find((r) => r.meta?.match_number)}
-                ftc={program === 'ftc'}
+                ftc={ftc}
             />
         </>
     );
