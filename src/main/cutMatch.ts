@@ -166,7 +166,9 @@ export async function moveVideo(source: string, target: string) {
     } catch (err) {
         if ((err as { code?: string }).code !== 'EXDEV') throw err;
     }
-    fs.copyFileSync(source, target);
+    // Async: a multi-GB copy must not block the main process (an FTC Match
+    // Start arriving meanwhile would be timestamped late).
+    await fs.promises.copyFile(source, target);
     if (!(await probeDuration(target))) {
         fs.unlinkSync(target);
         throw new Error(`Copy of ${source} does not read as a video`);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button, Empty, Modal, message } from 'antd';
 import { AutoAVStatus } from 'models/AutoAVStatus';
 import AddonControlRow from '../../components/AddonControlRow';
+import { useLifecycleBusy, useOneShot } from '../../hooks/ipc_busy';
 import './index.css';
 
 interface AudienceDisplayStatus {
@@ -9,12 +10,23 @@ interface AudienceDisplayStatus {
     version: string;
 }
 
+interface UpdateInfo {
+    current: string;
+    latest: string;
+    updateAvailable: boolean;
+}
+
 // The display's own operator page (profile, vMix setup, playoff config).
 const PAGE_URL = 'http://127.0.0.1:3001/';
 
+const poll = () =>
+    window.electron?.ipcRenderer.sendMessage('audienceDisplay:getStatus', []);
+
 export default function AudienceDisplayPage() {
     const [status, setStatus] = useState<AudienceDisplayStatus | null>(null);
-    const [busy, setBusy] = useState(false);
+    const running = !!status?.running;
+    const { busy, begin } = useLifecycleBusy(running);
+    const oneShot = useOneShot();
     // The custom display only runs when Settings picks it over the FMS one.
     // null until the first status, so the blocked state never flashes.
     const [selected, setSelected] = useState<boolean | null>(null);
@@ -24,17 +36,12 @@ export default function AudienceDisplayPage() {
         const { ipcRenderer } = window.electron;
         const off = ipcRenderer.on(
             'audienceDisplay:status',
-            (s: AudienceDisplayStatus) => {
-                setStatus(s);
-                setBusy(false);
-            }
+            (s: AudienceDisplayStatus) => setStatus(s)
         );
         const offAutoav = ipcRenderer.on('autoav:status', (s: AutoAVStatus) =>
             setSelected(s.frcAudienceDisplay === 'customAd')
         );
         ipcRenderer.sendMessage('autoav:getState', []);
-        const poll = () =>
-            ipcRenderer.sendMessage('audienceDisplay:getStatus', []);
         poll();
         const timer = setInterval(poll, 3000);
         return () => {
@@ -44,48 +51,54 @@ export default function AudienceDisplayPage() {
         };
     }, []);
 
+    // Poll faster while an action runs, so its stop and start are both seen.
+    useEffect(() => {
+        if (!busy) return undefined;
+        const timer = setInterval(poll, 500);
+        return () => clearInterval(timer);
+    }, [busy]);
+
     const restart = useCallback(() => {
-        setBusy(true);
+        begin('restart');
         window.electron?.ipcRenderer.sendMessage('audienceDisplay:restart', []);
-    }, []);
+    }, [begin]);
 
     const stop = useCallback(() => {
-        setBusy(true);
+        begin('stop');
         window.electron?.ipcRenderer.sendMessage('audienceDisplay:stop', []);
-    }, []);
+    }, [begin]);
 
     // Version click: check for updates; toast if latest, confirm if not.
     const checkUpdate = useCallback(() => {
-        if (!window.electron) return;
-        const { ipcRenderer } = window.electron;
-        const off = ipcRenderer.on(
+        oneShot<UpdateInfo>(
             'audienceDisplay:updateInfo',
-            (info: {
-                current: string;
-                latest: string;
-                updateAvailable: boolean;
-            }) => {
-                off();
+            (info) => {
                 if (!info.updateAvailable) {
                     message.success(`Up to date (v${info.current})`);
                     return;
                 }
                 Modal.confirm({
                     title: `Update to v${info.latest}`,
-                    content: `v${info.current} → v${info.latest}. The display restarts.`,
+                    content: `v${info.current} → v${info.latest}`,
                     okText: 'Update',
                     cancelText: 'Not now',
                     onOk: () => {
-                        setBusy(true);
-                        ipcRenderer.sendMessage('audienceDisplay:update', []);
+                        begin('restart');
+                        window.electron?.ipcRenderer.sendMessage(
+                            'audienceDisplay:update',
+                            []
+                        );
                     },
                 });
-            }
+            },
+            () =>
+                window.electron?.ipcRenderer.sendMessage(
+                    'audienceDisplay:checkUpdate',
+                    []
+                ),
+            () => message.error('Failed: no reply')
         );
-        ipcRenderer.sendMessage('audienceDisplay:checkUpdate', []);
-    }, []);
-
-    const running = !!status?.running;
+    }, [oneShot, begin]);
 
     return (
         <div className="ad-page">
@@ -93,7 +106,7 @@ export default function AudienceDisplayPage() {
                 running={running}
                 version={status?.version}
                 onVersionClick={checkUpdate}
-                versionTooltip="Check for updates"
+                versionTooltip="Updates"
                 onStart={restart}
                 onRestart={restart}
                 onStop={stop}
@@ -107,7 +120,7 @@ export default function AudienceDisplayPage() {
                 )}
                 {!running && selected === false && (
                     <Empty
-                        description="Custom AD off in Settings"
+                        description="Custom AD off"
                         style={{ marginTop: 64 }}
                     >
                         <Button

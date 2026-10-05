@@ -59,8 +59,8 @@ jobs:
                   npm exec tsc
                   # npm test
 
-            # Surface the built Windows installer so it can be downloaded and
-            # run on the AV PC (FIMAV Assistant does not auto-update). This only
+            # Surface the built Windows installer so a branch build can be
+            # installed on an AV PC before it is released. This only
             # captures the exe the windows build already produces; it does not
             # change how the app is built.
             - name: Upload Windows installer

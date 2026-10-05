@@ -131,8 +131,13 @@ class TrpcSession {
     private constructor(ws: WebSocket) {
         this.ws = ws;
         ws.on('message', (data) => {
-            const m = JSON.parse(String(data));
-            const cb = this.waiting.get(m.id);
+            let m: any;
+            try {
+                m = JSON.parse(String(data));
+            } catch {
+                return; // not a tRPC frame
+            }
+            const cb = this.waiting.get(m?.id);
             if (!cb) return;
             // A subscription answers "started" before its first data.
             if (m.result?.type === 'started') return;
@@ -300,8 +305,58 @@ export async function saveCompanionButton(
             });
         }
 
-        // Replace the press actions: remove the old ones, add the new list in
-        // order (add appends, so order is kept).
+        // Replace the press actions. The new list is added first (add
+        // appends, so order is kept) and the old ones are removed only once
+        // every new action and option is in. If anything fails while adding,
+        // the actions added so far are removed again, so a failed save leaves
+        // the button with its old actions rather than none.
+        const added: string[] = [];
+        try {
+            // eslint-disable-next-line no-restricted-syntax
+            for (const a of edit.actions) {
+                // eslint-disable-next-line no-await-in-loop
+                const entityId = await s.mutate('controls.entities.add', {
+                    controlId,
+                    entityLocation: DOWN,
+                    ownerId: null,
+                    connectionId: a.connectionId,
+                    entityType: 'action',
+                    entityDefinition: a.definitionId,
+                });
+                if (!entityId) {
+                    throw new Error(
+                        `Companion refused action ${a.definitionId}`
+                    );
+                }
+                added.push(entityId);
+                // eslint-disable-next-line no-restricted-syntax
+                for (const [key, v] of Object.entries(a.options)) {
+                    // eslint-disable-next-line no-await-in-loop
+                    await s.mutate('controls.entities.setOption', {
+                        controlId,
+                        entityLocation: DOWN,
+                        entityId,
+                        key,
+                        value: value(v),
+                    });
+                }
+            }
+        } catch (e) {
+            // eslint-disable-next-line no-restricted-syntax
+            for (const entityId of added) {
+                try {
+                    // eslint-disable-next-line no-await-in-loop
+                    await s.mutate('controls.entities.remove', {
+                        controlId,
+                        entityLocation: DOWN,
+                        entityId,
+                    });
+                } catch {
+                    // best effort; the original error is what is reported
+                }
+            }
+            throw e;
+        }
         // eslint-disable-next-line no-restricted-syntax
         for (const a of current) {
             // eslint-disable-next-line no-await-in-loop
@@ -310,32 +365,6 @@ export async function saveCompanionButton(
                 entityLocation: DOWN,
                 entityId: a.id,
             });
-        }
-        // eslint-disable-next-line no-restricted-syntax
-        for (const a of edit.actions) {
-            // eslint-disable-next-line no-await-in-loop
-            const entityId = await s.mutate('controls.entities.add', {
-                controlId,
-                entityLocation: DOWN,
-                ownerId: null,
-                connectionId: a.connectionId,
-                entityType: 'action',
-                entityDefinition: a.definitionId,
-            });
-            if (!entityId) {
-                throw new Error(`Companion refused action ${a.definitionId}`);
-            }
-            // eslint-disable-next-line no-restricted-syntax
-            for (const [key, v] of Object.entries(a.options)) {
-                // eslint-disable-next-line no-await-in-loop
-                await s.mutate('controls.entities.setOption', {
-                    controlId,
-                    entityLocation: DOWN,
-                    entityId,
-                    key,
-                    value: value(v),
-                });
-            }
         }
     } finally {
         s.close();

@@ -59,6 +59,8 @@ jest.mock('electron-log', () => {
 
 const T0 = Date.UTC(2026, 9, 4, 12, 0, 0);
 let folder = '';
+// What the app currently shows as the event folder; tests can move it.
+let shownFolder = '';
 let recorder: FtcRecorder;
 const logs: string[] = [];
 
@@ -87,7 +89,7 @@ async function at(seconds: number) {
 
 const pieces = () =>
     (assembleClips as jest.Mock).mock.calls.map(([p, out]) => ({
-        out: path.basename(out),
+        out: path.basename(out).replace('.making', ''),
         p: p.map((x: { file: string; from: number; seconds: number }) => [
             path.basename(x.file),
             Math.round(x.from),
@@ -98,6 +100,7 @@ const pieces = () =>
 beforeEach(() => {
     jest.useFakeTimers({ now: T0 });
     folder = fs.mkdtempSync(path.join(os.tmpdir(), 'ftcrec-'));
+    shownFolder = folder;
     vmixDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vmix-'));
     vmixRecording = false;
     vmixFile = 0;
@@ -105,7 +108,7 @@ beforeEach(() => {
     (assembleClips as jest.Mock).mockClear();
     recorder = new FtcRecorder({
         event: () => null,
-        folder: () => folder,
+        folder: () => shownFolder,
         log: (m) => logs.push(m),
         setRecording: () => undefined,
         record: () => undefined,
@@ -271,5 +274,31 @@ describe('FTC recorder', () => {
                 ],
             },
         ]);
+    });
+
+    it('the shown folder changing mid-match does not split the match', async () => {
+        upd('MATCH_START', 'Q1');
+        await at(60);
+        shownFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'ftcrec2-'));
+        await at(200);
+        upd('MATCH_POST', 'Q1');
+        await at(220);
+        expect(vmixRecording).toBe(false);
+        expect(pieces()).toEqual([
+            {
+                out: '2026 Test - Q1.mp4',
+                p: [
+                    ['raw capture1.mp4', 0, 163],
+                    ['raw capture1.mp4', 200, 16],
+                ],
+            },
+        ]);
+        expect(fs.existsSync(path.join(folder, '2026 Test - Q1.mp4'))).toBe(
+            true
+        );
+        // The next match, with nothing in progress, goes to the new folder.
+        upd('MATCH_START', 'Q2');
+        await at(230);
+        expect(listMatches(shownFolder)).toHaveLength(1);
     });
 });

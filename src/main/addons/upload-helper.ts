@@ -1,15 +1,19 @@
 import path from 'path';
-import fs from 'fs';
-import { finished } from 'stream/promises';
-import { Readable } from 'node:stream';
-import { ChildProcessWithoutNullStreams, spawn, execSync } from 'child_process';
-import glob from 'glob';
+import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import log from 'electron-log';
 import { appdataPath } from '../util';
 import { AddonLoggers } from './addon-loggers';
 import { getStore } from '../store';
 import AutoAV from './autoav';
 import FtcScorekeeper from '../ftc/scorekeeper';
+import {
+    SerialQueue,
+    compareVersions,
+    downloadRelease,
+    killByNameAndPort,
+    latestReleaseVersion,
+    newestLocalVersion,
+} from './release-download';
 
 // YoutubeUploaderAddon spawns and supervises the youtube-tba-upload process, which
 // uploads recorded match videos to YouTube and submits the URLs to The Blue
@@ -36,6 +40,8 @@ export default class YoutubeUploaderAddon {
 
     private logs: AddonLoggers;
 
+    private queue = new SerialQueue();
+
     constructor() {
         this.logs = {
             out: log.scope('youtube-uploader.out'),
@@ -55,57 +61,15 @@ export default class YoutubeUploaderAddon {
     private static readonly TBA_URL = 'https://www.thebluealliance.com';
 
     // Kill every youtube-tba-upload process, tracked or orphaned, by BOTH image
-    // name and whatever holds port 8807 — the same belt-and-suspenders sweep
-    // LiveCaptions uses, so a wedged prior instance can't keep the port and
-    // block the next start.
+    // name and whatever is LISTENING on port 8807 - the same belt-and-
+    // suspenders sweep LiveCaptions uses, so a wedged prior instance can't keep
+    // the port and block the next start.
     private killExisting() {
-        try {
-            const tl = execSync('tasklist /fo csv /nh').toString();
-            tl.split(/\r?\n/).forEach((line) => {
-                const m = /^"(youtube-tba-upload[^"]*\.exe)","(\d+)"/i.exec(
-                    line.trim()
-                );
-                if (m) {
-                    try {
-                        execSync(`taskkill /F /T /PID ${m[2]}`, {
-                            stdio: 'ignore',
-                        });
-                    } catch {
-                        // already gone
-                    }
-                }
-            });
-        } catch {
-            // tasklist unavailable (non-Windows dev box) - ignore.
-        }
-
-        try {
-            const out = execSync('netstat -ano -p tcp').toString();
-            const pids = new Set<string>();
-            out.split(/\r?\n/).forEach((line) => {
-                if (
-                    line.includes(`:${YoutubeUploaderAddon.PORT} `) ||
-                    line.includes(`:${YoutubeUploaderAddon.PORT}\t`)
-                ) {
-                    const cols = line.trim().split(/\s+/);
-                    const pid = cols[cols.length - 1];
-                    if (/^\d+$/.test(pid) && pid !== '0') pids.add(pid);
-                }
-            });
-            pids.forEach((pid) => {
-                try {
-                    execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
-                    this.logs.out.log(
-                        `Freed port ${YoutubeUploaderAddon.PORT} (killed PID ${pid})`
-                    );
-                } catch {
-                    // ignore
-                }
-            });
-        } catch {
-            // netstat unavailable (non-Windows dev box) - ignore.
-        }
-
+        killByNameAndPort(
+            'youtube-tba-upload',
+            YoutubeUploaderAddon.PORT,
+            this.logs.out
+        );
         this.running = false;
         this.process = null;
     }
@@ -154,7 +118,12 @@ export default class YoutubeUploaderAddon {
     // releases (best-effort, offline-tolerant) exactly like LiveCaptions, then
     // launches the newest local copy. Returns false (and stays stopped) when
     // there is no recording folder yet, or no exe was ever downloaded.
-    public async start(): Promise<boolean> {
+    // start() and stop() run one at a time (see SerialQueue).
+    public start(): Promise<boolean> {
+        return this.queue.run(() => this.doStart());
+    }
+
+    private async doStart(): Promise<boolean> {
         this.killExisting();
 
         // Match-video uploads: FTC events in either season, FRC off-season.
@@ -175,40 +144,25 @@ export default class YoutubeUploaderAddon {
 
         // Newest exe already downloaded, named youtube-tba-upload-<version>.exe
         // in the app's userData dir.
-        const found = glob.sync(
-            path.join(appdataPath, 'youtube-tba-upload-*.exe')
-        );
-        let currentVersion = '0.0.0';
-        found.forEach((file) => {
-            const version = file.split('-').pop()?.split('.exe')[0] ?? '0.0.0';
-            if (version > currentVersion) currentVersion = version;
-        });
+        let currentVersion = newestLocalVersion('youtube-tba-upload');
 
         // Update check + download is best-effort: offline at a venue we fall
         // back to the newest local exe rather than leaving the uploader down.
         try {
             const baseUrl = getStore().get('youtubeUploaderDownloadBase');
-            const res = await fetch(`${baseUrl}/latest`, {
-                signal: AbortSignal.timeout(8000),
-            });
-            // "/latest" redirects to the newest release; extract its version.
-            const latestVersion = res.url.split('/').pop()?.slice(1) || '0.0.0';
-            if (latestVersion > currentVersion) {
+            const latestVersion = await latestReleaseVersion(baseUrl);
+            if (
+                latestVersion &&
+                compareVersions(latestVersion, currentVersion) > 0
+            ) {
                 this.logs.out.log(
                     `New YouTube uploader available, currently ${currentVersion}, downloading ${latestVersion}`
                 );
-                const target = path.join(
-                    appdataPath,
-                    `youtube-tba-upload-${latestVersion}.exe`
+                await downloadRelease(
+                    baseUrl,
+                    'youtube-tba-upload',
+                    latestVersion
                 );
-                const stream = fs.createWriteStream(target);
-                const { body } = await fetch(
-                    `${baseUrl}/download/v${latestVersion}/youtube-tba-upload-${latestVersion}.exe`
-                );
-                if (body === null)
-                    throw new Error('Failed to download YouTube uploader');
-                // @ts-ignore Node's Readable.fromWeb typing lags the DOM stream
-                await finished(Readable.fromWeb(body).pipe(stream));
                 currentVersion = latestVersion;
             }
         } catch (e) {
@@ -240,7 +194,7 @@ export default class YoutubeUploaderAddon {
             '-video-dir',
             videoDir,
             '-listen',
-            `:${YoutubeUploaderAddon.PORT}`,
+            `127.0.0.1:${YoutubeUploaderAddon.PORT}`,
             '-fms-url',
             YoutubeUploaderAddon.FMS_URL,
             '-tba-url',
@@ -314,7 +268,11 @@ export default class YoutubeUploaderAddon {
     // Stop the uploader cleanly: ask it to shut down (closes the browser and
     // checkpoints the WAL), then fall back to the kill sweep on timeout. Exit
     // handlers are identity-guarded, so the fallback kill is harmless.
-    public async stop(): Promise<boolean> {
+    public stop(): Promise<boolean> {
+        return this.queue.run(() => this.doStop());
+    }
+
+    private async doStop(): Promise<boolean> {
         try {
             await fetch(
                 `http://127.0.0.1:${YoutubeUploaderAddon.PORT}/api/shutdown`,

@@ -210,7 +210,7 @@ function ActionRow({
                     return (
                         <Tooltip
                             key={f.key}
-                            title={missing ? 'Not an input in vMix' : undefined}
+                            title={missing ? 'Unknown vMix input' : undefined}
                         >
                             <AutoComplete
                                 style={{ flex: 1, minWidth: 0 }}
@@ -578,9 +578,9 @@ function SettingsDialog({
                 <Form.Item
                     label={
                         {
-                            fms: 'FMS Automations',
-                            customAd: 'Custom AD Automations',
-                            ftc: 'FTC Automations',
+                            fms: 'FMS automations',
+                            customAd: 'Custom AD automations',
+                            ftc: 'FTC automations',
                         }[source]
                     }
                 >
@@ -626,7 +626,8 @@ export default function Bitfocus() {
     };
 
     const [ftc, setFtc] = useState<FtcSettings | null>(null);
-    const [program, setProgram] = useState<Program>('frc');
+    // null until the first AutoAV status, so FTC never flashes FRC controls.
+    const [program, setProgram] = useState<Program | null>(null);
     const [offSeason, setOffSeason] = useState(false);
     const [frcAd, setFrcAd] = useState<'fms' | 'customAd'>('fms');
     const [ftcStatus, setFtcStatus] = useState<FtcScorekeeperStatus | null>(
@@ -785,9 +786,12 @@ export default function Bitfocus() {
 
     // FTC: the scorekeeper. FRC in-season: the FMS audience display only.
     // FRC off-season: the audience display chosen in Settings.
-    let triggerSource: TriggerSource = 'fms';
+    // null until the program is known: no triggers and no settings yet.
+    let triggerSource: TriggerSource | null = null;
     if (program === 'ftc') triggerSource = 'ftc';
-    else if (offSeason && frcAd === 'customAd') triggerSource = 'customAd';
+    else if (program && offSeason && frcAd === 'customAd')
+        triggerSource = 'customAd';
+    else if (program) triggerSource = 'fms';
     const ftcFields = ftcStatus?.connected ? ftcStatus.fieldCount : 2;
     let triggerOptions: TriggerOption[] | null = null;
     if (triggerSource === 'fms') triggerOptions = fms && FMS_BITFOCUS_EVENTS;
@@ -795,8 +799,10 @@ export default function Bitfocus() {
         triggerOptions =
             customAd &&
             customAd.events.map((e) => ({ value: e.id, label: e.label }));
-    } else triggerOptions = ftc && ftcTriggerOptions(ftcFields);
+    } else if (triggerSource === 'ftc')
+        triggerOptions = ftc && ftcTriggerOptions(ftcFields);
     const triggersAt = (row: number, column: number): TriggerId[] => {
+        if (!triggerSource) return [];
         if (triggerSource === 'fms')
             return commandsAt(fms, pageNumber, row, column).map(
                 (c) => c.BfEvent
@@ -811,7 +817,7 @@ export default function Bitfocus() {
     // AD maps event -> location in its first sink, which always presses the
     // Companion on this machine.
     const saveTriggers = (events: TriggerId[]) => {
-        if (!cell) return;
+        if (!cell || !triggerSource) return;
         const loc = { page: pageNumber, row: cell.row, column: cell.column };
         if (triggerSource === 'fms') {
             if (!fms) return;
@@ -952,16 +958,18 @@ export default function Bitfocus() {
                 }}
                 onClose={() => setCell(null)}
             />
-            <SettingsDialog
-                open={settingsOpen}
-                source={triggerSource}
-                fms={fms}
-                customAd={customAd}
-                ftc={ftc}
-                onSaveFms={saveFms}
-                onSaveCustomAd={saveCustomAd}
-                onClose={() => setSettingsOpen(false)}
-            />
+            {triggerSource && (
+                <SettingsDialog
+                    open={settingsOpen}
+                    source={triggerSource}
+                    fms={fms}
+                    customAd={customAd}
+                    ftc={ftc}
+                    onSaveFms={saveFms}
+                    onSaveCustomAd={saveCustomAd}
+                    onClose={() => setSettingsOpen(false)}
+                />
+            )}
         </>
     );
 }

@@ -25,6 +25,7 @@ import {
     YoutubeFilled,
 } from '@ant-design/icons';
 import AddonControlRow from '../../components/AddonControlRow';
+import { useLifecycleBusy } from '../../hooks/ipc_busy';
 import { AutoAVStatus, Program } from '../../../models/AutoAVStatus';
 import './index.css';
 
@@ -36,7 +37,7 @@ function baseName(p: string): string {
 
 const { Text, Link } = Typography;
 
-const UPLOAD_BASE = 'http://localhost:8807';
+const UPLOAD_BASE = 'http://127.0.0.1:8807';
 
 // The uploader's per-video state machine, projected from the shared database.
 export interface UploadVideoMeta {
@@ -295,7 +296,7 @@ function AccountRow({
                         loading={signingIn}
                         disabled={signingIn}
                     >
-                        Sign in to YouTube
+                        Sign in
                     </Button>
                 )}
                 {signIn.signedIn && (
@@ -304,13 +305,13 @@ function AccountRow({
                             Open channel
                         </Button>
                         <Popconfirm
-                            title="Log out of YouTube?"
+                            title="Log out"
                             okText="Log out"
                             cancelText="Cancel"
                             onConfirm={onLogout}
                         >
                             <Button size="small" danger>
-                                Log out of YouTube
+                                Log out
                             </Button>
                         </Popconfirm>
                     </>
@@ -335,6 +336,7 @@ export function UploadSettingsDialog({
     onCreatePlaylist,
     sample,
     ftc,
+    showAccount,
 }: {
     open: boolean;
     onClose: () => void;
@@ -349,6 +351,8 @@ export function UploadSettingsDialog({
     onCreatePlaylist: () => Promise<Playlist | null>;
     sample: UploadRow | undefined;
     ftc: boolean;
+    // Off while the uploader is stopped: no sign-in state to show.
+    showAccount?: boolean;
 }) {
     const [form] = Form.useForm<UploadSettings>();
     const titleTemplate = Form.useWatch('titleTemplate', form);
@@ -428,13 +432,15 @@ export function UploadSettingsDialog({
             }}
             destroyOnClose
         >
-            <AccountRow
-                signIn={signIn}
-                signingIn={signingIn}
-                onSignIn={onSignIn}
-                onOpenChannel={onOpenChannel}
-                onLogout={onLogout}
-            />
+            {showAccount && (
+                <AccountRow
+                    signIn={signIn}
+                    signingIn={signingIn}
+                    onSignIn={onSignIn}
+                    onOpenChannel={onOpenChannel}
+                    onLogout={onLogout}
+                />
+            )}
             <Form
                 form={form}
                 layout="vertical"
@@ -606,6 +612,10 @@ export function UploadSettingsDialog({
     );
 }
 
+UploadSettingsDialog.defaultProps = {
+    showAccount: true,
+};
+
 // The template variables the uploader's renderer understands, shown in the
 // description-box tooltip. Mirrors resolvePlaceholder in the uploader's
 // template.go; a line whose variable has no value is dropped from the output.
@@ -616,8 +626,8 @@ const TEMPLATE_VARS: [string, string][] = [
     ['{event_year}', 'Season year'],
     ['{match_level}', 'Qualification / Playoff / Final'],
     ['{match_number}', 'Match number'],
-    ['{match_label}', 'e.g. Qualification 5'],
-    ['{play_suffix}', 'e.g.  Play 2'],
+    ['{match_label}', 'Qualification 5'],
+    ['{play_suffix}', ' Play 2'],
     ['{red_score}', 'Red final score'],
     ['{blue_score}', 'Blue final score'],
     ['{red[0].number}', 'Red team 1 number (0-2)'],
@@ -727,6 +737,28 @@ interface UploadAddonStatus {
     eventKey: string;
 }
 
+// The uploader answers errors as JSON {error}; fall back to the HTTP status.
+async function failReason(res: Response): Promise<string> {
+    try {
+        const body = await res.json();
+        if (body?.error) return String(body.error);
+    } catch {
+        // not JSON
+    }
+    return `HTTP ${res.status}`;
+}
+
+// A fetch that throws: a timeout, no answer at all, or our own thrown reason.
+function errText(e: unknown): string {
+    if (!(e instanceof Error)) return 'No reply';
+    if (e.name === 'TimeoutError') return 'Timed out';
+    if (e instanceof TypeError || !e.message) return 'No reply';
+    return e.message;
+}
+
+const pollStatus = () =>
+    window.electron?.ipcRenderer.sendMessage('upload:getStatus', []);
+
 function sortRows(videos: Record<string, UploadVideo>): UploadRow[] {
     return Object.entries(videos)
         .map(([filename, v]) => ({ filename, ...v }))
@@ -738,8 +770,9 @@ function sortRows(videos: Record<string, UploadVideo>): UploadRow[] {
 }
 
 export default function UploadPage() {
-    // FRC or FTC: TBA vs The Orange Alliance in settings.
-    const [program, setProgram] = useState<Program>('frc');
+    // FRC or FTC: TBA vs The Orange Alliance in settings. null until the
+    // first AutoAV status, so FTC never flashes the FRC fields.
+    const [program, setProgram] = useState<Program | null>(null);
     const ftc = program === 'ftc';
     useEffect(() => {
         if (!window.electron) return undefined;
@@ -758,7 +791,6 @@ export default function UploadPage() {
         channelName: '',
     });
     const [settingsOpen, setSettingsOpen] = useState(false);
-    const [busy, setBusy] = useState(false);
     const [signingIn, setSigningIn] = useState(false);
     const [playlistsLoading, setPlaylistsLoading] = useState(false);
 
@@ -767,22 +799,36 @@ export default function UploadPage() {
     // Addon status over IPC (polled while mounted).
     useEffect(() => {
         if (!window.electron) return undefined;
-        const { ipcRenderer } = window.electron;
-        const off = ipcRenderer.on('upload:status', (s: UploadAddonStatus) => {
-            setStatus(s);
-            setBusy(false);
-        });
-        const poll = () => ipcRenderer.sendMessage('upload:getStatus', []);
-        poll();
-        const timer = setInterval(poll, 3000);
+        const off = window.electron.ipcRenderer.on(
+            'upload:status',
+            (s: UploadAddonStatus) => setStatus(s)
+        );
+        pollStatus();
+        const timer = setInterval(pollStatus, 3000);
         return () => {
             off();
             clearInterval(timer);
         };
     }, []);
 
-    // Match/upload state straight from the uploader (permissive CORS), polled.
     const running = !!status?.running;
+    const { busy, begin } = useLifecycleBusy(running);
+
+    // Poll faster while an action runs, so its stop and start are both seen.
+    useEffect(() => {
+        if (!busy) return undefined;
+        const timer = setInterval(pollStatus, 500);
+        return () => clearInterval(timer);
+    }, [busy]);
+
+    // A stopped uploader has no rows and no sign-in: drop the last ones seen.
+    useEffect(() => {
+        if (running) return;
+        setRows([]);
+        setSignIn({ signedIn: false, channelName: '' });
+    }, [running]);
+
+    // Match/upload state straight from the uploader (permissive CORS), polled.
     useEffect(() => {
         if (!running) return undefined;
         let cancelled = false;
@@ -914,10 +960,14 @@ export default function UploadPage() {
                 signal: AbortSignal.timeout(5000),
             }
         )
-            .then(() => message.info('Opening YouTube sign-in'))
-            .catch(() => {
+            .then(async (res) => {
+                if (!res.ok) throw new Error(await failReason(res));
+                message.info('Opening YouTube sign-in');
+                return null;
+            })
+            .catch((e) => {
                 setSigningIn(false);
-                message.error('Failed');
+                message.error(`Failed: ${errText(e)}`);
             });
     }, [eventKey]);
 
@@ -933,8 +983,12 @@ export default function UploadPage() {
                 signal: AbortSignal.timeout(5000),
             }
         )
-            .then(() => message.info('Opening channel'))
-            .catch(() => message.error('Failed'));
+            .then(async (res) => {
+                if (!res.ok) throw new Error(await failReason(res));
+                message.info('Opening channel');
+                return null;
+            })
+            .catch((e) => message.error(`Failed: ${errText(e)}`));
     }, [eventKey]);
 
     const logoutYouTube = useCallback(() => {
@@ -949,28 +1003,29 @@ export default function UploadPage() {
                 signal: AbortSignal.timeout(5000),
             }
         )
-            .then(() => {
+            .then(async (res) => {
+                if (!res.ok) throw new Error(await failReason(res));
                 setSignIn({ signedIn: false, channelName: '' });
                 message.success('Logged out');
                 return null;
             })
-            .catch(() => message.error('Failed'));
+            .catch((e) => message.error(`Failed: ${errText(e)}`));
     }, [eventKey]);
 
     const restart = useCallback(() => {
-        setBusy(true);
+        begin('restart');
         window.electron?.ipcRenderer.sendMessage('upload:restart', []);
-    }, []);
+    }, [begin]);
 
     const stop = useCallback(() => {
-        setBusy(true);
+        begin('stop');
         window.electron?.ipcRenderer.sendMessage('upload:stopAddon', []);
-    }, []);
+    }, [begin]);
 
     const post = useCallback(
         async (route: string, filename: string, ok: string) => {
             try {
-                await fetch(
+                const res = await fetch(
                     `${UPLOAD_BASE}${route}?event_key=${encodeURIComponent(
                         eventKey
                     )}`,
@@ -981,9 +1036,13 @@ export default function UploadPage() {
                         signal: AbortSignal.timeout(5000),
                     }
                 );
+                if (!res.ok) {
+                    message.error(`Failed: ${await failReason(res)}`);
+                    return;
+                }
                 message.success(ok);
-            } catch {
-                message.error('Failed');
+            } catch (e) {
+                message.error(`Failed: ${errText(e)}`);
             }
         },
         [eventKey]
@@ -1021,31 +1080,42 @@ export default function UploadPage() {
                 busy={busy}
             />
             <div className="upload-page">
-                <Typography.Title level={5} style={{ margin: '0 0 8px' }}>
-                    Uploads ({rows.length})
-                </Typography.Title>
-                <UploadTable
-                    rows={rows}
-                    onRetry={onRetry}
-                    onSubmitTba={onSubmitTba}
-                    ftc={ftc}
-                />
+                {status && !running && <Empty description="Stopped" />}
+                {running && program && (
+                    <>
+                        <Typography.Title
+                            level={5}
+                            style={{ margin: '0 0 8px' }}
+                        >
+                            Uploads ({rows.length})
+                        </Typography.Title>
+                        <UploadTable
+                            rows={rows}
+                            onRetry={onRetry}
+                            onSubmitTba={onSubmitTba}
+                            ftc={ftc}
+                        />
+                    </>
+                )}
             </div>
-            <UploadSettingsDialog
-                open={settingsOpen}
-                onClose={() => setSettingsOpen(false)}
-                playlists={playlists}
-                playlistsLoading={playlistsLoading}
-                signIn={signIn}
-                signingIn={signingIn}
-                onSignIn={signInYouTube}
-                onOpenChannel={openChannel}
-                onLogout={logoutYouTube}
-                onRefreshPlaylists={() => loadPlaylists(true)}
-                onCreatePlaylist={createPlaylist}
-                sample={rows.find((r) => r.meta?.match_number)}
-                ftc={ftc}
-            />
+            {program && (
+                <UploadSettingsDialog
+                    open={settingsOpen}
+                    onClose={() => setSettingsOpen(false)}
+                    playlists={playlists}
+                    playlistsLoading={playlistsLoading}
+                    signIn={signIn}
+                    signingIn={signingIn}
+                    onSignIn={signInYouTube}
+                    onOpenChannel={openChannel}
+                    onLogout={logoutYouTube}
+                    onRefreshPlaylists={() => loadPlaylists(true)}
+                    onCreatePlaylist={createPlaylist}
+                    sample={rows.find((r) => r.meta?.match_number)}
+                    ftc={ftc}
+                    showAccount={running}
+                />
+            )}
         </>
     );
 }

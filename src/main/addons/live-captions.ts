@@ -1,13 +1,17 @@
 import path from 'path';
-import fs from 'fs';
-import { finished } from 'stream/promises';
-import { ChildProcessWithoutNullStreams, spawn, execSync } from 'child_process';
-import glob from 'glob';
+import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import log from 'electron-log';
-import { Readable } from 'node:stream';
 import { appdataPath } from '../util';
 import { AddonLoggers } from './addon-loggers';
 import { getStore } from '../store';
+import {
+    SerialQueue,
+    compareVersions,
+    downloadRelease,
+    killByNameAndPort,
+    latestReleaseVersion,
+    newestLocalVersion,
+} from './release-download';
 
 export default class LiveCaptions {
     private static instance: LiveCaptions;
@@ -20,6 +24,9 @@ export default class LiveCaptions {
     private process: ChildProcessWithoutNullStreams | null = null;
 
     private logs: AddonLoggers;
+
+    // start() and stop() run one at a time (see SerialQueue).
+    private queue = new SerialQueue();
 
     constructor() {
         this.logs = {
@@ -39,57 +46,7 @@ export default class LiveCaptions {
     // instance held 3000, the new one hit EADDRINUSE, and live-captions swallows
     // that exception and sits there serving nothing.
     private killExisting() {
-        // 1) Kill by image name. The taskkill /FI "IMAGENAME eq name*.exe"
-        // wildcard filter is rejected on some Win11 builds ("search filter
-        // cannot be recognized"), so enumerate with tasklist and kill by PID.
-        try {
-            const tl = execSync('tasklist /fo csv /nh').toString();
-            tl.split(/\r?\n/).forEach((line) => {
-                const m = /^"(live-captions[^"]*\.exe)","(\d+)"/i.exec(
-                    line.trim()
-                );
-                if (m) {
-                    try {
-                        execSync(`taskkill /F /T /PID ${m[2]}`, {
-                            stdio: 'ignore',
-                        });
-                    } catch {
-                        // already gone
-                    }
-                }
-            });
-        } catch {
-            // tasklist unavailable (non-Windows dev box) - ignore.
-        }
-
-        // 2) Kill whatever is still LISTENING on the port, whatever it's called.
-        try {
-            const out = execSync('netstat -ano -p tcp').toString();
-            const pids = new Set<string>();
-            out.split(/\r?\n/).forEach((line) => {
-                if (
-                    line.includes(`:${LiveCaptions.PORT} `) ||
-                    line.includes(`:${LiveCaptions.PORT}\t`)
-                ) {
-                    const cols = line.trim().split(/\s+/);
-                    const pid = cols[cols.length - 1];
-                    if (/^\d+$/.test(pid) && pid !== '0') pids.add(pid);
-                }
-            });
-            pids.forEach((pid) => {
-                try {
-                    execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
-                    this.logs.out.log(
-                        `Freed port ${LiveCaptions.PORT} (killed PID ${pid})`
-                    );
-                } catch {
-                    // ignore
-                }
-            });
-        } catch {
-            // netstat unavailable (non-Windows dev box) - ignore.
-        }
-
+        killByNameAndPort('live-captions', LiveCaptions.PORT, this.logs.out);
         this.running = false;
         this.process = null;
     }
@@ -122,49 +79,31 @@ export default class LiveCaptions {
     /*
      * Starts the live-captions process
      */
-    public async start(): Promise<boolean> {
+    public start(): Promise<boolean> {
+        return this.queue.run(() => this.doStart());
+    }
+
+    private async doStart(): Promise<boolean> {
         this.killExisting();
 
-        // Check if the live-captions.exe exists
-        const liveCaptionsPath = path.join(appdataPath, 'live-captions-*.exe');
-        const found = glob.sync(liveCaptionsPath);
-
-        // Current version of live-captions
-        let currentVersion = '0.0.0';
-        found.forEach((file) => {
-            const version = file.split('-').pop()?.split('.exe')[0] ?? '0.0.0';
-            if (version > currentVersion) {
-                currentVersion = version;
-            }
-        });
+        // Newest live-captions-<version>.exe already downloaded
+        let currentVersion = newestLocalVersion('live-captions');
 
         // Update check + download is best-effort: if we're offline (e.g. at a
         // venue) or the download fails, fall back to the newest local exe rather
         // than throwing and leaving live-captions down.
         try {
             const baseUrl = getStore().get('liveCaptionsDownloadBase');
-            const res = await fetch(`${baseUrl}/latest`, {
-                signal: AbortSignal.timeout(8000),
-            });
-            // "/latest" forwards to the newest release URL; extract its version.
-            const latestVersion = res.url.split('/').pop()?.slice(1) || '0.0.0';
+            const latestVersion = await latestReleaseVersion(baseUrl);
 
-            if (latestVersion > currentVersion) {
+            if (
+                latestVersion &&
+                compareVersions(latestVersion, currentVersion) > 0
+            ) {
                 this.logs.out.log(
                     `Found new version of live-captions, currently at ${currentVersion}, downloading ${latestVersion}`
                 );
-                const target = path.join(
-                    appdataPath,
-                    `live-captions-${latestVersion}.exe`
-                );
-                const stream = fs.createWriteStream(target);
-                const { body } = await fetch(
-                    `${baseUrl}/download/v${latestVersion}/live-captions-${latestVersion}.exe`
-                );
-                if (body === null)
-                    throw new Error('Failed to download live-captions');
-                // @ts-ignore
-                await finished(Readable.fromWeb(body).pipe(stream));
+                await downloadRelease(baseUrl, 'live-captions', latestVersion);
                 currentVersion = latestVersion;
             }
         } catch (e) {
@@ -196,9 +135,9 @@ export default class LiveCaptions {
     // 3000. This is what the Stop button and the pre-launch cleanup both need.
     // Exit handlers are identity-guarded, so the kill firing exit is harmless.
     public stop(): Promise<boolean> {
-        return new Promise<boolean>((resolve) => {
+        return this.queue.run(async () => {
             this.killExisting();
-            resolve(true);
+            return true;
         });
     }
 
@@ -282,23 +221,19 @@ export default class LiveCaptions {
         latest: string;
         updateAvailable: boolean;
     }> {
-        const found = glob.sync(path.join(appdataPath, 'live-captions-*.exe'));
-        let current = '0.0.0';
-        found.forEach((file) => {
-            const v = file.split('-').pop()?.split('.exe')[0] ?? '0.0.0';
-            if (v > current) current = v;
-        });
+        const current = newestLocalVersion('live-captions');
         let latest = current;
         try {
             const baseUrl = getStore().get('liveCaptionsDownloadBase');
-            const res = await fetch(`${baseUrl}/latest`, {
-                signal: AbortSignal.timeout(8000),
-            });
-            latest = res.url.split('/').pop()?.slice(1) || current;
+            latest = (await latestReleaseVersion(baseUrl)) ?? current;
         } catch (e) {
             this.logs.err.warn('Update check failed', e);
         }
-        return { current, latest, updateAvailable: latest > current };
+        return {
+            current,
+            latest,
+            updateAvailable: compareVersions(latest, current) > 0,
+        };
     }
 
     public static get Instance(): LiveCaptions {

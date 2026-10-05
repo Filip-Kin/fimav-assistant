@@ -155,7 +155,7 @@ const createWindow = async () => {
 // eslint-disable-next-line import/prefer-default-export
 export const quitApp = () => {
     appIsQuitting = true;
-    addons.stop();
+    // before-quit stops the addons.
     app.quit();
 };
 
@@ -170,13 +170,29 @@ app.on('window-all-closed', () => {
 // path - including electron-updater's relaunch and a menu/OS quit - not just our
 // own quitApp(). Otherwise an orphaned live-captions survives the update and
 // holds the port, which is what caused the recurring blank captions screen.
-app.on('before-quit', () => {
+// The quit is held until the stops finish (the uploader asks its exe to close
+// its browser first), capped so a wedged addon cannot block the quit.
+let addonsStop: 'idle' | 'stopping' | 'done' = 'idle';
+app.on('before-quit', (event) => {
     appIsQuitting = true;
-    try {
-        addons.stop();
-    } catch (e) {
-        log.error('Failed to stop addons on quit', e);
-    }
+    if (addonsStop === 'done') return;
+    event.preventDefault();
+    if (addonsStop === 'stopping') return;
+    addonsStop = 'stopping';
+    (async () => {
+        try {
+            await Promise.race([
+                addons.stop(),
+                new Promise((resolve) => {
+                    setTimeout(resolve, 8000);
+                }),
+            ]);
+        } catch (e) {
+            log.error('Failed to stop addons on quit', e);
+        }
+        addonsStop = 'done';
+        app.quit();
+    })();
 });
 
 const instanceLock = app.requestSingleInstanceLock();

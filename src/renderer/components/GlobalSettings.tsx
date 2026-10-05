@@ -11,6 +11,7 @@ import {
 } from 'antd';
 import { AutoAVStatus } from 'models/AutoAVStatus';
 import { FtcScorekeeperStatus, FtcSettings } from 'models/Ftc';
+import { useOneShot } from '../hooks/ipc_busy';
 
 const { Text } = Typography;
 
@@ -35,6 +36,7 @@ export default function GlobalSettings() {
     );
     const [scanning, setScanning] = useState(false);
     const [found, setFound] = useState<string[] | null>(null);
+    const oneShot = useOneShot(60000);
 
     useEffect(() => {
         if (!window.electron) return undefined;
@@ -71,18 +73,20 @@ export default function GlobalSettings() {
     }, []);
 
     const scan = () => {
-        if (!window.electron) return;
-        setScanning(true);
-        const off = window.electron.ipcRenderer.on(
+        const sent = oneShot<string[]>(
             'ftc:scanResult',
-            (list: string[]) => {
-                off();
+            (list) => {
                 setScanning(false);
                 setFound(list);
                 if (list.length === 1) setAddress(list[0]);
+            },
+            () => send('ftc:scan'),
+            () => {
+                setScanning(false);
+                setFound([]);
             }
         );
-        send('ftc:scan');
+        if (sent) setScanning(true);
     };
 
     const save = () => {
@@ -95,6 +99,8 @@ export default function GlobalSettings() {
     };
 
     const detectedLabel = { frc: 'FRC', ftc: 'FTC' }[detected ?? 'frc'];
+    // What the app runs as: the override, or the detected program on Auto.
+    const effective = program === 'auto' ? detected : program;
 
     return (
         <Modal
@@ -122,7 +128,7 @@ export default function GlobalSettings() {
                         ]}
                     />
                 </Form.Item>
-                {program !== 'ftc' && (
+                {effective !== 'ftc' && (
                     <Form.Item label="FRC audience display">
                         <Select
                             value={frcAd}

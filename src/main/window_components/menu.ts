@@ -155,23 +155,4 @@ export default class MenuBuilder {
 
         return templateDefault;
     }
-
-    static openLiveCapSettings(submenu: string = '') {
-        const window = new BrowserWindow({
-            width: 1200,
-            height: 800,
-            alwaysOnTop: false,
-            resizable: false,
-            minimizable: true,
-            maximizable: false,
-            fullscreenable: false,
-            autoHideMenuBar: true,
-            title: 'Live Captions',
-            webPreferences: {
-                // preload: `Array.from(document.getElementsByClassName("tabs")).forEach(c => c.remove())`
-            },
-        });
-        window.loadURL(`http://localhost:3000/settings.html#${submenu}`);
-        window.show();
-    }
 }

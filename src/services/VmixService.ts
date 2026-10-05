@@ -122,18 +122,24 @@ export default class VmixService {
             info.rtmpUrl ??= '';
             info.rtmpKey ??= '';
 
-            await fetch(
-                `${this.settings.baseUrl}?Function=StreamingSetURL&Value=${info.index},${info.rtmpUrl}`,
-                {
-                    headers: this.createHeaders(),
+            // Encoded: a "&" or "#" in a URL or key would cut vMix's Value.
+            const call = async (fn: string, v: string) => {
+                const rsp = await fetch(
+                    `${this.settings.baseUrl}?Function=${fn}&Value=${
+                        info.index
+                    },${encodeURIComponent(v)}`,
+                    {
+                        headers: this.createHeaders(),
+                    }
+                );
+                if (!rsp.ok) {
+                    throw new Error(
+                        `${fn} for stream ${info.index}: HTTP ${rsp.status}`
+                    );
                 }
-            );
-            await fetch(
-                `${this.settings.baseUrl}?Function=StreamingSetKey&Value=${info.index},${info.rtmpKey}`,
-                {
-                    headers: this.createHeaders(),
-                }
-            );
+            };
+            await call('StreamingSetURL', info.rtmpUrl);
+            await call('StreamingSetKey', info.rtmpKey);
         };
 
         const chain = streamInfo.reduce(async (prev, info) => {

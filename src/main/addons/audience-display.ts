@@ -1,14 +1,18 @@
 import path from 'path';
-import fs from 'fs';
-import { finished } from 'stream/promises';
-import { Readable } from 'node:stream';
-import { ChildProcessWithoutNullStreams, spawn, execSync } from 'child_process';
-import glob from 'glob';
+import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import log from 'electron-log';
 import { appdataPath } from '../util';
 import { AddonLoggers } from './addon-loggers';
 import { getStore } from '../store';
 import AutoAV from './autoav';
+import {
+    SerialQueue,
+    compareVersions,
+    downloadRelease,
+    killByNameAndPort,
+    latestReleaseVersion,
+    newestLocalVersion,
+} from './release-download';
 
 // AudienceDisplayAddon spawns and supervises the custom audience display
 // (Filip-Kin/audience-display), the off-season replacement for the FMS
@@ -34,6 +38,8 @@ export default class AudienceDisplayAddon {
 
     private logs: AddonLoggers;
 
+    private queue = new SerialQueue();
+
     constructor() {
         this.logs = {
             out: log.scope('audience-display.out'),
@@ -47,53 +53,11 @@ export default class AudienceDisplayAddon {
     public static readonly URL = `http://127.0.0.1:${AudienceDisplayAddon.PORT}`;
 
     private killExisting() {
-        try {
-            const tl = execSync('tasklist /fo csv /nh').toString();
-            tl.split(/\r?\n/).forEach((line) => {
-                const m = /^"(audience-display[^"]*\.exe)","(\d+)"/i.exec(
-                    line.trim()
-                );
-                if (m) {
-                    try {
-                        execSync(`taskkill /F /T /PID ${m[2]}`, {
-                            stdio: 'ignore',
-                        });
-                    } catch {
-                        // already gone
-                    }
-                }
-            });
-        } catch {
-            // tasklist unavailable (non-Windows dev box) - ignore.
-        }
-
-        try {
-            const out = execSync('netstat -ano -p tcp').toString();
-            const pids = new Set<string>();
-            out.split(/\r?\n/).forEach((line) => {
-                if (
-                    line.includes(`:${AudienceDisplayAddon.PORT} `) ||
-                    line.includes(`:${AudienceDisplayAddon.PORT}\t`)
-                ) {
-                    const cols = line.trim().split(/\s+/);
-                    const pid = cols[cols.length - 1];
-                    if (/^\d+$/.test(pid) && pid !== '0') pids.add(pid);
-                }
-            });
-            pids.forEach((pid) => {
-                try {
-                    execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
-                    this.logs.out.log(
-                        `Freed port ${AudienceDisplayAddon.PORT} (killed PID ${pid})`
-                    );
-                } catch {
-                    // ignore
-                }
-            });
-        } catch {
-            // netstat unavailable (non-Windows dev box) - ignore.
-        }
-
+        killByNameAndPort(
+            'audience-display',
+            AudienceDisplayAddon.PORT,
+            this.logs.out
+        );
         this.running = false;
         this.process = null;
     }
@@ -125,17 +89,15 @@ export default class AudienceDisplayAddon {
     // the app's userData dir.
     // eslint-disable-next-line class-methods-use-this
     private localVersion(): string {
-        let current = '0.0.0';
-        glob.sync(path.join(appdataPath, 'audience-display-*.exe')).forEach(
-            (file) => {
-                const v = file.split('-').pop()?.split('.exe')[0] ?? '0.0.0';
-                if (v > current) current = v;
-            }
-        );
-        return current;
+        return newestLocalVersion('audience-display');
     }
 
-    public async start(): Promise<boolean> {
+    // start() and stop() run one at a time (see SerialQueue).
+    public start(): Promise<boolean> {
+        return this.queue.run(() => this.doStart());
+    }
+
+    private async doStart(): Promise<boolean> {
         this.killExisting();
 
         // The custom display runs at FRC off-season events when Settings
@@ -152,27 +114,19 @@ export default class AudienceDisplayAddon {
         // back to the newest local exe rather than leaving the display down.
         try {
             const baseUrl = getStore().get('audienceDisplayDownloadBase');
-            const res = await fetch(`${baseUrl}/latest`, {
-                signal: AbortSignal.timeout(8000),
-            });
-            // "/latest" redirects to the newest release; extract its version.
-            const latestVersion = res.url.split('/').pop()?.slice(1) || '0.0.0';
-            if (latestVersion > currentVersion) {
+            const latestVersion = await latestReleaseVersion(baseUrl);
+            if (
+                latestVersion &&
+                compareVersions(latestVersion, currentVersion) > 0
+            ) {
                 this.logs.out.log(
                     `New audience display available, currently ${currentVersion}, downloading ${latestVersion}`
                 );
-                const target = path.join(
-                    appdataPath,
-                    `audience-display-${latestVersion}.exe`
+                await downloadRelease(
+                    baseUrl,
+                    'audience-display',
+                    latestVersion
                 );
-                const stream = fs.createWriteStream(target);
-                const { body } = await fetch(
-                    `${baseUrl}/download/v${latestVersion}/audience-display-${latestVersion}.exe`
-                );
-                if (body === null)
-                    throw new Error('Failed to download the audience display');
-                // @ts-ignore Node's Readable.fromWeb typing lags the DOM stream
-                await finished(Readable.fromWeb(body).pipe(stream));
                 currentVersion = latestVersion;
             }
         } catch (e) {
@@ -260,9 +214,9 @@ export default class AudienceDisplayAddon {
     }
 
     public stop(): Promise<boolean> {
-        return new Promise<boolean>((resolve) => {
+        return this.queue.run(async () => {
             this.killExisting();
-            resolve(true);
+            return true;
         });
     }
 
@@ -284,14 +238,15 @@ export default class AudienceDisplayAddon {
         let latest = current;
         try {
             const baseUrl = getStore().get('audienceDisplayDownloadBase');
-            const res = await fetch(`${baseUrl}/latest`, {
-                signal: AbortSignal.timeout(8000),
-            });
-            latest = res.url.split('/').pop()?.slice(1) || current;
+            latest = (await latestReleaseVersion(baseUrl)) ?? current;
         } catch (e) {
             this.logs.err.warn('Update check failed', e);
         }
-        return { current, latest, updateAvailable: latest > current };
+        return {
+            current,
+            latest,
+            updateAvailable: compareVersions(latest, current) > 0,
+        };
     }
 
     public static get Instance(): AudienceDisplayAddon {

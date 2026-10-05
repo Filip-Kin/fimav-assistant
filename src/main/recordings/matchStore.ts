@@ -81,16 +81,24 @@ function withManifestLock<T>(folder: string, fn: () => T): T {
     }
 }
 
-function readManifest(folder: string): MatchRecord[] {
+// The manifest's records; [] when there is no manifest yet. Any other
+// failure (a file locked by antivirus, half-written JSON from another tool)
+// returns null, so a read-modify-write skips its write instead of replacing
+// every record (and the uploader's upload state) with an empty list.
+function readManifestOrNull(folder: string): MatchRecord[] | null {
+    const p = manifestPath(folder);
     try {
-        const p = manifestPath(folder);
         if (!fs.existsSync(p)) return [];
         const data = JSON.parse(fs.readFileSync(p, 'utf8'));
         return Array.isArray(data?.matches) ? data.matches : [];
     } catch (e) {
         log.warn('readManifest failed', e);
-        return [];
+        return null;
     }
+}
+
+function readManifest(folder: string): MatchRecord[] {
+    return readManifestOrNull(folder) ?? [];
 }
 
 // Atomic write via temp + rename, matching the uploader. Readers on the other
@@ -127,7 +135,11 @@ export function getMatch(folder: string | null, id: string): MatchRecord | null 
 // it).
 export function upsertMatch(folder: string, record: MatchRecord): void {
     withManifestLock(folder, () => {
-        const matches = readManifest(folder);
+        const matches = readManifestOrNull(folder);
+        if (!matches) {
+            log.warn(`upsertMatch: manifest unreadable, ${record.id} not saved`);
+            return;
+        }
         const idx = matches.findIndex((m) => m.id === record.id);
         if (idx >= 0) {
             const kept =
@@ -152,7 +164,8 @@ export function updateMatch(
     patch: Partial<MatchRecord>
 ): MatchRecord | null {
     return withManifestLock(folder, () => {
-        const matches = readManifest(folder);
+        const matches = readManifestOrNull(folder);
+        if (!matches) return null;
         const idx = matches.findIndex((m) => m.id === id);
         if (idx < 0) {
             log.warn(`updateMatch: no record ${id} in ${folder}`);

@@ -25,6 +25,7 @@ import {
 import { AutoAVStatus } from 'models/AutoAVStatus';
 import { MatchRecord, MatchTeam } from 'models/MatchRecord';
 import AddonControlRow from '../../components/AddonControlRow';
+import { useLifecycleBusy, useOneShot } from '../../hooks/ipc_busy';
 import './index.css';
 
 const { Title, Text } = Typography;
@@ -84,11 +85,7 @@ function CutCell({ record }: { record: MatchRecord }) {
 
     // Carded matches are never cut: the card explanation lives in the dead time.
     if (record.hasCard) {
-        return (
-            <span title="Card issued, kept whole to preserve the explanation">
-                <Tag color="gold">Kept (card)</Tag>
-            </span>
-        );
+        return <Tag color="gold">Kept (card)</Tag>;
     }
 
     const p = record.processing;
@@ -247,15 +244,20 @@ function SettingsDialog({
         return off;
     }, [open, form]);
 
+    // A cancelled picker sends no reply, so a new click replaces the waiting
+    // listener and a long timeout removes it.
+    const oneShot = useOneShot(10 * 60000, true);
     const pickFolder = useCallback(() => {
-        if (!window.electron) return;
-        const { ipcRenderer } = window.electron;
-        const off = ipcRenderer.on('autoav:folderPicked', (folder: string) => {
-            off();
-            form.setFieldValue('saveFolder', folder);
-        });
-        ipcRenderer.sendMessage('autoav:pickFolder', []);
-    }, [form]);
+        oneShot<string>(
+            'autoav:folderPicked',
+            (folder) => form.setFieldValue('saveFolder', folder),
+            () =>
+                window.electron?.ipcRenderer.sendMessage(
+                    'autoav:pickFolder',
+                    []
+                )
+        );
+    }, [form, oneShot]);
 
     const save = useCallback(async () => {
         const values = await form.validateFields();
@@ -267,7 +269,7 @@ function SettingsDialog({
                 { matchSeconds, tailSeconds },
             ]);
         }
-        message.success('Settings saved');
+        message.success('Saved');
         onClose();
     }, [form, onClose, ftc, matchSeconds, tailSeconds]);
 
@@ -287,21 +289,13 @@ function SettingsDialog({
                 disabled={loading}
                 style={{ marginTop: 12 }}
             >
-                <Form.Item
-                    label="Event name"
-                    name="eventNameOverride"
-                    tooltip="Typed here, this always overrides the event name FMS reports and is used in the file name and folder. Leave blank to use FMS."
-                >
-                    <Input placeholder="e.g. Wolverine Robotics Competition" />
+                <Form.Item label="Event name" name="eventNameOverride">
+                    <Input placeholder="FMS event name" />
                 </Form.Item>
 
-                <Form.Item
-                    label="Save folder"
-                    name="saveFolder"
-                    tooltip="Where renamed match videos are moved. Blank = alongside the vMix recording. A per-event subfolder is created inside this."
-                >
+                <Form.Item label="Save folder" name="saveFolder">
                     <Input
-                        placeholder="(blank = next to the vMix recording)"
+                        placeholder="vMix recording folder"
                         addonAfter={
                             <Button
                                 type="text"
@@ -320,7 +314,6 @@ function SettingsDialog({
                     label="File naming style"
                     name="fileNameMode"
                     hidden={modeForced}
-                    tooltip="Official events force in-season naming automatically; this is the fallback. In-season: QM13_Event.mp4. Off-season: 2026 Event - Qualification Match 13.mp4."
                 >
                     <Select
                         options={[
@@ -341,7 +334,6 @@ function SettingsDialog({
                     name="autoCut"
                     valuePropName="checked"
                     hidden={!offSeason}
-                    tooltip="After each match records, remove the dead time and keep the trimmed video in the event folder; the raw original is moved into an Originals subfolder. Matches with a card are always kept whole so the card explanation survives. Re-encodes on this machine, so leave off if vMix needs all the CPU during the event."
                 >
                     <Switch />
                 </Form.Item>
@@ -375,16 +367,15 @@ export default function AutoAVPage() {
     const [status, setStatus] = useState<AutoAVStatus | null>(null);
     const [matches, setMatches] = useState<MatchRecord[]>([]);
     const [settingsOpen, setSettingsOpen] = useState(false);
-    const [addonBusy, setAddonBusy] = useState(false);
+    const { busy: addonBusy, begin } = useLifecycleBusy(!!status?.running);
 
     useEffect(() => {
         if (!window.electron) return undefined;
         const { ipcRenderer } = window.electron;
 
-        const offStatus = ipcRenderer.on('autoav:status', (s: AutoAVStatus) => {
-            setStatus(s);
-            setAddonBusy(false);
-        });
+        const offStatus = ipcRenderer.on('autoav:status', (s: AutoAVStatus) =>
+            setStatus(s)
+        );
         const offMatches = ipcRenderer.on(
             'autoav:matches',
             (list: MatchRecord[]) =>
@@ -409,14 +400,14 @@ export default function AutoAVPage() {
     );
 
     const restartAddon = useCallback(() => {
-        setAddonBusy(true);
+        begin('restart');
         window.electron?.ipcRenderer.sendMessage('autoav:restart', []);
-    }, []);
+    }, [begin]);
 
     const stopAddon = useCallback(() => {
-        setAddonBusy(true);
+        begin('stop');
         window.electron?.ipcRenderer.sendMessage('autoav:stopAddon', []);
-    }, []);
+    }, [begin]);
 
     const ftc = status?.program === 'ftc';
     // The field source for this program: FTC Live's scorekeeper or FRC's FMS.
@@ -506,24 +497,30 @@ export default function AutoAVPage() {
                 <div className="autoav-cards">
                     <Card size="small" title="Status">
                         <Space direction="vertical" size={8}>
-                            <StatusBadge
-                                ok={fieldConnected}
-                                label={
-                                    ftc
-                                        ? 'FTC Scorekeeper connected'
-                                        : 'FMS connected'
-                                }
-                            />
-                            <StatusBadge
-                                ok={!!status?.vmix.reachable}
-                                label="vMix reachable"
-                            />
+                            {/* No marks before the first status: no red
+                                crosses, and no FMS line for an FTC event. */}
+                            {status && (
+                                <>
+                                    <StatusBadge
+                                        ok={fieldConnected}
+                                        label={
+                                            ftc
+                                                ? 'FTC Scorekeeper connected'
+                                                : 'FMS connected'
+                                        }
+                                    />
+                                    <StatusBadge
+                                        ok={status.vmix.reachable}
+                                        label="vMix"
+                                    />
+                                </>
+                            )}
                             <RecordingBadge
                                 recording={!!status?.vmix.recording}
                             />
                             {recordingMatch && (
                                 <Text type="warning">
-                                    Recording now: {matchLabel(recordingMatch)}
+                                    Recording: {matchLabel(recordingMatch)}
                                 </Text>
                             )}
                         </Space>
@@ -532,8 +529,7 @@ export default function AutoAVPage() {
                     <Card size="small" title="Recording settings">
                         <Space direction="vertical" size={8}>
                             <Text strong>
-                                {status?.currentEvent?.name ??
-                                    'No event detected'}
+                                {status?.currentEvent?.name ?? 'No event'}
                             </Text>
                             <Text
                                 type="secondary"
@@ -566,8 +562,7 @@ export default function AutoAVPage() {
                                     className="file-name"
                                     title={status?.saveFolder ?? undefined}
                                 >
-                                    {status?.saveFolder ??
-                                        'Set a save folder in Settings, or it appears here after the first recorded match'}
+                                    {status?.saveFolder ?? 'No save folder'}
                                 </Text>
                             </Space>
                         </Space>
@@ -579,7 +574,7 @@ export default function AutoAVPage() {
                 </Title>
 
                 {matches.length === 0 ? (
-                    <Empty description="No matches recorded yet" />
+                    <Empty description="No matches" />
                 ) : (
                     <Table
                         rowKey="id"

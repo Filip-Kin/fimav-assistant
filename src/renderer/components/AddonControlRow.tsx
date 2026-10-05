@@ -108,9 +108,7 @@ export default function AddonControlRow({
                 />
                 <Text strong>{label}</Text>
                 {version && onVersionClick ? (
-                    <Tooltip
-                        title={versionTooltip ?? 'Click to check for updates'}
-                    >
+                    <Tooltip title={versionTooltip ?? 'Updates'}>
                         {versionTag}
                     </Tooltip>
                 ) : (

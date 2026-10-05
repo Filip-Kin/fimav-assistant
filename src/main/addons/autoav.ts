@@ -151,9 +151,13 @@ export default class AutoAV {
                 // If we don't have a start time or data, don't try to rename
                 if (!this.lastMatchStartData) return undefined;
 
-                // Keep a local handle; the fields below get reset in finally
+                // Local handles to this match's state, taken before any await:
+                // the file can take up to a minute to finish, and the next
+                // match may start (and set these fields) meanwhile.
                 const matchData = this.lastMatchStartData;
                 const recordId = this.currentRecordId;
+                const recordObj = this.currentRecordObj;
+                const file = this.currentFile;
 
                 // If we don't have an event name, try to get it
                 if (!this.currentEvent) {
@@ -170,7 +174,7 @@ export default class AutoAV {
                 try {
                     const filename = await attemptRename(
                         this.currentEvent,
-                        this.currentFile,
+                        file,
                         matchData
                     );
 
@@ -180,11 +184,11 @@ export default class AutoAV {
 
                     // Persist the finished record into the manifest that lives
                     // in the event folder the file was filed into.
-                    if (recordId && this.currentRecordObj) {
+                    if (recordId && recordObj) {
                         const saveFolder = path.dirname(filename);
                         this.status.saveFolder = saveFolder;
                         const record: MatchRecord = {
-                            ...this.currentRecordObj,
+                            ...recordObj,
                             fileName: path.basename(filename),
                             filePath: filename,
                             saveFolder,
@@ -224,9 +228,9 @@ export default class AutoAV {
                     // The file was never filed, so there's no folder/manifest to
                     // write to. Persist the error record if we have a folder,
                     // else just surface it live.
-                    if (recordId && this.currentRecordObj) {
+                    if (recordId && recordObj) {
                         const errored: MatchRecord = {
-                            ...this.currentRecordObj,
+                            ...recordObj,
                             status: 'error',
                             error: String(err?.message ?? err),
                             endedAt: Date.now(),
@@ -237,9 +241,12 @@ export default class AutoAV {
                         this.emitter.emit('match', errored);
                     }
                 } finally {
-                    this.lastMatchStartData = null;
-                    this.currentRecordId = null;
-                    this.currentRecordObj = null;
+                    // Only if no newer match has taken these over.
+                    if (this.currentRecordId === recordId) {
+                        this.lastMatchStartData = null;
+                        this.currentRecordId = null;
+                        this.currentRecordObj = null;
+                    }
                 }
 
                 return undefined;
@@ -320,6 +327,8 @@ export default class AutoAV {
         folder: () => this.status.saveFolder,
         log: (m) => this.logRecording(m),
         setRecording: (on) => {
+            // weAreRecording also tells the auto-updater not to restart now.
+            this.weAreRecording = on;
             this.status.recordingActive = on;
             this.status.vmix.recording = on;
             this.emitStatus();
@@ -352,6 +361,8 @@ export default class AutoAV {
         this.emitStatus();
         if (this.isFtc()) {
             this.noteEvent('ftc', s.eventCode, s.eventName || s.eventCode);
+            // Finish matches left from before a restart.
+            this.ftcRecorder.resume();
         }
         this.emitStatus();
         this.emitMatches();
@@ -1055,7 +1066,16 @@ export default class AutoAV {
 
         const mainPath = rec.filePath;
         const originalsDir = path.join(folder, 'Originals');
-        const originalPath = path.join(originalsDir, path.basename(mainPath));
+        // A file of the same name already in Originals belongs to another
+        // match (an earlier event or test with the same name): never cut
+        // from it or replace it.
+        let originalPath = path.join(originalsDir, path.basename(mainPath));
+        const { name, ext } = path.parse(mainPath);
+        for (let n = 2; fs.existsSync(originalPath); n += 1) {
+            originalPath = path.join(originalsDir, `${name} (${n})${ext}`);
+        }
+        // ffmpeg writes here; the cut replaces mainPath only once complete.
+        const cutPath = path.join(folder, `${name}.cutting${ext}`);
 
         const queued = updateMatch(folder, recordId, {
             processing: { state: 'queued' },
@@ -1063,6 +1083,7 @@ export default class AutoAV {
         if (queued) this.emitter.emit('match', queued);
 
         enqueueCut(async () => {
+            let moved = false;
             try {
                 if (!fs.existsSync(originalsDir)) {
                     fs.mkdirSync(originalsDir, { recursive: true });
@@ -1073,15 +1094,12 @@ export default class AutoAV {
                 if (started) this.emitter.emit('match', started);
                 this.logRecording(`Cutting ${path.basename(mainPath)}`);
 
-                // Move the original aside (don't clobber an existing Originals
-                // copy from a prior attempt), then cut it back into the base spot.
-                if (fs.existsSync(mainPath) && !fs.existsSync(originalPath)) {
-                    fs.renameSync(mainPath, originalPath);
-                }
-                const source = fs.existsSync(originalPath)
-                    ? originalPath
-                    : mainPath;
-                await cutMatchVideo(source, mainPath);
+                // Move the original aside, cut it into a temp file, then put
+                // the cut where the original was.
+                fs.renameSync(mainPath, originalPath);
+                moved = true;
+                await cutMatchVideo(originalPath, cutPath);
+                fs.renameSync(cutPath, mainPath);
 
                 const done = updateMatch(folder, recordId, {
                     processing: { state: 'done', outputPath: mainPath },
@@ -1095,10 +1113,12 @@ export default class AutoAV {
                     EquipmentLogType.Debug
                 );
             } catch (err: any) {
-                // Restore the original to the base folder if the cut left it
-                // missing, so we never lose the recording.
+                // Drop a partial cut and put the original back, so the base
+                // folder (which the uploader reads) holds the full recording.
                 try {
+                    fs.rmSync(cutPath, { force: true });
                     if (
+                        moved &&
                         !fs.existsSync(mainPath) &&
                         fs.existsSync(originalPath)
                     ) {

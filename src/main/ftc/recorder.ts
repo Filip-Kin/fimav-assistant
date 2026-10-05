@@ -145,6 +145,12 @@ export default class FtcRecorder {
     // The timeline for the current event folder, loaded from disk the first
     // time a folder is seen (finishing what a previous run left).
     private async timeline(): Promise<Timeline | null> {
+        // Stay on the current folder while it has work in progress: the
+        // folder the app shows can change mid-match (vMix reports its real
+        // recording folder once recording starts, or the event name is
+        // edited), and a switch then would orphan the open raw file and
+        // leave records waiting forever in the old manifest.
+        if (this.tl && this.busy()) return this.tl;
         const folder = this.host.folder();
         if (!folder) return null;
         if (this.tl?.folder === folder) return this.tl;
@@ -160,6 +166,26 @@ export default class FtcRecorder {
         this.tl = loaded;
         await this.recover();
         return this.tl;
+    }
+
+    // Recording, a raw file not yet in Originals, or a match not finished.
+    private busy(): boolean {
+        const { tl } = this;
+        if (!tl) return false;
+        return (
+            this.recording ||
+            tl.raws.some((r) => r.end === null || r.ready === false) ||
+            tl.runs.some((r) => !r.done)
+        );
+    }
+
+    // Pick up where a previous run left off (FIM-AV restarted mid-event):
+    // load the timeline, finish what can be finished, and arm the timers.
+    public resume() {
+        this.run(async () => {
+            await this.timeline();
+            await this.tick();
+        });
     }
 
     private save() {
@@ -181,18 +207,55 @@ export default class FtcRecorder {
         const { tl } = this;
         if (!tl) return;
         let changed = false;
+        // A file moved into Originals just before the restart, with the save
+        // of its new path lost.
+        tl.raws.forEach((raw) => {
+            if (raw.path && !fs.existsSync(raw.path)) {
+                const moved = path.join(
+                    tl.folder,
+                    'Originals',
+                    `raw ${path.basename(raw.path)}`
+                );
+                if (fs.existsSync(moved)) {
+                    raw.path = moved;
+                    changed = true;
+                }
+            }
+        });
         // eslint-disable-next-line no-restricted-syntax
         for (const raw of tl.raws) {
             if (raw.end === null && !this.recording) {
+                // vMix kept recording through the restart: carry on with it.
                 // eslint-disable-next-line no-await-in-loop
-                const dur = raw.path ? await probeDuration(raw.path) : null;
-                raw.end = raw.start + (dur ?? 0) * 1000;
+                const still = await VmixService.Instance.isRecording().catch(
+                    () => false
+                );
+                const current = still
+                    ? // eslint-disable-next-line no-await-in-loop
+                      await VmixService.Instance.GetCurrentRecording().catch(
+                          () => null
+                      )
+                    : null;
+                if (still && current && current === raw.path) {
+                    this.recording = true;
+                    this.host.setRecording(true);
+                } else {
+                    // Closed at its real length; the file's last write when
+                    // it cannot be read.
+                    // eslint-disable-next-line no-await-in-loop
+                    const dur = raw.path ? await probeDuration(raw.path) : null;
+                    let end = raw.start + (dur ?? 0) * 1000;
+                    if (!dur && raw.path && fs.existsSync(raw.path)) {
+                        end = fs.statSync(raw.path).mtimeMs;
+                    }
+                    raw.end = end;
+                }
                 changed = true;
             }
         }
         // A move cut short by the restart: use the file where it is.
         tl.raws.forEach((raw) => {
-            if (raw.ready === false) {
+            if (raw.end !== null && raw.ready === false) {
                 raw.ready = true;
                 changed = true;
             }
@@ -348,7 +411,11 @@ export default class FtcRecorder {
         if (this.timer) clearTimeout(this.timer);
         this.timer = null;
         const now = Date.now();
-        const next = this.nextDeadline(now);
+        let next = this.nextDeadline(now);
+        // Recording needed but not running (vMix refused): try again soon.
+        if (!this.recording && this.needed(now)) {
+            next = Math.min(next ?? Infinity, now + 5000);
+        }
         if (next !== null) {
             this.timer = setTimeout(
                 () => this.run(() => this.tick()),
@@ -379,9 +446,16 @@ export default class FtcRecorder {
             if (!r.done && now >= r.playEnd) this.markWaiting(r);
         });
         if (changed) this.save();
-        if (this.recording && !this.needed(now)) await this.stopRecording();
-        this.finishReady();
-        this.arm();
+        try {
+            if (this.recording && !this.needed(now)) await this.stopRecording();
+            // A start that failed (vMix down at Match Start) is retried here.
+            await this.ensureRecording(now).catch((e) =>
+                logger.warn('vMix did not start recording', e)
+            );
+        } finally {
+            this.finishReady();
+            this.arm();
+        }
     }
 
     private markWaiting(r: FtcRun) {
@@ -582,7 +656,15 @@ export default class FtcRecorder {
             try {
                 if (!pieces.length)
                     throw new Error('No footage for this match');
-                await assembleClips(pieces, target);
+                // Written beside the target, then renamed, so the uploader
+                // never sees a half-made video.
+                const temp = target.replace(/(\.[^.]+)$/, '.making$1');
+                try {
+                    await assembleClips(pieces, temp);
+                    fs.renameSync(temp, target);
+                } finally {
+                    fs.rmSync(temp, { force: true });
+                }
                 const done = updateMatch(folder, r.id, {
                     fileName,
                     filePath: target,

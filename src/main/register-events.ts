@@ -275,8 +275,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             return;
         }
 
-        VmixService.Instance.SetStreamInfo(info as any)
-            .then(() => {
+        (async () => {
+            try {
+                await VmixService.Instance.SetStreamInfo(info as any);
                 invokeLog(`Stream info updated`);
                 // Record that we set stream keys for the current event, so the
                 // vMix tab can show "keys set for <event>" (vMix can't be read
@@ -290,19 +291,24 @@ export default function registerAllEvents(window: BrowserWindow | null) {
                 // Also configure live-captions' YouTube caption push from the
                 // same key (cid == stream key).
                 pushYouTubeCaptions((info as any[]) ?? []);
-                buildVmixStatus()
-                    .then((s) => window?.webContents.send('vmix:status', s))
-                    .catch(() => {});
-                return null;
-            })
-            .catch((err) => {
+            } catch (err) {
                 log.error(`Failed to update stream info`, err);
                 invokeLog(`Failed to update stream info`, {
                     severity: EquipmentLogType.Error,
                     category: EquipmentLogCategory.General,
-                    extraInfo: err,
+                    extraInfo: err as object,
                 });
-            });
+                return;
+            }
+            try {
+                window?.webContents.send(
+                    'vmix:status',
+                    await buildVmixStatus()
+                );
+            } catch {
+                // status refresh is best-effort
+            }
+        })();
     });
     // #endregion vMix stream-key validation state
 
@@ -407,27 +413,29 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // event's stream info over SignalR, which comes back through the StreamInfo
     // listener above and gets pushed into vMix (and recorded).
     ipcMain.on('vmix:setStreamKeys', (event) => {
-        const timeout = setTimeout(() => {
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        const onUpdated = async (success: boolean) => {
+            clearTimeout(timeout);
+            event.reply('vmix:action', {
+                ok: success,
+                action: 'setStreamKeys',
+                message: success
+                    ? 'Stream keys set in vMix'
+                    : 'Failed to set stream keys - check the logs',
+            });
+            event.reply('vmix:status', await buildVmixStatus());
+        };
+        // On timeout the listener goes too, so a late push cannot report
+        // success after "Timed out".
+        timeout = setTimeout(() => {
+            VmixService.Instance.events.off('streamInfoUpdated', onUpdated);
             event.reply('vmix:action', {
                 ok: false,
                 action: 'setStreamKeys',
                 message: 'Timed out asking the server for stream keys',
             });
         }, 10000);
-        VmixService.Instance.events.once(
-            'streamInfoUpdated',
-            async (success: boolean) => {
-                clearTimeout(timeout);
-                event.reply('vmix:action', {
-                    ok: success,
-                    action: 'setStreamKeys',
-                    message: success
-                        ? 'Stream keys set in vMix'
-                        : 'Failed to set stream keys - check the logs',
-                });
-                event.reply('vmix:status', await buildVmixStatus());
-            }
-        );
+        VmixService.Instance.events.once('streamInfoUpdated', onUpdated);
         invoke('GetStreamInfo');
     });
 
@@ -848,22 +856,59 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             : false,
         display: AutoAV.Instance.runsCustomAd(),
     });
-    let running = wanted();
+    // running[key] is the value an addon was last started (or stopped) for.
+    // It only moves once that start succeeded, so a failed start is tried
+    // again on the next status change. applying[key] is the value a start or
+    // stop is already working on, so repeated status events while it runs do
+    // not queue the same change again.
+    type Wanted = ReturnType<typeof wanted>;
+    const running: Wanted = wanted();
+    const applying: Partial<Wanted> = {};
+    // A failed start waits a minute before the same start is tried again, so
+    // an offline cart with no exe does not retry on every status event.
+    const failed: Partial<Record<keyof Wanted, { target: unknown; at: number }>> =
+        {};
     AutoAV.Instance.on('status', () => {
         const next = wanted();
-        (
-            [
-                ['uploader', YoutubeUploaderAddon.Instance],
-                ['display', AudienceDisplayAddon.Instance],
-            ] as const
-        ).forEach(([key, addon]) => {
-            if (next[key] === running[key]) return;
+        const apply = <K extends keyof Wanted>(
+            key: K,
+            addon: { start(): Promise<boolean>; stop(): Promise<boolean> }
+        ) => {
+            const target = next[key];
+            const current = key in applying ? applying[key] : running[key];
+            if (target === current) return;
+            const lastFail = failed[key];
+            if (
+                lastFail &&
+                lastFail.target === target &&
+                Date.now() - lastFail.at < 60000
+            )
+                return;
+            applying[key] = target;
             // start() replaces a running instance, so a changed value
-            // (e.g. FRC -> FTC uploader) is a restart.
-            const change = next[key] ? addon.start() : addon.stop();
-            change.catch((e) => log.error('Addon season change failed', e));
-        });
-        running = next;
+            // (e.g. FRC -> FTC uploader) is a restart. Starts and stops
+            // run one at a time inside each addon.
+            const settle = (ok: boolean) => {
+                if (ok) {
+                    running[key] = target;
+                    delete failed[key];
+                } else {
+                    failed[key] = { target, at: Date.now() };
+                }
+                if (applying[key] === target) delete applying[key];
+            };
+            (target ? addon.start() : addon.stop())
+                .then((ok) => {
+                    settle(ok);
+                    return undefined;
+                })
+                .catch((e) => {
+                    log.error('Addon season change failed', e);
+                    settle(false);
+                });
+        };
+        apply('uploader', YoutubeUploaderAddon.Instance);
+        apply('display', AudienceDisplayAddon.Instance);
     });
 
     // The uploader starts an event's scan and upload loops on the first
@@ -874,7 +919,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         const eventKey = AutoAV.Instance.getStatus().currentEvent?.code ?? '';
         if (!eventKey || !YoutubeUploaderAddon.Instance.isRunning()) return;
         fetch(
-            `http://localhost:8807/api/upload/state?event_key=${encodeURIComponent(
+            `http://127.0.0.1:8807/api/upload/state?event_key=${encodeURIComponent(
                 eventKey
             )}`,
             { signal: AbortSignal.timeout(3000) }
@@ -991,7 +1036,8 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     // Upload settings: persisted in electron-store and pushed to the uploader as
     // its event config (POST /api/upload/config). The tba_secret only ever
-    // leaves the main process, straight to the loopback uploader.
+    // leaves the main process to the uploader, which listens on 127.0.0.1
+    // only (see YoutubeUploaderAddon.launch).
     //
     // The playlist is the exception: it belongs to one event, so it lives only
     // in the uploader's per-event config and is read back from there. A global
@@ -1009,7 +1055,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         if (!eventKey) return settings;
         try {
             const res = await fetch(
-                `http://localhost:8807/api/upload/state?event_key=${encodeURIComponent(
+                `http://127.0.0.1:8807/api/upload/state?event_key=${encodeURIComponent(
                     eventKey
                 )}`,
                 { signal: AbortSignal.timeout(3000) }
@@ -1040,7 +1086,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         const eventKey = currentEvent?.code ?? '';
         try {
             await fetch(
-                `http://localhost:8807/api/upload/config?event_key=${encodeURIComponent(
+                `http://127.0.0.1:8807/api/upload/config?event_key=${encodeURIComponent(
                     eventKey
                 )}`,
                 {

@@ -32,10 +32,9 @@ export type AppConfig = {
         fileNameMode: 'in-season' | 'off-season';
         // Manual event name; when set it overrides whatever FMS reports
         eventNameOverride: string;
-        // FMS event code the name was last auto-filled from. The name is only
-        // replaced again when FMS reports a different code, so a hand edit
-        // sticks for the rest of the event.
-        // program:code of the event last seen (see AutoAV.noteEvent)
+        // program:code of the event last seen. The name is only refilled when
+        // this changes, so a hand edit sticks for the rest of the event (see
+        // AutoAV.noteEvent).
         lastEventKey: string;
         // Destination folder for renamed match videos; blank = alongside the
         // vMix recording
@@ -80,10 +79,6 @@ export type AppConfig = {
         toaApiKey: string;
         toaEventKey: string;
         autoSubmitToa: boolean;
-        // Unused: the playlist is per event and lives in the uploader's event
-        // config (see upload:getSettings). Kept blank for older installs.
-        playlistId: string;
-        playlistName: string;
         // Title / description templates the uploader fills per match
         titleTemplate: string;
         descriptionTemplate: string;
@@ -243,8 +238,6 @@ export function createStore(): Store<AppConfig> {
                     toaApiKey: { type: 'string', default: '' },
                     toaEventKey: { type: 'string', default: '' },
                     autoSubmitToa: { type: 'boolean', default: true },
-                    playlistId: { type: 'string', default: '' },
-                    playlistName: { type: 'string', default: '' },
                     titleTemplate: {
                         type: 'string',
                         default: DEFAULT_TITLE_TEMPLATE,
@@ -264,8 +257,6 @@ export function createStore(): Store<AppConfig> {
                     toaApiKey: '',
                     toaEventKey: '',
                     autoSubmitToa: true,
-                    playlistId: '',
-                    playlistName: '',
                     titleTemplate: DEFAULT_TITLE_TEMPLATE,
                     descriptionTemplate: DEFAULT_DESCRIPTION_TEMPLATE,
                     thumbnailPath: '',
@@ -313,9 +304,7 @@ export function createStore(): Store<AppConfig> {
                     });
                 }
             },
-            // Seed the Upload tab's settings for installs that predate it, and
-            // drop the retired include_practice/include_test flags (the uploader
-            // hard-excludes practice/test now).
+            // Seed the Upload tab's settings for installs that predate it.
             '2026.3.3': (store) => {
                 const existing =
                     (store.get('upload') as Partial<AppConfig['upload']>) ?? {};
@@ -323,8 +312,6 @@ export function createStore(): Store<AppConfig> {
                     tbaAuthId: existing.tbaAuthId ?? '',
                     tbaSecret: existing.tbaSecret ?? '',
                     autoSubmitTba: existing.autoSubmitTba ?? true,
-                    playlistId: existing.playlistId ?? '',
-                    playlistName: existing.playlistName ?? '',
                     titleTemplate:
                         existing.titleTemplate || DEFAULT_TITLE_TEMPLATE,
                     descriptionTemplate:

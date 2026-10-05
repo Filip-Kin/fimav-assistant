@@ -29,44 +29,17 @@ export default class Addons {
         return this;
     }
 
-    // Kill all addons
-    public stop() {
-        this.liveCaptions.stop();
+    // Kill all addons. Resolves once the child-process addons have stopped,
+    // so a quit can wait for the uploader to close its browser and exit.
+    public async stop(): Promise<void> {
         this.AutoAV.stop();
         this.HWPing.stop();
-        this.youtubeUploader.stop();
-        this.audienceDisplay.stop();
         FtcScorekeeper.Instance.stop();
-    }
-
-    // Restart the YouTube uploader (re-resolves the current event folder)
-    public async restartYoutubeUploader() {
-        await this.youtubeUploader.stop();
-        await this.youtubeUploader.start();
-    }
-
-    // Restart live captions
-    public async restartLiveCaptions() {
-        // Stop live captions
-        await this.liveCaptions.stop();
-
-        // Start live captions
-        await this.liveCaptions.start();
-    }
-
-    // Restart AutoAV
-    public restartAutoAV() {
-        // Kill the old thread
-        this.AutoAV.stop();
-
-        // Start a new thread
-        this.AutoAV.start();
-    }
-
-    // Restart HWPing
-    public restartHWPing() {
-        this.HWPing.stop();
-        this.HWPing.start();
+        await Promise.all([
+            this.liveCaptions.stop(),
+            this.youtubeUploader.stop(),
+            this.audienceDisplay.stop(),
+        ]);
     }
 
     // Restart all

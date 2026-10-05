@@ -22,6 +22,7 @@ import {
     VideoCameraOutlined,
 } from '@ant-design/icons';
 import AddonControlRow from '../../components/AddonControlRow';
+import { useOneShot } from '../../hooks/ipc_busy';
 import { AutoAVStatus, Program } from '../../../models/AutoAVStatus';
 import './index.css';
 
@@ -96,7 +97,7 @@ function Sparkline({
     if (data.length < 2) {
         return (
             <Text type="secondary" className="vmix-dim">
-                gathering samples
+                Sampling
             </Text>
         );
     }
@@ -174,7 +175,9 @@ export default function VmixPage() {
     const [settingKeys, setSettingKeys] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [compositeOpen, setCompositeOpen] = useState(false);
-    const [program, setProgram] = useState<Program>('frc');
+    // null until the first AutoAV status, so FTC never flashes FRC controls.
+    const [program, setProgram] = useState<Program | null>(null);
+    const oneShot = useOneShot();
 
     // FRC or FTC decides which audience display input the tab adds.
     useEffect(() => {
@@ -254,25 +257,30 @@ export default function VmixPage() {
     }, [form]);
 
     const test = useCallback(() => {
-        if (!window.electron) return;
-        const { ipcRenderer } = window.electron;
-        setTesting(true);
-        const off = ipcRenderer.on(
+        const sent = oneShot<{ ok: boolean; message: string }>(
             'vmix:testResult',
-            (r: { ok: boolean; message: string }) => {
-                off();
+            (r) => {
                 setTesting(false);
                 if (r.ok) message.success(r.message);
                 else message.error(r.message);
+            },
+            () =>
+                window.electron?.ipcRenderer.sendMessage(
+                    'vmix:testConnection',
+                    [form.getFieldsValue()]
+                ),
+            () => {
+                setTesting(false);
+                message.error('Failed: no reply');
             }
         );
-        ipcRenderer.sendMessage('vmix:testConnection', [form.getFieldsValue()]);
-    }, [form]);
+        if (sent) setTesting(true);
+    }, [form, oneShot]);
 
     const saveConn = useCallback(async () => {
         const values = await form.validateFields();
         window.electron?.ipcRenderer.sendMessage('vmix:saveSettings', [values]);
-        message.success('vMix connection saved');
+        message.success('Saved');
         setSettingsOpen(false);
     }, [form]);
 
@@ -339,7 +347,7 @@ export default function VmixPage() {
                         <Space direction="vertical" size={10}>
                             <StatusLine
                                 on={reachable}
-                                label="vMix reachable"
+                                label="vMix"
                                 icon={<ApiOutlined />}
                             />
                             <Space size={8}>
@@ -356,7 +364,7 @@ export default function VmixPage() {
                                 <DesktopOutlined className="vmix-status-icon" />
                                 <Text>
                                     {status?.streaming
-                                        ? 'Streaming (live)'
+                                        ? 'Streaming'
                                         : 'Not streaming'}
                                 </Text>
                             </Space>
@@ -367,15 +375,17 @@ export default function VmixPage() {
                         <Space direction="vertical" size={10}>
                             {status?.keysSetForEvent ? (
                                 <Tag color="success" icon={<KeyOutlined />}>
-                                    Set for this event
+                                    Set
                                 </Tag>
                             ) : (
                                 <Tag color="warning" icon={<KeyOutlined />}>
-                                    Not set for this event
+                                    Not set
                                 </Tag>
                             )}
                             <Text type="secondary">
-                                Current event: {event?.name ?? 'None detected'}
+                                {event?.name
+                                    ? `Event: ${event.name}`
+                                    : 'No event'}
                             </Text>
                             {status?.streamKeys && (
                                 <Text type="secondary" className="vmix-dim">
@@ -386,27 +396,24 @@ export default function VmixPage() {
                             {status?.keyValidation?.match === false && (
                                 <div className="vmix-key-mismatch">
                                     <Text type="danger" strong>
-                                        ⚠ Admin key doesn&apos;t match vMix
+                                        Key mismatch
                                     </Text>
                                     <Text type="secondary" className="vmix-dim">
-                                        vMix using:{' '}
+                                        vMix:{' '}
                                         {status.keyValidation.runningKeys
                                             .map(keyTail)
                                             .join(', ') || '-'}
                                     </Text>
                                     <Text type="secondary" className="vmix-dim">
-                                        admin now:{' '}
+                                        Admin:{' '}
                                         {status.keyValidation.cloudKeys
                                             .map(keyTail)
                                             .join(', ') || '-'}
                                     </Text>
-                                    <Text type="secondary" className="vmix-dim">
-                                        → press Set stream keys
-                                    </Text>
                                 </div>
                             )}
                             {status?.keyValidation?.match === true && (
-                                <Text type="success">✓ Key matches admin</Text>
+                                <Text type="success">Keys match</Text>
                             )}
 
                             <Button
@@ -436,16 +443,12 @@ export default function VmixPage() {
                             return (
                                 <Space size={10}>
                                     <Spin size="small" />
-                                    <Text type="secondary">
-                                        Loading streaming stats
-                                    </Text>
+                                    <Text type="secondary">Loading</Text>
                                 </Space>
                             );
                         }
                         if (bandwidth.streams.length === 0) {
-                            return (
-                                <Text type="secondary">No active streams.</Text>
-                            );
+                            return <Text type="secondary">No streams</Text>;
                         }
                         return (
                             <Space
@@ -512,19 +515,21 @@ export default function VmixPage() {
                     >
                         Add Live Captions input
                     </Button>
-                    <Button
-                        icon={<DesktopOutlined />}
-                        disabled={!reachable}
-                        onClick={() => send('vmix:addAudienceDisplayInput')}
-                    >
-                        {program === 'ftc'
-                            ? 'Add Audience Display input'
-                            : 'Add FMS input'}
-                    </Button>
+                    {program && (
+                        <Button
+                            icon={<DesktopOutlined />}
+                            disabled={!reachable}
+                            onClick={() => send('vmix:addAudienceDisplayInput')}
+                        >
+                            {program === 'ftc'
+                                ? 'Add Audience Display input'
+                                : 'Add FMS input'}
+                        </Button>
+                    )}
                     {/* Sized to the FMS or FTC Live display's camera box. */}
                     <Button
                         icon={<VideoCameraOutlined />}
-                        disabled={!reachable}
+                        disabled={!reachable || !program}
                         onClick={() => setCompositeOpen(true)}
                     >
                         Add Alliance Selection Composite
@@ -594,10 +599,9 @@ export default function VmixPage() {
                             rules={[
                                 {
                                     required: true,
-                                    message: 'Enter the vMix API URL',
+                                    message: 'Required',
                                 },
                             ]}
-                            tooltip="vMix defaults to http://127.0.0.1:8088/api"
                         >
                             <Input placeholder="http://127.0.0.1:8088/api" />
                         </Form.Item>
@@ -607,14 +611,14 @@ export default function VmixPage() {
                                 name="username"
                                 style={{ flex: 1 }}
                             >
-                                <Input placeholder="(blank if web auth is off)" />
+                                <Input placeholder="Optional" />
                             </Form.Item>
                             <Form.Item
                                 label="Password"
                                 name="password"
                                 style={{ flex: 1 }}
                             >
-                                <Input.Password placeholder="(blank if web auth is off)" />
+                                <Input.Password placeholder="Optional" />
                             </Form.Item>
                         </Space>
                         <Space>

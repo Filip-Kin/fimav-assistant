@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Empty, Modal, message } from 'antd';
 import AddonControlRow from '../../components/AddonControlRow';
+import { useLifecycleBusy, useOneShot } from '../../hooks/ipc_busy';
 import './index.css';
 
 interface LiveCaptionsStatus {
@@ -8,25 +9,30 @@ interface LiveCaptionsStatus {
     version: string;
 }
 
+interface UpdateInfo {
+    current: string;
+    latest: string;
+    updateAvailable: boolean;
+}
+
 const SETTINGS_URL = 'http://localhost:3000/settings.html';
+
+const poll = () =>
+    window.electron?.ipcRenderer.sendMessage('liveCaptions:getStatus', []);
 
 export default function LiveCaptionsPage() {
     const [status, setStatus] = useState<LiveCaptionsStatus | null>(null);
-    const [busy, setBusy] = useState(false);
+    const running = !!status?.running;
+    const { busy, begin } = useLifecycleBusy(running);
+    const oneShot = useOneShot();
 
     // Subscribe to status and poll it while the tab is mounted.
     useEffect(() => {
         if (!window.electron) return undefined;
-        const { ipcRenderer } = window.electron;
-        const off = ipcRenderer.on(
+        const off = window.electron.ipcRenderer.on(
             'liveCaptions:status',
-            (s: LiveCaptionsStatus) => {
-                setStatus(s);
-                setBusy(false);
-            }
+            (s: LiveCaptionsStatus) => setStatus(s)
         );
-        const poll = () =>
-            ipcRenderer.sendMessage('liveCaptions:getStatus', []);
         poll();
         const timer = setInterval(poll, 3000);
         return () => {
@@ -35,54 +41,58 @@ export default function LiveCaptionsPage() {
         };
     }, []);
 
+    // Poll faster while an action runs, so its stop and start are both seen.
+    useEffect(() => {
+        if (!busy) return undefined;
+        const timer = setInterval(poll, 500);
+        return () => clearInterval(timer);
+    }, [busy]);
+
     const restart = useCallback(() => {
-        setBusy(true);
+        begin('restart');
         // The main process only reports running once the server actually answers
         // on :3000, so the iframe (mounted on running) loads a live server, not
         // a blank one. No blind reload timer needed.
         window.electron?.ipcRenderer.sendMessage('liveCaptions:restart', []);
-    }, []);
+    }, [begin]);
 
     // Version click → check for updates; toast if latest, confirm dialog if not.
     const checkUpdate = useCallback(() => {
-        if (!window.electron) return;
-        const { ipcRenderer } = window.electron;
-        const off = ipcRenderer.on(
+        oneShot<UpdateInfo>(
             'liveCaptions:updateInfo',
-            (info: {
-                current: string;
-                latest: string;
-                updateAvailable: boolean;
-            }) => {
-                off();
+            (info) => {
                 if (!info.updateAvailable) {
-                    message.success(
-                        `Live Captions is up to date (v${info.current})`
-                    );
+                    message.success(`Up to date (v${info.current})`);
                     return;
                 }
                 Modal.confirm({
-                    title: 'Update Live Captions?',
-                    content: `A new version is available (v${info.current} → v${info.latest}). Updating now restarts Live Captions and will briefly interrupt captions.`,
-                    okText: 'Update now',
+                    title: `Update to v${info.latest}`,
+                    content: `v${info.current} → v${info.latest}`,
+                    okText: 'Update',
                     cancelText: 'Not now',
                     onOk: () => {
-                        setBusy(true);
-                        ipcRenderer.sendMessage('liveCaptions:update', []);
-                        message.info('Updating Live Captions');
+                        begin('restart');
+                        window.electron?.ipcRenderer.sendMessage(
+                            'liveCaptions:update',
+                            []
+                        );
+                        message.info('Updating');
                     },
                 });
-            }
+            },
+            () =>
+                window.electron?.ipcRenderer.sendMessage(
+                    'liveCaptions:checkUpdate',
+                    []
+                ),
+            () => message.error('Failed: no reply')
         );
-        ipcRenderer.sendMessage('liveCaptions:checkUpdate', []);
-    }, []);
+    }, [oneShot, begin]);
 
     const stop = useCallback(() => {
-        setBusy(true);
+        begin('stop');
         window.electron?.ipcRenderer.sendMessage('liveCaptions:stop', []);
-    }, []);
-
-    const running = !!status?.running;
+    }, [begin]);
 
     return (
         <div className="livecaptions-page">
@@ -90,7 +100,7 @@ export default function LiveCaptionsPage() {
                 running={running}
                 version={status?.version}
                 onVersionClick={checkUpdate}
-                versionTooltip="Click to check for updates"
+                versionTooltip="Updates"
                 onStart={restart}
                 onRestart={restart}
                 onStop={stop}
@@ -101,10 +111,7 @@ export default function LiveCaptionsPage() {
                 {running ? (
                     <iframe title="Live Captions settings" src={SETTINGS_URL} />
                 ) : (
-                    <Empty
-                        description="Live Captions is stopped. Press Start to launch it and load its settings."
-                        style={{ marginTop: 64 }}
-                    />
+                    <Empty description="Stopped" style={{ marginTop: 64 }} />
                 )}
             </div>
         </div>
