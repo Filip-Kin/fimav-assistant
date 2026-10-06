@@ -115,8 +115,8 @@ const DEFS: Def[] = [
         group: 'Stream',
         label: 'Stream audio source',
         hint:
-            'Bus A is the stream mix from the X-Air (mics and match sounds). ' +
-            'Master leaves the mics out of the stream.',
+            'Bus A keeps the copyrighted DJ music out of the stream, which ' +
+            'goes to YouTube.',
         doc: `${DOCS}/troubleshooting-guides/no-audio/#3-check-stream-settings-in-vmix`,
     },
     {
@@ -129,8 +129,8 @@ const DEFS: Def[] = [
         group: 'Recording',
         label: 'Recording audio source',
         hint:
-            'Bus A is the stream mix from the X-Air (mics and match sounds). ' +
-            'Master leaves the mics out of the match recordings.',
+            'Bus A keeps the copyrighted DJ music out of the match ' +
+            'recordings, which go to YouTube.',
         doc: `${DOCS}/setting-up-the-fim-av-system/#verify-stream`,
     },
     {
@@ -655,7 +655,8 @@ export default class Checks extends EventEmitter {
     // Two sources. While live, the audio device each stream's ffmpeg reads,
     // from its log's command line: the stream as it runs. Always, the stream
     // settings in vMix's autosave, so a wrong bus shows before going live.
-    // Anything other than Bus A puts the venue mix on the stream.
+    // Bus A is the mix without the DJ music: the stream goes to YouTube, so
+    // anything else risks copyrighted music on it.
     private checkStreamBus(v: any, streaming: boolean) {
         if (!v) {
             this.set('stream-bus', 'unknown', 'vMix not answering');
