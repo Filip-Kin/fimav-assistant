@@ -7,15 +7,29 @@ import CheckFixButton from './CheckFixButton';
 import CheckDocButton from './CheckDocButton';
 import './CheckBanner.css';
 
+// Up to this many bars; past it, the worst MAX - 1 and a "+n more" bar.
+const MAX = 3;
+
 // A bar at the top of every page for each failing check that is not
 // ignored. It stays up only while the problem lasts.
 export default function CheckBanner() {
     const checks = useChecks();
-    const alerts = (checks ?? []).filter(isAlerting);
+    // Critical first, otherwise in check order (sort is stable).
+    const alerts = (checks ?? [])
+        .filter(isAlerting)
+        .sort(
+            (a, b) =>
+                Number(b.state === 'critical') - Number(a.state === 'critical')
+        );
     if (!alerts.length) return null;
+    const shown = alerts.length > MAX ? alerts.slice(0, MAX - 1) : alerts;
+    const hidden = alerts.slice(shown.length);
+    const hiddenState = hidden.some((c) => c.state === 'critical')
+        ? 'critical'
+        : 'warning';
     return (
         <div className="check-banner">
-            {alerts.map((c) => (
+            {shown.map((c) => (
                 <div
                     key={c.id}
                     className={`check-banner__row check-banner__row--${c.state}`}
@@ -38,6 +52,15 @@ export default function CheckBanner() {
                     </Button>
                 </div>
             ))}
+            {hidden.length > 0 && (
+                <button
+                    type="button"
+                    className={`check-banner__row check-banner__more check-banner__row--${hiddenState}`}
+                    onClick={openChecks}
+                >
+                    +{hidden.length} more problems detected <u>View</u>
+                </button>
+            )}
         </div>
     );
 }
