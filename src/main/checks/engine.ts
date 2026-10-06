@@ -28,7 +28,6 @@ import { ParsedSoundOutput } from '../../models/SoundVolumeViewOutput';
 import {
     CaptionPushStatus,
     enableCaptionPush,
-    getCaptionPushStatus,
     keyFromCaptionUrl,
     setCaptionKey,
 } from './captionsYoutube';
@@ -403,8 +402,6 @@ export default class Checks extends EventEmitter {
 
     private captionPush: CaptionPushStatus | null = null;
 
-    private captionPushAt = 0;
-
     // The uploader's last quota / rate-limit error, from its event stream.
     private uploadQuota: string | null = null;
 
@@ -560,7 +557,6 @@ export default class Checks extends EventEmitter {
     //  - the start sound window (vMix meters, 500 ms for 4 s)
     //  - a held() delay coming due (e.g. 5 s into a match without stream)
     //  - stream logs while streaming (a stall is no writes: 5 s)
-    //  - live-captions' YouTube status (10 s streaming, 60 s otherwise)
     //  - Windows audio devices (60 s; no push without a native module)
     //  - an Ignore running out
     private nextWait(): number {
@@ -570,11 +566,6 @@ export default class Checks extends EventEmitter {
         this.heldDue.forEach((due) => waits.push(due - now));
         const streaming = !!this.vmix && truthy(this.vmix.streaming);
         if (streaming) waits.push(5000);
-        if (
-            LiveCaptions.Instance.isRunning() &&
-            !LiveCaptions.Instance.events.connected
-        )
-            waits.push(this.captionPushAt + (streaming ? 10000 : 60000) - now);
         if (process.platform === 'win32')
             waits.push(this.winAudioAt + 60000 - now);
         this.results.forEach((r) => {
@@ -760,7 +751,6 @@ export default class Checks extends EventEmitter {
         await f.run();
         // Check again now, not on the next loop, so the result (and the
         // button) updates as soon as the fix is in.
-        this.captionPushAt = 0;
         this.winAudioAt = 0;
         this.dirty = { vmix: true, mixer: true, loudness: true };
         await this.runTick();
@@ -829,18 +819,10 @@ export default class Checks extends EventEmitter {
         // With vMix closed the file holds the last session's settings, which
         // may not be what vMix opens next: only read it while vMix answers.
         this.settings = this.vmix ? readStreamSettings() : null;
-        // live-captions' YouTube status: from its event stream when it has
-        // one; an older build without it is polled, every 10 s while
-        // streaming (push errors), every 60 s otherwise (key, on/off).
-        const lcEvents = LiveCaptions.Instance.events;
-        if (lcEvents.connected) {
-            this.captionPush = captionPushFromEvents();
-        } else if (now - this.captionPushAt >= (streamingNow ? 10000 : 60000)) {
-            this.captionPushAt = now;
-            this.captionPush = LiveCaptions.Instance.isRunning()
-                ? await getCaptionPushStatus()
-                : null;
-        }
+        // live-captions' YouTube status, from its event stream.
+        this.captionPush = LiveCaptions.Instance.events.connected
+            ? captionPushFromEvents()
+            : null;
 
         const v = this.vmix;
         const streaming = !!v && truthy(v.streaming);
@@ -1426,8 +1408,7 @@ export default class Checks extends EventEmitter {
 
     // The YouTube match-video uploader (FTC events, FRC off-season): up,
     // signed in, no failed uploads, no quota error. Sign-in and the queue
-    // come from its event stream; an older uploader without one is only
-    // checked for running.
+    // come from its event stream.
     private checkUploader() {
         const up = YoutubeUploaderAddon.Instance;
         if (!AutoAV.Instance.runsUploader()) {
@@ -1456,13 +1437,9 @@ export default class Checks extends EventEmitter {
                 });
             return;
         }
-        const { latest, connected, supported } = up.events;
+        const { latest, connected } = up.events;
         if (!connected) {
-            this.set(
-                'uploader',
-                'ok',
-                supported === false ? 'Running' : 'Running, no status yet'
-            );
+            this.set('uploader', 'unknown', 'No status yet');
             return;
         }
         const hello = latest.get('hello') as any;
@@ -1521,13 +1498,9 @@ export default class Checks extends EventEmitter {
             });
             return;
         }
-        const { latest, connected, supported } = ad.events;
+        const { latest, connected } = ad.events;
         if (!connected) {
-            this.set(
-                'audience-display',
-                'ok',
-                supported === false ? 'Running' : 'Running, no status yet'
-            );
+            this.set('audience-display', 'unknown', 'No status yet');
             return;
         }
         const hello = latest.get('hello') as any;
@@ -1552,7 +1525,7 @@ export default class Checks extends EventEmitter {
     }
 
     // The transcription engine inside live-captions, from its event stream
-    // (an older build without one: no verdict).
+    // (no verdict until it is connected).
     private checkCaptionsEngine() {
         const wait = liveCaptionsWait();
         if (!LiveCaptions.Instance.isRunning()) {
@@ -1566,13 +1539,7 @@ export default class Checks extends EventEmitter {
         const ev = LiveCaptions.Instance.events;
         const e = ev.connected ? captionEngine() : null;
         if (!e) {
-            this.set(
-                'captions-engine',
-                'unknown',
-                ev.supported === false
-                    ? 'No status from this Live Captions version'
-                    : 'No status yet'
-            );
+            this.set('captions-engine', 'unknown', 'No status yet');
         } else if (e.state === 'error') {
             this.set('captions-engine', 'warning', e.error || 'Engine error', {
                 label: 'Restart',

@@ -320,8 +320,7 @@ export default class YoutubeUploaderAddon {
         return true;
     }
 
-    // POST to the uploader's live control routes (uploaders with /api/events
-    // have them). Throws on a refusal.
+    // POST to the uploader's live control routes. Throws on a refusal.
     private static async control(route: string, body: unknown) {
         const rsp = await fetch(
             `http://127.0.0.1:${YoutubeUploaderAddon.PORT}/api/control/${route}`,
@@ -341,15 +340,11 @@ export default class YoutubeUploaderAddon {
     }
 
     // Point a running uploader at the current event folder, event and
-    // program without restarting it. Uploaders without the control route,
-    // or one not running, are (re)started as before.
+    // program without restarting it. One not running is started; a refused
+    // switch (409: an upload in the old folder is still running) restarts.
     public async retarget(): Promise<boolean> {
         const videoDir = this.videoDir();
-        if (
-            this.phase.get() === 'running' &&
-            this.events.supported &&
-            videoDir
-        ) {
+        if (this.phase.get() === 'running' && videoDir) {
             const ftc = AutoAV.Instance.isFtc();
             const { address } = FtcScorekeeper.Instance.getStatus();
             try {
@@ -373,7 +368,7 @@ export default class YoutubeUploaderAddon {
     // A match video is final: tell the uploader now rather than waiting for
     // its folder scan. Best effort; the scan still picks it up.
     public videoReady(filePath: string) {
-        if (this.phase.get() !== 'running' || !this.events.supported) return;
+        if (this.phase.get() !== 'running') return;
         YoutubeUploaderAddon.control('video', { path: filePath }).catch((e) =>
             this.logs.out.log(`Video ready not taken: ${(e as Error).message}`)
         );

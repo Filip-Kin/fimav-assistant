@@ -6,8 +6,7 @@ import AddonPhaseTracker from './addon-phase';
 // HTTP port (protocol 1): GET /api/events is a server-sent event stream of
 // JSON messages, `{"type":"hello", ...full state}` first, then one message
 // per change, with ": ping" comments every 15 s. An add-on run on its own
-// simply has no subscriber. An older add-on without the route answers 404:
-// `supported` goes false and callers keep their old polling.
+// simply has no subscriber.
 //
 // Subscribed only while the add-on's phase is 'running'; a dropped stream
 // is retried every 3 s while it stays running.
@@ -17,9 +16,6 @@ export type AddonMessage = { type: string; [key: string]: unknown };
 export default class AddonEvents extends EventEmitter {
     // Latest message of each type (hello included), for a status read.
     public readonly latest = new Map<string, AddonMessage>();
-
-    // null until the first answer; false for an add-on without /api/events.
-    public supported: boolean | null = null;
 
     public connected = false;
 
@@ -66,15 +62,8 @@ export default class AddonEvents extends EventEmitter {
                 headers: { accept: 'text/event-stream' },
                 signal: abort.signal,
             });
-            if (rsp.status === 404) {
-                this.supported = false;
-                this.emit('supported', false);
-                return;
-            }
             if (!rsp.ok || !rsp.body) throw new Error(`HTTP ${rsp.status}`);
-            this.supported = true;
             this.connected = true;
-            this.emit('supported', true);
             this.emit('connection', true);
             const reader = rsp.body.getReader();
             const decoder = new TextDecoder();

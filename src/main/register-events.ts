@@ -874,8 +874,6 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         phase: YoutubeUploaderAddon.Instance.getPhase(),
         version: YoutubeUploaderAddon.Instance.getVersion(),
         eventKey: AutoAV.Instance.getStatus().currentEvent?.code ?? '',
-        // The tab reloads on uploader events instead of polling while true.
-        events: YoutubeUploaderAddon.Instance.events.connected,
     });
     // Uploader event stream -> Upload tab (sign-in, queue, uploads).
     YoutubeUploaderAddon.Instance.events.on('message', (m) =>
@@ -895,8 +893,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // the stored fallback until FMS or the scorekeeper reports, so that change
     // is what starts them.
     // The uploader value carries the program and the folder: a change is a
-    // live switch (POST /api/control/event) on uploaders that have it, a
-    // restart with new flags on older ones.
+    // live switch (POST /api/control/event) on the running uploader.
     const wanted = () => ({
         uploader: AutoAV.Instance.runsUploader()
             ? `${AutoAV.Instance.getStatus().program}|${

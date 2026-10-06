@@ -17,7 +17,6 @@ let captionsPhase = 'running';
 // live-captions' /api/events stream as AddonEvents exposes it.
 const lcEvents = {
     connected: false,
-    supported: null as boolean | null,
     latest: new Map<string, any>(),
     on: () => undefined,
 };
@@ -27,14 +26,12 @@ let uploaderUsed = false;
 let upPhase = 'running';
 const upEvents = {
     connected: false,
-    supported: null as boolean | null,
     latest: new Map<string, any>(),
     on: () => undefined,
 };
 let adPhase = 'running';
 const adEvents = {
     connected: false,
-    supported: null as boolean | null,
     latest: new Map<string, any>(),
     on: () => undefined,
 };
@@ -91,7 +88,6 @@ jest.mock('../main/checks/vmixSettings', () => ({
 }));
 jest.mock('../main/checks/captionsYoutube', () => ({
     ...jest.requireActual('../main/checks/captionsYoutube'),
-    getCaptionPushStatus: async () => push,
     setCaptionKey: jest.fn(async () => undefined),
     enableCaptionPush: jest.fn(async () => undefined),
 }));
@@ -313,18 +309,17 @@ beforeEach(() => {
     mixer = fimMixer();
     captionsRunning = true;
     captionsPhase = 'running';
-    lcEvents.connected = false;
-    lcEvents.supported = null;
+    // live-captions' event stream: up, with its YouTube status.
+    lcEvents.connected = true;
     lcEvents.latest.clear();
+    lcEvents.latest.set('youtube', push);
     customAd = false;
     uploaderUsed = false;
     upPhase = 'running';
     upEvents.connected = false;
-    upEvents.supported = null;
     upEvents.latest.clear();
     adPhase = 'running';
     adEvents.connected = false;
-    adEvents.supported = null;
     adEvents.latest.clear();
     audioDevices = [xairOut()];
     matches = [];
@@ -787,14 +782,12 @@ describe('stream checks', () => {
     });
 
     it('Live Captions events: engine state and YouTube status, no polling', async () => {
-        lcEvents.connected = true;
-        lcEvents.supported = true;
+        lcEvents.latest.clear();
         lcEvents.latest.set('hello', {
             type: 'hello',
             engine: { state: 'running', error: null },
             youtube: { ...push, url: null },
         });
-        push = null; // the poll is not used while the stream is up
         await tick(1);
         expect(get('captions-engine')).toMatchObject({
             state: 'ok',
@@ -811,15 +804,6 @@ describe('stream checks', () => {
             state: 'warning',
             detail: 'Google API credentials missing',
             fix: 'Restart',
-        });
-    });
-
-    it('an older Live Captions without events: engine not checked', async () => {
-        lcEvents.supported = false;
-        await tick(1);
-        expect(get('captions-engine')).toMatchObject({
-            state: 'unknown',
-            detail: 'No status from this Live Captions version',
         });
     });
 

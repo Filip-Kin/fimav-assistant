@@ -22,19 +22,6 @@ export function keyFromCaptionUrl(url: string | null): string | null {
     return m ? decodeURIComponent(m[1]) : null;
 }
 
-export async function getCaptionPushStatus(): Promise<CaptionPushStatus | null> {
-    try {
-        const rsp = await fetch(`${BASE}/youtubeCaptions.pushStatus`, {
-            signal: AbortSignal.timeout(2000),
-        });
-        if (!rsp.ok) return null;
-        const body: any = await rsp.json();
-        return (body?.result?.data as CaptionPushStatus) ?? null;
-    } catch {
-        return null;
-    }
-}
-
 async function mutate(proc: string, input: unknown) {
     const rsp = await fetch(`${BASE}/${proc}?batch=1`, {
         method: 'POST',
