@@ -90,6 +90,25 @@ const liveCaptionsWait = (): string | null => {
     return null;
 };
 
+// The YouTube push status from live-captions' event stream (the last
+// 'youtube' message, else the one in 'hello').
+const captionPushFromEvents = (): CaptionPushStatus | null => {
+    const { latest } = LiveCaptions.Instance.events;
+    const yt = (latest.get('youtube') ?? latest.get('hello')?.youtube) as
+        | CaptionPushStatus
+        | undefined;
+    return yt ?? null;
+};
+
+// The transcription engine's state from live-captions' event stream.
+const captionEngine = (): { state: string; error: string | null } | null => {
+    const { latest } = LiveCaptions.Instance.events;
+    const e = (latest.get('engine') ?? latest.get('hello')?.engine) as
+        | { state: string; error: string | null }
+        | undefined;
+    return e ?? null;
+};
+
 // The overlay channel FIM puts Live Captions on.
 const CAPTIONS_OVERLAY = 8;
 
@@ -195,6 +214,12 @@ const DEFS: Def[] = [
         group: 'Captions',
         label: 'Captions overlay',
         doc: `${DOCS}/software-guides/captions/#adding-the-captions-to-vmix`,
+    },
+    {
+        id: 'captions-engine',
+        group: 'Captions',
+        label: 'Captions engine',
+        doc: `${DOCS}/software-guides/captions/#the-captions-are-not-showing-up`,
     },
     {
         id: 'captions-youtube',
@@ -472,6 +497,8 @@ export default class Checks extends EventEmitter {
         HWPing.Instance.on('hw-change', changed('mixer'));
         HWPing.Instance.on('ip-config-changed', changed());
         LiveCaptions.Instance.phase.on('phase', changed());
+        LiveCaptions.Instance.events.on('message', changed());
+        LiveCaptions.Instance.events.on('connection', changed());
         this.vmixEvents.on('change', changed('vmix'));
         // Stream / recording settings send no activator; vMix's autosave
         // (about once a minute) does change.
@@ -506,7 +533,10 @@ export default class Checks extends EventEmitter {
         this.heldDue.forEach((due) => waits.push(due - now));
         const streaming = !!this.vmix && truthy(this.vmix.streaming);
         if (streaming) waits.push(5000);
-        if (LiveCaptions.Instance.isRunning())
+        if (
+            LiveCaptions.Instance.isRunning() &&
+            !LiveCaptions.Instance.events.connected
+        )
             waits.push(this.captionPushAt + (streaming ? 10000 : 60000) - now);
         if (process.platform === 'win32')
             waits.push(this.winAudioAt + 60000 - now);
@@ -570,6 +600,13 @@ export default class Checks extends EventEmitter {
                 : null,
             liveCaptions: {
                 phase: LiveCaptions.Instance.getPhase(),
+                eventStream: LiveCaptions.Instance.events.connected,
+                engine: captionEngine(),
+                inputs:
+                    (LiveCaptions.Instance.events.latest.get('inputs')
+                        ?.inputs as unknown) ??
+                    LiveCaptions.Instance.events.latest.get('hello')?.inputs ??
+                    null,
                 youtube: p
                     ? {
                           enabled: p.enabled,
@@ -716,9 +753,13 @@ export default class Checks extends EventEmitter {
         // With vMix closed the file holds the last session's settings, which
         // may not be what vMix opens next: only read it while vMix answers.
         this.settings = this.vmix ? readStreamSettings() : null;
-        // live-captions has no push for its YouTube status: every 10 s while
+        // live-captions' YouTube status: from its event stream when it has
+        // one; an older build without it is polled, every 10 s while
         // streaming (push errors), every 60 s otherwise (key, on/off).
-        if (now - this.captionPushAt >= (streamingNow ? 10000 : 60000)) {
+        const lcEvents = LiveCaptions.Instance.events;
+        if (lcEvents.connected) {
+            this.captionPush = captionPushFromEvents();
+        } else if (now - this.captionPushAt >= (streamingNow ? 10000 : 60000)) {
             this.captionPushAt = now;
             this.captionPush = LiveCaptions.Instance.isRunning()
                 ? await getCaptionPushStatus()
@@ -741,6 +782,7 @@ export default class Checks extends EventEmitter {
         this.checkWindowsAudio();
         this.checkBuzzer(v);
         this.checkCaptions(v);
+        this.checkCaptionsEngine();
         this.checkCaptionsYoutube(streaming);
         [...this.since.keys()].forEach((id) => {
             if (!this.heldSeen.has(id)) this.since.delete(id);
@@ -1302,6 +1344,46 @@ export default class Checks extends EventEmitter {
         // whether or not a match is on.
         if (problem) this.set('captions', 'warning', problem, fix);
         else this.set('captions', 'ok', `On overlay ${CAPTIONS_OVERLAY}`);
+    }
+
+    // The transcription engine inside live-captions, from its event stream
+    // (an older build without one: no verdict).
+    private checkCaptionsEngine() {
+        const wait = liveCaptionsWait();
+        if (!LiveCaptions.Instance.isRunning()) {
+            this.set(
+                'captions-engine',
+                'unknown',
+                wait ?? 'Live Captions stopped'
+            );
+            return;
+        }
+        const ev = LiveCaptions.Instance.events;
+        const e = ev.connected ? captionEngine() : null;
+        if (!e) {
+            this.set(
+                'captions-engine',
+                'unknown',
+                ev.supported === false
+                    ? 'No status from this Live Captions version'
+                    : 'No status yet'
+            );
+        } else if (e.state === 'error') {
+            this.set('captions-engine', 'warning', e.error || 'Engine error', {
+                label: 'Restart',
+                run: async () => {
+                    await LiveCaptions.Instance.stop();
+                    if (!(await LiveCaptions.Instance.start()))
+                        throw new Error('Live Captions did not start');
+                },
+            });
+        } else if (e.state === 'stopped') {
+            this.set('captions-engine', 'warning', 'No inputs');
+        } else if (e.state === 'restarting') {
+            this.set('captions-engine', 'unknown', 'Restarting');
+        } else {
+            this.set('captions-engine', 'ok', 'Transcribing');
+        }
     }
 
     // live-captions sends captions to YouTube by the stream key. The key it

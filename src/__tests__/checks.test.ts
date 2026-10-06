@@ -14,6 +14,13 @@ let bandwidth: any = { supported: true, streams: [] };
 let mixer = new Map<string, string | number>();
 let captionsRunning = true;
 let captionsPhase = 'running';
+// live-captions' /api/events stream as AddonEvents exposes it.
+const lcEvents = {
+    connected: false,
+    supported: null as boolean | null,
+    latest: new Map<string, any>(),
+    on: () => undefined,
+};
 let audioDevices: any[] = [];
 const xairOut = (over: Record<string, unknown> = {}) => ({
     name: 'OUT 1-2',
@@ -87,6 +94,9 @@ jest.mock('../main/addons/live-captions', () => ({
         Instance: {
             isRunning: () => captionsRunning,
             getPhase: () => captionsPhase,
+            get events() {
+                return lcEvents;
+            },
         },
     },
 }));
@@ -261,6 +271,9 @@ beforeEach(() => {
     mixer = fimMixer();
     captionsRunning = true;
     captionsPhase = 'running';
+    lcEvents.connected = false;
+    lcEvents.supported = null;
+    lcEvents.latest.clear();
     audioDevices = [xairOut()];
     matches = [];
     Object.keys(store).forEach((k) => delete store[k]);
@@ -289,6 +302,7 @@ beforeEach(() => {
         'match-buzzer',
         'mic-balance',
         'captions',
+        'captions-engine',
         'captions-youtube',
     ].forEach((id) =>
         checks.results.set(id, {
@@ -715,6 +729,43 @@ describe('stream checks', () => {
         expect(src.liveCaptions.youtube).toMatchObject({
             keySet: true,
             keyMatchesStream: true,
+        });
+    });
+
+    it('Live Captions events: engine state and YouTube status, no polling', async () => {
+        lcEvents.connected = true;
+        lcEvents.supported = true;
+        lcEvents.latest.set('hello', {
+            type: 'hello',
+            engine: { state: 'running', error: null },
+            youtube: { ...push, url: null },
+        });
+        push = null; // the poll is not used while the stream is up
+        await tick(1);
+        expect(get('captions-engine')).toMatchObject({
+            state: 'ok',
+            detail: 'Transcribing',
+        });
+        expect(get('captions-youtube').detail).toBe('No YouTube caption key');
+        lcEvents.latest.set('engine', {
+            type: 'engine',
+            state: 'error',
+            error: 'Google API credentials missing',
+        });
+        await tick(1);
+        expect(get('captions-engine')).toMatchObject({
+            state: 'warning',
+            detail: 'Google API credentials missing',
+            fix: 'Restart',
+        });
+    });
+
+    it('an older Live Captions without events: engine not checked', async () => {
+        lcEvents.supported = false;
+        await tick(1);
+        expect(get('captions-engine')).toMatchObject({
+            state: 'unknown',
+            detail: 'No status from this Live Captions version',
         });
     });
 

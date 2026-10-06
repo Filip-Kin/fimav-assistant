@@ -4,6 +4,7 @@ import log from 'electron-log';
 import { appdataPath } from '../util';
 import { AddonLoggers } from './addon-loggers';
 import AddonPhaseTracker from './addon-phase';
+import AddonEvents from './addon-events';
 import { getStore } from '../store';
 import {
     SerialQueue,
@@ -19,11 +20,16 @@ export default class LiveCaptions {
 
     private running = false;
 
-    // Where start() is: checking for / downloading an update, launching and
-    // waiting for :3000, serving, or stopped. Lets the checks tell "not up
-    // yet" from "down".
-    // Updating / starting / running / stopped, with a 'phase' event.
+    // Updating / starting / running / stopped, with a 'phase' event. Lets
+    // the checks tell "not up yet" from "down".
     public readonly phase = new AddonPhaseTracker();
+
+    // Its /api/events stream while running (youtube push, engine, inputs).
+    public readonly events = new AddonEvents(
+        'live-captions',
+        'http://127.0.0.1:3000/api/events',
+        this.phase
+    );
 
     // Version of the live-captions build currently launched, surfaced in the tab
     private currentVersion = '0.0.0';

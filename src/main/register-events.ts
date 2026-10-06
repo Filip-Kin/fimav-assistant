@@ -658,6 +658,11 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         version: LiveCaptions.Instance.getVersion(),
     });
 
+    // Pushed on every phase change, so the tab needs no polling.
+    LiveCaptions.Instance.phase.on('phase', () =>
+        window?.webContents.send('liveCaptions:status', liveCaptionsStatus())
+    );
+
     ipcMain.on('liveCaptions:getStatus', (event) => {
         event.reply('liveCaptions:status', liveCaptionsStatus());
     });
@@ -855,6 +860,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         version: YoutubeUploaderAddon.Instance.getVersion(),
         eventKey: AutoAV.Instance.getStatus().currentEvent?.code ?? '',
     });
+    YoutubeUploaderAddon.Instance.phase.on('phase', () =>
+        window?.webContents.send('upload:status', uploadStatus())
+    );
 
     // The uploader and the custom audience display follow the program and
     // the season: the uploader runs at FTC events and FRC off-season events,
@@ -1038,6 +1046,13 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         phase: AudienceDisplayAddon.Instance.getPhase(),
         version: AudienceDisplayAddon.Instance.getVersion(),
     });
+
+    AudienceDisplayAddon.Instance.phase.on('phase', () =>
+        window?.webContents.send(
+            'audienceDisplay:status',
+            audienceDisplayStatus()
+        )
+    );
 
     ipcMain.on('audienceDisplay:getStatus', (event) => {
         event.reply('audienceDisplay:status', audienceDisplayStatus());

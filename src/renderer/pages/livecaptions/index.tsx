@@ -28,7 +28,7 @@ export default function LiveCaptionsPage() {
     const { busy, begin } = useLifecycleBusy(running);
     const oneShot = useOneShot();
 
-    // Subscribe to status and poll it while the tab is mounted.
+    // Status: read once, then pushed by the main process on every change.
     useEffect(() => {
         if (!window.electron) return undefined;
         const off = window.electron.ipcRenderer.on(
@@ -36,19 +36,10 @@ export default function LiveCaptionsPage() {
             (s: LiveCaptionsStatus) => setStatus(s)
         );
         poll();
-        const timer = setInterval(poll, 3000);
         return () => {
             off();
-            clearInterval(timer);
         };
     }, []);
-
-    // Poll faster while an action runs, so its stop and start are both seen.
-    useEffect(() => {
-        if (!busy) return undefined;
-        const timer = setInterval(poll, 500);
-        return () => clearInterval(timer);
-    }, [busy]);
 
     const restart = useCallback(() => {
         begin('restart');

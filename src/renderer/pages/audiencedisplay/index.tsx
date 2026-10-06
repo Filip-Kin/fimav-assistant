@@ -45,20 +45,11 @@ export default function AudienceDisplayPage() {
         );
         ipcRenderer.sendMessage('autoav:getState', []);
         poll();
-        const timer = setInterval(poll, 3000);
         return () => {
             off();
             offAutoav();
-            clearInterval(timer);
         };
     }, []);
-
-    // Poll faster while an action runs, so its stop and start are both seen.
-    useEffect(() => {
-        if (!busy) return undefined;
-        const timer = setInterval(poll, 500);
-        return () => clearInterval(timer);
-    }, [busy]);
 
     const restart = useCallback(() => {
         begin('restart');

@@ -761,7 +761,7 @@ export default function UploadPage() {
 
     const eventKey = status?.eventKey ?? '';
 
-    // Addon status over IPC (polled while mounted).
+    // Addon status over IPC: read once, then pushed on every change.
     useEffect(() => {
         if (!window.electron) return undefined;
         const off = window.electron.ipcRenderer.on(
@@ -769,22 +769,13 @@ export default function UploadPage() {
             (s: UploadAddonStatus) => setStatus(s)
         );
         pollStatus();
-        const timer = setInterval(pollStatus, 3000);
         return () => {
             off();
-            clearInterval(timer);
         };
     }, []);
 
     const running = !!status?.running;
     const { busy, begin } = useLifecycleBusy(running);
-
-    // Poll faster while an action runs, so its stop and start are both seen.
-    useEffect(() => {
-        if (!busy) return undefined;
-        const timer = setInterval(pollStatus, 500);
-        return () => clearInterval(timer);
-    }, [busy]);
 
     // A stopped uploader has no rows and no sign-in: drop the last ones seen.
     useEffect(() => {
