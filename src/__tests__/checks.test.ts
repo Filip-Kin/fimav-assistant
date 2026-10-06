@@ -249,7 +249,7 @@ beforeEach(() => {
     ].forEach((id) =>
         checks.results.set(id, {
             id,
-            group: 'Stream',
+            group: id.startsWith('hw-') ? 'Hardware' : 'Stream',
             label: id,
             state: 'unknown',
             detail: '',
@@ -500,7 +500,9 @@ describe('stream checks', () => {
         });
     });
 
-    it('hardware from the status bar pings', async () => {
+    it('hardware from the status bar pings, list only', async () => {
+        const alerts: string[] = [];
+        checks.on('alert', (r: CheckResult) => alerts.push(r.id));
         hwPingedAt = 0;
         await tick(1);
         expect(get('hw-camera2')).toMatchObject({
@@ -524,6 +526,7 @@ describe('stream checks', () => {
             state: 'critical',
             detail: 'AV VLAN has a self-assigned IP (169.254.3.4) (+1)',
         });
+        expect(alerts).toEqual([]);
     });
 
     it('loudness out of range on the last match', async () => {

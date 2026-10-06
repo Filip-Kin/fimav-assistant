@@ -25,7 +25,10 @@ const time = (ms: number) =>
     new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 function Row({ check }: { check: CheckResult }) {
-    const failing = check.state === 'warning' || check.state === 'critical';
+    // Hardware is list only, so it has nothing to ignore.
+    const failing =
+        (check.state === 'warning' || check.state === 'critical') &&
+        check.group !== 'Hardware';
     const tag = STATE_TAG[check.state];
     return (
         <div className="check-row">

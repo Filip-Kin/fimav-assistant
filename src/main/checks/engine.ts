@@ -16,7 +16,7 @@ import {
     keyFromCaptionUrl,
     setCaptionKey,
 } from './captionsYoutube';
-import { CheckResult, CheckState } from '../../models/Checks';
+import { CheckResult, CheckState, isAlerting } from '../../models/Checks';
 
 // Stream and audio checks for a live event. Every check reads state the cart
 // already has (the vMix API, vMix's stream logs, the X-Air over OSC, FMS or
@@ -1019,8 +1019,8 @@ export default class Checks extends EventEmitter {
             const until = ignored[id] ?? null;
             const next = { ...r, ignoredUntil: until };
             this.results.set(id, next);
-            const failing = r.state === 'warning' || r.state === 'critical';
-            if (failing && !until && !this.notified.has(id)) {
+            const failing = isAlerting(next);
+            if (failing && !this.notified.has(id)) {
                 this.notified.add(id);
                 this.emit('alert', next);
             }

@@ -13,6 +13,9 @@ export interface CheckResult {
     ignoredUntil: number | null;
 }
 
-// Failing and not ignored: what the banner and the tab dot show.
+// Failing and not ignored: what the banner, the menu count and the Windows
+// notification show. Hardware is list only: the status bar already shows it.
 export const isAlerting = (r: CheckResult) =>
-    (r.state === 'warning' || r.state === 'critical') && !r.ignoredUntil;
+    (r.state === 'warning' || r.state === 'critical') &&
+    !r.ignoredUntil &&
+    r.group !== 'Hardware';
