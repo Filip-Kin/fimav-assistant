@@ -10,7 +10,8 @@ import path from 'path';
 //     <AudioChannel>  stream audio source: 0 = Master, 10 = Bus A
 //     <Source>        stream video source: 0 = Output 1, 1 = Output 2
 //     <Destination0..2> streams 1-3, escaped XML holding <URL> and <Stream>
-//   <RecordingSettings> (recorder 1) <Channel>: 0 = Output 1, 1 = Output 2
+//   <RecordingSettings> (recorder 1) <Channel>: 0 = Output 1, 1 = Output 2;
+//     <AudioChannel> as for the stream
 //   <OutputsExternal2> (Output 2) <Overlay0>..<Overlay15>: 1 = overlay
 //     channel 1..16 shown on that output.
 
@@ -23,6 +24,8 @@ export interface VmixStreamSettings {
     output2Overlays: number[] | null;
     // 1-based output number recorder 1 records
     recordOutput: number | null;
+    // Recorder 1's audio source, named as audioBus
+    recordAudioBus: string | null;
     // Stream key of the first YouTube destination
     youtubeKey: string | null;
 }
@@ -66,6 +69,13 @@ function youtubeKey(entry: string): string | null {
     return key ? key[1].trim() : null;
 }
 
+function busName(v: number | null): string | null {
+    if (v === null) return null;
+    if (v === 10) return 'Bus A';
+    if (v === 0) return 'Master';
+    return `audio source ${v}`;
+}
+
 function recordOutput(xml: string): number | null {
     const m = /<RecordingSettings>([\s\S]*?)<\/RecordingSettings>/.exec(xml);
     const ch = m && field(m[1], 'Channel');
@@ -75,18 +85,15 @@ function recordOutput(xml: string): number | null {
 export function parseStreamSettings(xml: string): VmixStreamSettings | null {
     const entry = selectedStream(xml);
     if (!entry) return null;
-    const audio = field(entry, 'AudioChannel');
-    let audioBus: string | null = null;
-    if (audio === 10) audioBus = 'Bus A';
-    else if (audio === 0) audioBus = 'Master';
-    else if (audio !== null) audioBus = `audio source ${audio}`;
+    const rec = /<RecordingSettings>([\s\S]*?)<\/RecordingSettings>/.exec(xml);
     const source = field(entry, 'Source');
     return {
-        audioBus,
+        audioBus: busName(field(entry, 'AudioChannel')),
         output: source === null ? null : source + 1,
         output2Overlays: output2Overlays(xml),
         youtubeKey: youtubeKey(entry),
         recordOutput: recordOutput(xml),
+        recordAudioBus: rec ? busName(field(rec[1], 'AudioChannel')) : null,
     };
 }
 

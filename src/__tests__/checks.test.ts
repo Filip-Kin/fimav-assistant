@@ -197,6 +197,7 @@ beforeEach(() => {
         output2Overlays: [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16],
         youtubeKey: 'abcd-efgh',
         recordOutput: 2,
+        recordAudioBus: 'Bus A',
     };
     push = {
         enabled: true,
@@ -239,6 +240,7 @@ beforeEach(() => {
         'stream-bus',
         'stream-output',
         'recording-match',
+        'recording-bus',
         'stream-audio',
         'stream-loudness',
         'dj-stream',
@@ -496,6 +498,15 @@ describe('stream checks', () => {
         });
     });
 
+    it('recorder 1 on Master is a warning', async () => {
+        settings.recordAudioBus = 'Master';
+        await tick(1);
+        expect(get('recording-bus')).toMatchObject({
+            state: 'warning',
+            detail: 'Recorder 1 on Master, not Bus A',
+        });
+    });
+
     it('caption key not the stream key: Set key uses the stream key', async () => {
         push.url = 'http://upload.youtube.com/closedcaption?cid=old-key';
         await tick(1);
@@ -609,6 +620,7 @@ describe('vMix autosave', () => {
             output2Overlays: [1],
             youtubeKey: 'yt-key',
             recordOutput: 2,
+            recordAudioBus: 'Bus A',
         });
     });
 });

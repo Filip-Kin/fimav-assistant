@@ -108,6 +108,15 @@ const DEFS: Def[] = [
         label: 'Recording during match',
     },
     {
+        id: 'recording-bus',
+        group: 'Recording',
+        label: 'Recording audio source',
+        hint:
+            'Bus A is the stream mix from the X-Air (mics and match sounds). ' +
+            'Master leaves the mics out of the match recordings.',
+        doc: `${DOCS}/setting-up-the-fim-av-system/#verify-stream`,
+    },
+    {
         id: 'stream-audio',
         group: 'Audio',
         label: 'Stream audio (Bus A)',
@@ -489,6 +498,7 @@ export default class Checks extends EventEmitter {
         this.checkStream(v, match, streaming);
         this.checkStreamBus(v, streaming);
         this.checkStreamOutput();
+        this.checkRecordingBus();
         this.checkRecording(v, match, recording);
         this.checkStreamAudio(v, match, streaming);
         this.checkLoudness();
@@ -668,6 +678,19 @@ export default class Checks extends EventEmitter {
                 'ok',
                 `Stream and recorder 1 on Output 2, no overlay ${CAPTIONS_OVERLAY}`
             );
+    }
+
+    // Recorder 1's audio, from vMix's autosave: Bus A, as for the stream.
+    private checkRecordingBus() {
+        const bus = this.settings?.recordAudioBus ?? null;
+        if (!bus) this.set('recording-bus', 'unknown', 'No vMix settings file');
+        else if (bus !== 'Bus A')
+            this.set(
+                'recording-bus',
+                'warning',
+                `Recorder 1 on ${bus}, not Bus A`
+            );
+        else this.set('recording-bus', 'ok', 'Recorder 1 on Bus A');
     }
 
     private checkRecording(
