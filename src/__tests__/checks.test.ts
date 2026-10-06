@@ -266,6 +266,15 @@ describe('stream checks', () => {
         });
     });
 
+    it('no Bus A in vMix is critical', async () => {
+        vmix = fimVmix({ audio: { master: { muted: 'False' } } });
+        await tick(1);
+        expect(get('stream-audio')).toMatchObject({
+            state: 'critical',
+            detail: 'No Bus A in vMix audio mixer',
+        });
+    });
+
     it('DJ sent to the Live Stream bus', async () => {
         mixer.set('/ch/03/mix/01/level', 0.6);
         await tick(1);

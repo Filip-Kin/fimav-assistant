@@ -434,11 +434,17 @@ export default class Checks extends EventEmitter {
         streaming: boolean
     ) {
         const bus = v?.audio?.busA;
-        if (!v || !bus) {
+        if (!v) {
+            this.set('stream-audio', 'unknown', 'vMix not answering');
+            return;
+        }
+        // FIM streams and records Bus A. With no Bus A set up in vMix's
+        // audio mixer, the stream has no audio at all.
+        if (!bus) {
             this.set(
                 'stream-audio',
-                'unknown',
-                v ? 'No Bus A in vMix' : 'vMix not answering'
+                'critical',
+                'No Bus A in vMix audio mixer'
             );
             return;
         }
