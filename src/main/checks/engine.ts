@@ -542,7 +542,7 @@ export default class Checks extends EventEmitter {
 
         if (!streaming) {
             this.held('stream-stall', false, 0);
-            this.set('stream-health', 'ok', 'Not streaming');
+            this.set('stream-health', 'unknown', 'Not streaming');
             return;
         }
         const bw = this.bandwidth;
@@ -746,11 +746,21 @@ export default class Checks extends EventEmitter {
         }
         const db = Math.max(meterDb(bus.meterF1), meterDb(bus.meterF2));
         const live = streaming && !!match;
-        if (live && truthy(bus.muted)) {
-            this.set('stream-audio', 'critical', 'Bus A muted', {
-                label: 'Unmute',
-                run: vmixFn('BusXAudioOn', { Value: 'A' }),
-            });
+        const unmute: Fix = {
+            label: 'Unmute',
+            run: vmixFn('BusXAudioOn', { Value: 'A' }),
+        };
+        if (truthy(bus.muted)) {
+            // Muted before going live is a warning: the stream (and the
+            // recordings, also on Bus A) would start silent.
+            this.set(
+                'stream-audio',
+                live ? 'critical' : 'warning',
+                'Bus A muted',
+                unmute
+            );
+        } else if (!streaming) {
+            this.set('stream-audio', 'unknown', 'Not streaming');
         } else if (this.busMissedStart) {
             this.set('stream-audio', 'critical', this.busMissedStart);
         } else if (this.held('stream-clip', live && db > -0.5, 6000)) {
@@ -768,7 +778,7 @@ export default class Checks extends EventEmitter {
         const folder = AutoAV.Instance.getStatus().saveFolder;
         const rec = listMatches(folder).find((m) => m.loudness);
         if (!rec?.loudness) {
-            this.set('stream-loudness', 'ok', 'No measurement yet');
+            this.set('stream-loudness', 'unknown', 'No measurement yet');
             return;
         }
         const { lufs, truePeak } = rec.loudness;
@@ -799,7 +809,7 @@ export default class Checks extends EventEmitter {
             return;
         }
         if (!m.dj.length) {
-            this.set('dj-stream', 'ok', 'No DJ channel');
+            this.set('dj-stream', 'unknown', 'No DJ channel on X-Air');
             return;
         }
         const leaking = m.dj.filter(
@@ -1086,7 +1096,11 @@ export default class Checks extends EventEmitter {
             b.mic.length < 6 ||
             b.game.length < 6
         ) {
-            this.set('mic-balance', 'ok', `Not enough sound in ${b.label}`);
+            this.set(
+                'mic-balance',
+                'unknown',
+                `Not enough sound in ${b.label}`
+            );
             return;
         }
         const diff = Math.round(mic - game);

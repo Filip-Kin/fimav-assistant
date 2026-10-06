@@ -514,6 +514,34 @@ describe('stream checks', () => {
         expect(get('captions-youtube').state).toBe('ok');
     });
 
+    it('nothing to measure is Not checked, not OK', async () => {
+        vmix = fimVmix({ streaming: 'False' });
+        await tick(1);
+        expect(get('stream-health')).toMatchObject({
+            state: 'unknown',
+            detail: 'Not streaming',
+        });
+        expect(get('stream-audio')).toMatchObject({
+            state: 'unknown',
+            detail: 'Not streaming',
+        });
+        expect(get('stream-loudness')).toMatchObject({
+            state: 'unknown',
+            detail: 'No measurement yet',
+        });
+        // Bus A muted before going live: a warning, with the fix.
+        vmix = fimVmix({
+            streaming: 'False',
+            audio: { busA: { muted: 'True', meterF1: 0, meterF2: 0 } },
+        });
+        await tick(1);
+        expect(get('stream-audio')).toMatchObject({
+            state: 'warning',
+            detail: 'Bus A muted',
+            fix: 'Unmute',
+        });
+    });
+
     it('recorder 1 on Master is a warning', async () => {
         settings.recordAudioBus = 'Master';
         await tick(1);
