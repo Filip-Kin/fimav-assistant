@@ -498,6 +498,22 @@ describe('stream checks', () => {
         });
     });
 
+    it('vMix closed: no verdict from its saved settings', async () => {
+        vmix = null;
+        settings.output = 1;
+        settings.recordAudioBus = 'Master';
+        push.url = 'http://upload.youtube.com/closedcaption?cid=old-key';
+        await tick(1);
+        ['stream-output', 'recording-bus'].forEach((id) =>
+            expect(get(id)).toMatchObject({
+                state: 'unknown',
+                detail: 'vMix not answering',
+            })
+        );
+        // No stream key to compare with, so not a mismatch.
+        expect(get('captions-youtube').state).toBe('ok');
+    });
+
     it('recorder 1 on Master is a warning', async () => {
         settings.recordAudioBus = 'Master';
         await tick(1);

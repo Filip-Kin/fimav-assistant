@@ -483,7 +483,9 @@ export default class Checks extends EventEmitter {
         }
 
         // vMix's autosave; only re-read when vMix has rewritten it.
-        this.settings = readStreamSettings();
+        // With vMix closed the file holds the last session's settings, which
+        // may not be what vMix opens next: only read it while vMix answers.
+        this.settings = this.vmix ? readStreamSettings() : null;
         if (now - this.captionPushAt >= 10000) {
             this.captionPushAt = now;
             this.captionPush = LiveCaptions.Instance.isRunning()
@@ -657,6 +659,10 @@ export default class Checks extends EventEmitter {
     // not burned in).
     private checkStreamOutput() {
         const st = this.settings;
+        if (!this.vmix) {
+            this.set('stream-output', 'unknown', 'vMix not answering');
+            return;
+        }
         if (!st || st.output === null) {
             this.set('stream-output', 'unknown', 'No vMix settings file');
             return;
@@ -683,7 +689,10 @@ export default class Checks extends EventEmitter {
     // Recorder 1's audio, from vMix's autosave: Bus A, as for the stream.
     private checkRecordingBus() {
         const bus = this.settings?.recordAudioBus ?? null;
-        if (!bus) this.set('recording-bus', 'unknown', 'No vMix settings file');
+        if (!this.vmix)
+            this.set('recording-bus', 'unknown', 'vMix not answering');
+        else if (!bus)
+            this.set('recording-bus', 'unknown', 'No vMix settings file');
         else if (bus !== 'Bus A')
             this.set(
                 'recording-bus',
