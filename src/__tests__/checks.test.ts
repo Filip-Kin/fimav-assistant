@@ -379,6 +379,31 @@ describe('stream checks', () => {
             state: 'critical',
             detail: 'No Q16 start sound on Bus A',
         });
+        // Routing fixed between matches: sound on the input and Bus A
+        // together clears it without waiting for the next match.
+        match = null;
+        vmix = fimVmix();
+        (vmix.inputs.input[0] as any).meterF1 = 0.5;
+        await tick(1);
+        expect(get('stream-audio').state).toBe('ok');
+    });
+
+    it('a held timer does not survive a branch that stopped running', async () => {
+        match = { label: 'Q20', level: 'Qualification' };
+        vmix = fimVmix({
+            audio: { busA: { muted: 'False', meterF1: 1, meterF2: 1 } },
+        });
+        await tick(4); // clipping for 4 s (needs 6)
+        vmix = fimVmix({
+            audio: { busA: { muted: 'True', meterF1: 1, meterF2: 1 } },
+        });
+        await tick(3);
+        vmix = fimVmix({
+            audio: { busA: { muted: 'False', meterF1: 1, meterF2: 1 } },
+        });
+        await tick(1);
+        // Not 'Bus A clipping' on the first tick back.
+        expect(get('stream-audio').detail).not.toBe('Bus A clipping');
     });
 
     it('no Bus A in vMix is critical', async () => {
@@ -613,12 +638,22 @@ describe('stream checks', () => {
                 detail: 'X-Air OUT 1-2 at 62%, not 100%',
                 fix: 'Set to 100%',
             });
-            audioDevices = [];
+            audioDevices = [
+                xairOut({ name: 'Speakers', sub_name: 'Realtek(R) Audio' }),
+            ];
             jest.setSystemTime(Date.now() + 61000);
             await tick(1);
             expect(get('windows-audio')).toMatchObject({
                 state: 'warning',
                 detail: 'X-Air driver missing',
+            });
+            // No devices at all: SoundVolumeView did not answer.
+            audioDevices = [];
+            jest.setSystemTime(Date.now() + 61000);
+            await tick(1);
+            expect(get('windows-audio')).toMatchObject({
+                state: 'unknown',
+                detail: 'SoundVolumeView not answering',
             });
         } finally {
             Object.defineProperty(process, 'platform', platform);

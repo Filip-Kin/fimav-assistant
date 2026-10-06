@@ -882,8 +882,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     const applying: Partial<Wanted> = {};
     // A failed start waits a minute before the same start is tried again, so
     // an offline cart with no exe does not retry on every status event.
-    const failed: Partial<Record<keyof Wanted, { target: unknown; at: number }>> =
-        {};
+    const failed: Partial<
+        Record<keyof Wanted, { target: unknown; at: number }>
+    > = {};
     AutoAV.Instance.on('status', () => {
         const next = wanted();
         const apply = <K extends keyof Wanted>(
@@ -975,6 +976,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // A check that starts failing (and is not ignored): a Windows
     // notification, since FIM-AV is often behind vMix. Clicking it brings
     // FIM-AV forward with the Checks dialog open.
+    // Shown notifications are kept referenced until closed or clicked: on
+    // Windows a garbage-collected Notification loses its click handler.
+    const shownNotes = new Set<Notification>();
     Checks.Instance.on('alert', (r) => {
         if (!Notification.isSupported()) return;
         const n = new Notification({
@@ -983,10 +987,13 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             urgency: r.state === 'critical' ? 'critical' : 'normal',
         });
         n.on('click', () => {
+            shownNotes.delete(n);
             if (window?.isMinimized()) window.restore();
             window?.focus();
             window?.webContents.send('app:openChecks');
         });
+        n.on('close', () => shownNotes.delete(n));
+        shownNotes.add(n);
         n.show();
     });
     ipcMain.on('checks:get', (event) => {
@@ -995,14 +1002,17 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     ipcMain.on('checks:ignore', (_event, [id]) => {
         if (typeof id === 'string') Checks.Instance.ignore(id);
     });
-    ipcMain.on('checks:fix', async (event, [id]) => {
+    // `req` identifies the click, so two clicks on one fix (banner and
+    // dialog) each get their own answer.
+    ipcMain.on('checks:fix', async (event, [id, req]) => {
         try {
             await Checks.Instance.fix(id);
-            event.reply('checks:fixed', { id, ok: true });
+            event.reply('checks:fixed', { id, req, ok: true });
         } catch (e) {
             log.warn(`checks: fix ${id} failed`, e);
             event.reply('checks:fixed', {
                 id,
+                req,
                 ok: false,
                 message: (e as Error).message,
             });

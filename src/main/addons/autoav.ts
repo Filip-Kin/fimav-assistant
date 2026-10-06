@@ -46,7 +46,10 @@ export type AutoAVEvent =
     | 'status'
     | 'match'
     | 'matches'
-    | 'eventChanged';
+    | 'eventChanged'
+    // FMS / FTC Live match state changed: the checks re-run at once, so the
+    // match start sound is sampled from the start, not up to 5 s late.
+    | 'play';
 
 export default class AutoAV {
     private static instance: AutoAV;
@@ -374,6 +377,7 @@ export default class AutoAV {
     private onFtcUpdate(u: FtcUpdate) {
         if (!this.isFtc()) return;
         this.ftcRecorder.onUpdate(u);
+        this.emitter.emit('play');
     }
 
     // A new FTC event fills in the event name like a new FMS event does, and
@@ -472,6 +476,7 @@ export default class AutoAV {
 
                 // Update
                 this.lastState = info;
+                this.emitter.emit('play');
 
                 // At FTC events FTC Live drives recording, even when an FMS
                 // is also on the network.

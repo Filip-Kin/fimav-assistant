@@ -544,12 +544,22 @@ async function getAudioDevices(
     return new Promise((resolve) => {
         // Run .\SoundVolumeView.exe /Sjson
         const proc = spawn(SoundVolumeViewPath, ['/Sjson']);
+        // Missing (e.g. quarantined) or hung exe: resolve empty rather than
+        // throw an unhandled 'error' or never settle. The checks call this
+        // every minute and wait on it.
+        const timer = setTimeout(() => proc.kill(), 10000);
+        proc.on('error', (err) => {
+            clearTimeout(timer);
+            log.error('SoundVolumeView failed to start: ', err);
+            resolve([]);
+        });
         let buffer = Buffer.from('');
         proc.stdout?.on('data', (data) => {
             buffer = Buffer.concat([buffer, data]);
         });
 
         proc.on('exit', () => {
+            clearTimeout(timer);
             // Buffer to string
             let str = buffer.toString();
 
@@ -643,13 +653,17 @@ async function runSetSoundCommand(
     return new Promise((resolve, reject) => {
         // Spawn the process
         const proc = spawn(SoundVolumeViewPath, [cmd, ...params]);
+        // A hung exe must not leave the caller waiting forever.
+        const timer = setTimeout(() => proc.kill(), 10000);
         // Listen for exit
         proc.on('exit', () => {
+            clearTimeout(timer);
             resolve(true);
         });
 
         // Listen for error
         proc.on('error', (err) => {
+            clearTimeout(timer);
             reject(err);
         });
     });

@@ -341,6 +341,10 @@ export default class Checks extends EventEmitter {
 
     private since = new Map<string, number>();
 
+    // held() ids evaluated this tick; any other is reset after the tick, so
+    // a timer from a branch that stopped running does not carry over.
+    private heldSeen = new Set<string>();
+
     private fixes = new Map<string, Fix>();
 
     private settings: VmixStreamSettings | null = null;
@@ -354,6 +358,8 @@ export default class Checks extends EventEmitter {
     private winAudio: ParsedSoundOutput | null | undefined;
 
     private winAudioAt = 0;
+
+    private loudnessAt = 0;
 
     private notified = new Set<string>();
 
@@ -404,18 +410,36 @@ export default class Checks extends EventEmitter {
                 fix: null,
             })
         );
+        // One loop. A match state change (AutoAV 'play') runs it now rather
+        // than at its next turn, so the start sound window opens as the
+        // match starts; mid-tick it just makes the next wait 0.
+        let inTick = false;
+        let kick = false;
         const loop = async () => {
+            this.timer = null;
+            inTick = true;
             try {
                 await this.runTick();
             } catch (e) {
                 log.warn('Checks tick failed', e);
             }
+            inTick = false;
             // Fast while the match start sound is sampled, 2 s in a match,
             // 5 s otherwise.
             let wait = AutoAV.Instance.matchInPlay() ? 2000 : 5000;
             if (this.buzzer) wait = 500;
+            if (kick) wait = 0;
+            kick = false;
             this.timer = setTimeout(loop, wait);
         };
+        AutoAV.Instance.on('play', () => {
+            if (inTick) {
+                kick = true;
+                return;
+            }
+            if (this.timer) clearTimeout(this.timer);
+            this.timer = setTimeout(loop, 0);
+        });
         loop();
     }
 
@@ -449,6 +473,7 @@ export default class Checks extends EventEmitter {
 
     // True once `cond` has held for `ms`.
     private held(id: string, cond: boolean, ms: number): boolean {
+        this.heldSeen.add(id);
         if (!cond) {
             this.since.delete(id);
             return false;
@@ -493,6 +518,7 @@ export default class Checks extends EventEmitter {
 
     private async tick() {
         const now = Date.now();
+        this.heldSeen.clear();
         const match = AutoAV.Instance.matchInPlay();
 
         this.vmix = await VmixService.Instance.GetBase()
@@ -518,8 +544,12 @@ export default class Checks extends EventEmitter {
         // One SoundVolumeView run a minute (it lists every audio device).
         if (process.platform === 'win32' && now - this.winAudioAt >= 60000) {
             this.winAudioAt = now;
+            // An empty list means SoundVolumeView did not answer (every
+            // Windows machine has some audio device): no verdict.
             this.winAudio = await fetchAndParseAudioDevices(log)
-                .then((ds) => ds.find(isXairOut) ?? null)
+                .then((ds) =>
+                    ds.length ? ds.find(isXairOut) ?? null : undefined
+                )
                 .catch(() => undefined);
         }
         // vMix's autosave; only re-read when vMix has rewritten it.
@@ -550,6 +580,9 @@ export default class Checks extends EventEmitter {
         this.checkBuzzer(v);
         this.checkCaptions(v);
         this.checkCaptionsYoutube(streaming);
+        [...this.since.keys()].forEach((id) => {
+            if (!this.heldSeen.has(id)) this.since.delete(id);
+        });
         this.publish();
     }
 
@@ -792,6 +825,14 @@ export default class Checks extends EventEmitter {
             label: 'Unmute',
             run: vmixFn('BusXAudioOn', { Value: 'A' }),
         };
+        // The missed start sound clears once the display input and Bus A
+        // sound together again (routing fixed), not only at the next match.
+        const input = this.displayInput(v);
+        const inputDb = input
+            ? Math.max(meterDb(input.meterF1), meterDb(input.meterF2))
+            : -Infinity;
+        if (this.busMissedStart && !this.buzzer && inputDb >= -50 && db >= -50)
+            this.busMissedStart = null;
         if (truthy(bus.muted)) {
             // Muted before going live is a warning: the stream (and the
             // recordings, also on Bus A) would start silent.
@@ -817,6 +858,11 @@ export default class Checks extends EventEmitter {
     }
 
     private checkLoudness() {
+        // The manifest is read from disk; a new measurement comes at most
+        // once a match, so every 30 s is plenty.
+        const now = Date.now();
+        if (now - this.loudnessAt < 30000) return;
+        this.loudnessAt = now;
         const folder = AutoAV.Instance.getStatus().saveFolder;
         const rec = listMatches(folder).find((m) => m.loudness);
         if (!rec?.loudness) {
@@ -964,7 +1010,13 @@ export default class Checks extends EventEmitter {
             return;
         }
         if (d === undefined) {
-            this.set('windows-audio', 'unknown', 'Not read yet');
+            this.set(
+                'windows-audio',
+                'unknown',
+                this.winAudioAt
+                    ? 'SoundVolumeView not answering'
+                    : 'Not read yet'
+            );
             return;
         }
         if (d === null) {

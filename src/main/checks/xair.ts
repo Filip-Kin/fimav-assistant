@@ -67,6 +67,8 @@ export function queryXair(
     addresses: string[],
     timeoutMs = 800
 ): Promise<Map<string, OscValue>> {
+    // A channel can match two roles (e.g. named "vMix" and "DJ"); ask once.
+    const wanted = [...new Set(addresses)];
     return new Promise((resolve) => {
         const results = new Map<string, OscValue>();
         const socket = dgram.createSocket('udp4');
@@ -85,14 +87,14 @@ export function queryXair(
         const timer = setTimeout(finish, timeoutMs);
         socket.on('message', (msg) => {
             const reply = decodeReply(msg);
-            if (reply && addresses.includes(reply.address)) {
+            if (reply && wanted.includes(reply.address)) {
                 results.set(reply.address, reply.value);
-                if (results.size === addresses.length) finish();
+                if (results.size === wanted.length) finish();
             }
         });
         socket.on('error', finish);
         socket.bind(0, () => {
-            addresses.forEach((a) =>
+            wanted.forEach((a) =>
                 socket.send(encodeQuery(a), XAIR_PORT, host, () => undefined)
             );
         });
