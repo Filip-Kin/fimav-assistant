@@ -58,6 +58,12 @@ const vmixFn = (fn: string, params: Record<string, string> = {}): Fix['run'] =>
 const CAPTIONS_OVERLAY = 8;
 
 const DEFS: Def[] = [
+    { id: 'hw-network', group: 'Hardware', label: 'Network' },
+    { id: 'hw-ip', group: 'Hardware', label: 'IP config' },
+    { id: 'hw-switch', group: 'Hardware', label: 'Switch' },
+    { id: 'hw-mixer', group: 'Hardware', label: 'Mixer' },
+    { id: 'hw-camera1', group: 'Hardware', label: 'Camera 1' },
+    { id: 'hw-camera2', group: 'Hardware', label: 'Camera 2' },
     { id: 'stream-match', group: 'Stream', label: 'Stream during match' },
     { id: 'stream-health', group: 'Stream', label: 'Stream health' },
     { id: 'stream-bus', group: 'Stream', label: 'Stream audio source' },
@@ -378,6 +384,7 @@ export default class Checks extends EventEmitter {
         const v = this.vmix;
         const streaming = !!v && truthy(v.streaming);
         const recording = !!v && truthy(v.recording);
+        this.checkHardware();
         this.checkStream(v, match, streaming);
         this.checkStreamBus(v, streaming);
         this.checkStreamOutput();
@@ -461,6 +468,34 @@ export default class Checks extends EventEmitter {
                 )} Mbps`
             );
         }
+    }
+
+    // The status bar's hardware pings (hw-ping.ts, every 10 s) and its
+    // network interface check (every 60 s), shown here as checks.
+    private checkHardware() {
+        const hw = HWPing.Instance;
+        const st = hw.currentStatus;
+        const pinged = hw.lastPingAt > 0;
+        const dev = (id: string, alive: boolean, state: CheckState) => {
+            if (!pinged) this.set(id, 'unknown', 'Not pinged yet');
+            else if (alive) this.set(id, 'ok', 'Online');
+            else this.set(id, state, 'No reply');
+        };
+        dev('hw-network', st.internet, 'critical');
+        dev('hw-switch', st.switch, 'warning');
+        dev('hw-mixer', st.mixer, 'warning');
+        dev('hw-camera1', st.camera1, 'warning');
+        dev('hw-camera2', st.camera2, 'warning');
+        // hw-ping's messages end in advice ("... Check cable or DHCP.");
+        // the first clause is the finding.
+        const first = (msgs: string[]) =>
+            msgs[0].split('. ')[0].replace(/\.$/, '') +
+            (msgs.length > 1 ? ` (+${msgs.length - 1})` : '');
+        if (st.ip_errors.length)
+            this.set('hw-ip', 'critical', first(st.ip_errors));
+        else if (st.ip_warnings.length)
+            this.set('hw-ip', 'warning', first(st.ip_warnings));
+        else this.set('hw-ip', 'ok', 'Expected ranges');
     }
 
     // Two sources. While live, the audio device each stream's ffmpeg reads,

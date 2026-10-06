@@ -7,6 +7,7 @@ import './ChecksList.css';
 const { Text } = Typography;
 
 const GROUPS: CheckResult['group'][] = [
+    'Hardware',
     'Stream',
     'Audio',
     'Recording',

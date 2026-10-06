@@ -66,6 +66,9 @@ export default class HWPing {
 
     private lastIpState: IpConfigState = { errors: [], warnings: [] };
 
+    // When the last full round of pings came back; 0 before the first.
+    public lastPingAt = 0;
+
     private emitter: EventEmitter = new EventEmitter();
 
     constructor() {
@@ -137,6 +140,7 @@ export default class HWPing {
 
         // If we got here, no errors
         this.currentState.errors = [];
+        this.lastPingAt = Date.now();
 
         // Iterate over the results and update the state
         let didUpdate = false;

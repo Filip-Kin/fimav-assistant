@@ -14,6 +14,8 @@ let captionsRunning = true;
 let matches: any[] = [];
 const store: Record<string, unknown> = {};
 let settings: any = null;
+let hw: any = null;
+let hwPingedAt = 0;
 let push: any = null;
 
 jest.mock('electron-log', () => {
@@ -54,7 +56,17 @@ jest.mock('../main/addons/live-captions', () => ({
 }));
 jest.mock('../main/addons/hw-ping', () => ({
     __esModule: true,
-    default: { Instance: { mixerAddress: () => '192.168.25.13' } },
+    default: {
+        Instance: {
+            mixerAddress: () => '192.168.25.13',
+            get currentStatus() {
+                return hw;
+            },
+            get lastPingAt() {
+                return hwPingedAt;
+            },
+        },
+    },
 }));
 jest.mock('../main/vmixBandwidth', () => ({
     __esModule: true,
@@ -195,6 +207,17 @@ beforeEach(() => {
     };
     (VmixService.Instance.Function as jest.Mock).mockClear();
     (setCaptionKey as jest.Mock).mockClear();
+    hw = {
+        camera1: true,
+        camera2: true,
+        mixer: true,
+        switch: true,
+        internet: true,
+        errors: [],
+        ip_errors: [],
+        ip_warnings: [],
+    };
+    hwPingedAt = T0;
     mixer = fimMixer();
     captionsRunning = true;
     matches = [];
@@ -204,6 +227,12 @@ beforeEach(() => {
     checks.results = new Map();
     checks.list = Checks.prototype.list.bind(checks);
     [
+        'hw-network',
+        'hw-ip',
+        'hw-switch',
+        'hw-mixer',
+        'hw-camera1',
+        'hw-camera2',
         'stream-match',
         'stream-health',
         'stream-bus',
@@ -468,6 +497,32 @@ describe('stream checks', () => {
         expect(get('captions-youtube')).toMatchObject({
             state: 'warning',
             detail: 'No YouTube caption key',
+        });
+    });
+
+    it('hardware from the status bar pings', async () => {
+        hwPingedAt = 0;
+        await tick(1);
+        expect(get('hw-camera2')).toMatchObject({
+            state: 'unknown',
+            detail: 'Not pinged yet',
+        });
+        hwPingedAt = T0;
+        hw.camera2 = false;
+        hw.internet = false;
+        hw.ip_errors = [
+            'AV VLAN has a self-assigned IP (169.254.3.4). Check cable or static IP config.',
+            'AV VLAN is disconnected or not found.',
+        ];
+        await tick(1);
+        expect(get('hw-camera2')).toMatchObject({
+            state: 'warning',
+            detail: 'No reply',
+        });
+        expect(get('hw-network').state).toBe('critical');
+        expect(get('hw-ip')).toMatchObject({
+            state: 'critical',
+            detail: 'AV VLAN has a self-assigned IP (169.254.3.4) (+1)',
         });
     });
 
