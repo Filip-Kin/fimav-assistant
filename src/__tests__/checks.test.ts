@@ -205,6 +205,8 @@ async function tick(seconds: number) {
     const target = Date.now() + seconds * 1000;
     while (Date.now() < target) {
         jest.setSystemTime(Math.min(target, Date.now() + 1000));
+        // Tests change the fake vMix between ticks: as if an activator said so.
+        checks.dirty.vmix = true;
         // eslint-disable-next-line no-await-in-loop
         await checks.tick();
     }
@@ -401,20 +403,28 @@ describe('stream checks', () => {
 
     it('a held timer does not survive a branch that stopped running', async () => {
         match = { label: 'Q20', level: 'Qualification' };
-        vmix = fimVmix({
-            audio: { busA: { muted: 'False', meterF1: 1, meterF2: 1 } },
-        });
-        await tick(4); // clipping for 4 s (needs 6)
-        vmix = fimVmix({
-            audio: { busA: { muted: 'True', meterF1: 1, meterF2: 1 } },
-        });
+        vmix = fimVmix({ streaming: 'False' });
+        await tick(3); // 3 s into a match without the stream (needs 5)
+        vmix = null; // vMix gone: stream-match not evaluated
         await tick(3);
-        vmix = fimVmix({
-            audio: { busA: { muted: 'False', meterF1: 1, meterF2: 1 } },
-        });
+        vmix = fimVmix({ streaming: 'False' });
         await tick(1);
-        // Not 'Bus A clipping' on the first tick back.
-        expect(get('stream-audio').detail).not.toBe('Bus A clipping');
+        // The 5 s count started again; not critical on the first tick back.
+        expect(get('stream-match').state).not.toBe('critical');
+    });
+
+    it('wakes for a pending delay, not on a poll', async () => {
+        match = { label: 'Q21', level: 'Qualification' };
+        vmix = fimVmix({ streaming: 'False', recording: 'False' });
+        await tick(1);
+        // stream-match comes due in 5 s; nothing else needs a timer.
+        expect(checks.nextWait()).toBeLessThanOrEqual(5000);
+        // Match over, start sound window closed, nothing pending.
+        match = null;
+        captionsRunning = false;
+        vmix = fimVmix({ streaming: 'False' });
+        await tick(5);
+        expect(checks.nextWait()).toBe(Infinity);
     });
 
     it('no Bus A in vMix is critical', async () => {

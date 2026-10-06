@@ -112,3 +112,21 @@ export function readStreamSettings(
         return null;
     }
 }
+
+// Calls `onChange` when vMix rewrites its autosave. The folder is watched,
+// not the file, so a write by replace is still seen. Returns a stop function.
+export function watchStreamSettings(
+    onChange: () => void,
+    file = lastVmixPath()
+): () => void {
+    try {
+        const name = path.basename(file).toLowerCase();
+        const watcher = fs.watch(path.dirname(file), (_e, f) => {
+            if (f && String(f).toLowerCase() === name) onChange();
+        });
+        watcher.on('error', () => undefined);
+        return () => watcher.close();
+    } catch {
+        return () => undefined;
+    }
+}

@@ -10,7 +10,11 @@ import { getStore } from '../store';
 import { levelToDb, queryXair, XairMeters } from './xair';
 import XairWatch from './xairWatch';
 import VmixEvents from './vmixEvents';
-import { readStreamSettings, VmixStreamSettings } from './vmixSettings';
+import {
+    readStreamSettings,
+    VmixStreamSettings,
+    watchStreamSettings,
+} from './vmixSettings';
 import {
     fetchAndParseAudioDevices,
     isXairOut,
@@ -31,20 +35,19 @@ import { CheckResult, CheckState, isAlerting } from '../../models/Checks';
 // Stream and audio checks for a live event. Every check reads state the cart
 // already has (the vMix API, vMix's stream logs, the X-Air over OSC, FMS or
 // FTC Live match state, the match manifest) and nothing records or decodes
-// audio or video live. Event driven where the source can push:
-//  - vMix: TCP activators (8099) say when to re-read the API; the API is
-//    polled only while its meters matter (2 s in a match, 500 ms in the
-//    4 s start sound window) and every 30 s as a backstop
+// audio or video live. Each source is read once at start, then again only
+// when it says it changed:
+//  - vMix: TCP activators (8099); the API itself is polled only in the 4 s
+//    match start sound window (meters, 500 ms)
 //  - match state: FMS SignalR / FTC Live via AutoAV 'play'
-//  - X-Air settings: /xremote pushes changes; full read on a change, every
-//    60 s as a backstop (network UDP, not USB)
-//  - X-Air meters: pushed while a qual/playoff match is in play
+//  - X-Air: /xremote pushes setting changes; meters pushed during a match
+//  - vMix stream/recording settings: its autosave file changing
 //  - hardware pings, Live Captions phase, match manifest: their own events
-//  - stream logs: every 5 s, only while streaming (a stall is no writes)
-//  - live-captions YouTube status: 10 s streaming / 60 s otherwise (no push)
-//  - Windows audio (SoundVolumeView): every 60 s (no push without a native
-//    module); vMix autosave: a stat per tick, read only when rewritten
-//  - loudness: one audio-only ffmpeg pass per finished match (loudness.ts)
+// Timers only where a source cannot push: stream logs every 5 s while
+// streaming (a stall is no writes), live-captions' YouTube status (10 s
+// streaming / 60 s otherwise), Windows audio devices (60 s), and the end
+// of a grace delay or an Ignore. Loudness: one audio-only ffmpeg pass per
+// finished match (loudness.ts).
 // A check that is failing raises a banner and a Windows notification once;
 // "Ignore" silences that one check for 6 h (kept in the store across restarts).
 
@@ -354,6 +357,9 @@ export default class Checks extends EventEmitter {
     // a timer from a branch that stopped running does not carry over.
     private heldSeen = new Set<string>();
 
+    // When each pending held() condition comes due (cleared every tick).
+    private heldDue = new Map<string, number>();
+
     private fixes = new Map<string, Fix>();
 
     private settings: VmixStreamSettings | null = null;
@@ -371,8 +377,6 @@ export default class Checks extends EventEmitter {
     // Set by an event that says a source changed; that source is read again
     // on the next tick instead of on a timer.
     private dirty = { vmix: true, mixer: true, loudness: true };
-
-    private vmixAt = 0;
 
     private vmixEvents = new VmixEvents();
 
@@ -445,8 +449,10 @@ export default class Checks extends EventEmitter {
                 log.warn('Checks tick failed', e);
             }
             inTick = false;
-            this.timer = setTimeout(loop, again ? 0 : this.nextWait());
+            const wait = again ? 0 : this.nextWait();
             again = false;
+            // setTimeout cannot take Infinity (it would fire at once).
+            this.timer = Number.isFinite(wait) ? setTimeout(loop, wait) : null;
         };
         this.kick = () => {
             if (inTick) {
@@ -463,10 +469,13 @@ export default class Checks extends EventEmitter {
         AutoAV.Instance.on('play', changed());
         AutoAV.Instance.on('match', changed('loudness'));
         AutoAV.Instance.on('matches', changed('loudness'));
-        HWPing.Instance.on('hw-change', changed());
+        HWPing.Instance.on('hw-change', changed('mixer'));
         HWPing.Instance.on('ip-config-changed', changed());
         LiveCaptions.Instance.events.on('phase', changed());
         this.vmixEvents.on('change', changed('vmix'));
+        // Stream / recording settings send no activator; vMix's autosave
+        // (about once a minute) does change.
+        if (process.platform === 'win32') watchStreamSettings(changed());
         this.vmixEvents.start(VmixService.Instance.Host());
         this.mixerWatch.onChange = changed('mixer');
         this.meters.onData = () => {
@@ -480,15 +489,31 @@ export default class Checks extends EventEmitter {
         loop();
     }
 
-    // Time to the next tick when no event comes first. The vMix meters
-    // (start sound, Bus A clipping) and the stream log (stall) have no push,
-    // so they set the pace while they matter; otherwise a slow backstop.
+    // Time to the next tick when no event comes first; Infinity is no timer.
+    // Everything that can push (vMix activators, X-Air /xremote, match
+    // state, hardware, Live Captions, the manifest, vMix's autosave file)
+    // runs the loop itself. A timer is only for what cannot:
+    //  - the start sound window (vMix meters, 500 ms for 4 s)
+    //  - a held() delay coming due (e.g. 5 s into a match without stream)
+    //  - stream logs while streaming (a stall is no writes: 5 s)
+    //  - live-captions' YouTube status (10 s streaming, 60 s otherwise)
+    //  - Windows audio devices (60 s; no push without a native module)
+    //  - an Ignore running out
     private nextWait(): number {
-        if (this.buzzer) return 500;
-        if (AutoAV.Instance.matchInPlay()) return 2000;
+        const now = Date.now();
+        const waits: number[] = [];
+        if (this.buzzer) waits.push(500);
+        this.heldDue.forEach((due) => waits.push(due - now));
         const streaming = !!this.vmix && truthy(this.vmix.streaming);
-        if (streaming || !this.vmixEvents.connected) return 5000;
-        return 30000;
+        if (streaming) waits.push(5000);
+        if (LiveCaptions.Instance.isRunning())
+            waits.push(this.captionPushAt + (streaming ? 10000 : 60000) - now);
+        if (process.platform === 'win32')
+            waits.push(this.winAudioAt + 60000 - now);
+        this.results.forEach((r) => {
+            if (r.ignoredUntil) waits.push(r.ignoredUntil - now);
+        });
+        return Math.max(0, Math.min(...waits));
     }
 
     // What the checks last read, for the status API. Stream keys stay out:
@@ -599,7 +624,10 @@ export default class Checks extends EventEmitter {
         }
         const t = this.since.get(id) ?? Date.now();
         this.since.set(id, t);
-        return Date.now() - t >= ms;
+        const done = Date.now() - t >= ms;
+        // Not yet: the loop wakes when it would be, rather than polling.
+        if (!done) this.heldDue.set(id, t + ms);
+        return done;
     }
 
     // `fix` is a one-click repair for this exact problem; any later set()
@@ -638,20 +666,13 @@ export default class Checks extends EventEmitter {
     private async tick() {
         const now = Date.now();
         this.heldSeen.clear();
+        this.heldDue.clear();
         const match = AutoAV.Instance.matchInPlay();
 
-        // vMix: on an activator event, while its meters matter (a match in
-        // play, the start sound window), without the event connection, or
-        // every 30 s as a backstop.
-        if (
-            this.dirty.vmix ||
-            match ||
-            this.buzzer ||
-            !this.vmixEvents.connected ||
-            now - this.vmixAt >= 30000
-        ) {
+        // vMix: read at start and when its TCP connection (re)opens or an
+        // activator fires; polled only in the start sound window (meters).
+        if (this.dirty.vmix || this.buzzer) {
             this.dirty.vmix = false;
-            this.vmixAt = now;
             this.vmix = await VmixService.Instance.GetBase()
                 .then((p) => p?.vmix ?? null)
                 .catch(() => null);
@@ -663,17 +684,11 @@ export default class Checks extends EventEmitter {
             this.bandwidthAt = now;
             this.bandwidth = await getVmixBandwidth().catch(() => null);
         }
-        // X-Air: on a pushed parameter change, or every 60 s as a backstop
-        // (and every 10 s while it does not answer).
+        // X-Air: read at start, on a pushed parameter change, and when its
+        // ping comes back (hw-change), so a mixer powered on later is read.
         const host = HWPing.Instance.mixerAddress();
         if (host) this.mixerWatch.start(host);
-        const mixerEvery = this.mixer?.reachable ? 60000 : 10000;
-        if (
-            host &&
-            (this.dirty.mixer ||
-                !this.mixer ||
-                now - this.mixer.at >= mixerEvery)
-        ) {
+        if (host && (this.dirty.mixer || !this.mixer)) {
             this.dirty.mixer = false;
             this.mixer = await readMixer(host).catch(() => null);
         }
@@ -993,14 +1008,10 @@ export default class Checks extends EventEmitter {
             this.set('stream-audio', 'unknown', 'Not streaming');
         } else if (this.busMissedStart) {
             this.set('stream-audio', 'critical', this.busMissedStart);
-        } else if (this.held('stream-clip', live && db > -0.5, 6000)) {
-            this.set('stream-audio', 'warning', 'Bus A clipping');
         } else {
-            this.set(
-                'stream-audio',
-                'ok',
-                Number.isFinite(db) ? `${Math.round(db)} dB` : 'Silent'
-            );
+            // No level here: vMix is not polled for meters outside the
+            // start sound window.
+            this.set('stream-audio', 'ok', 'Bus A on');
         }
     }
 
