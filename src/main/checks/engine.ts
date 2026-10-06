@@ -967,10 +967,7 @@ export default class Checks extends EventEmitter {
             return;
         }
         if (d === null) {
-            // Off a cart (no cart number) there is no X-Air to expect.
-            if (HWPing.Instance.mixerAddress())
-                this.set('windows-audio', 'warning', 'No X-Air OUT 1-2 device');
-            else this.set('windows-audio', 'unknown', 'X-Air driver missing');
+            this.set('windows-audio', 'warning', 'X-Air driver missing');
             return;
         }
         const id = d.control_id || d.name;

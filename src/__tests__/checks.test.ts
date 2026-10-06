@@ -618,7 +618,7 @@ describe('stream checks', () => {
             await tick(1);
             expect(get('windows-audio')).toMatchObject({
                 state: 'warning',
-                detail: 'No X-Air OUT 1-2 device',
+                detail: 'X-Air driver missing',
             });
         } finally {
             Object.defineProperty(process, 'platform', platform);
