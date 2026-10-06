@@ -3,6 +3,7 @@ import log from 'electron-log';
 import VmixService from '../../services/VmixService';
 import AutoAV from '../addons/autoav';
 import LiveCaptions from '../addons/live-captions';
+import AudienceDisplayAddon from '../addons/audience-display';
 import HWPing from '../addons/hw-ping';
 import getVmixBandwidth, { streamKeyFromUrl } from '../vmixBandwidth';
 import { listMatches } from '../recordings/matchStore';
@@ -237,6 +238,11 @@ const DEFS: Def[] = [
             'YouTube gets its captions from Live Captions instead.',
         doc: `${DOCS}/software-guides/captions/#hiding-captions-from-streamrecording`,
     },
+    {
+        id: 'audience-display',
+        group: 'Display',
+        label: 'Custom audience display',
+    },
 ];
 
 const truthy = (v: unknown) =>
@@ -393,6 +399,9 @@ export default class Checks extends EventEmitter {
 
     private captionPushAt = 0;
 
+    // The custom audience display's standing error, from its event stream.
+    private adError: string | null = null;
+
     // Windows' X-Air playback device, from SoundVolumeView; undefined until
     // the first read, null when it is not there.
     private winAudio: ParsedSoundOutput | null | undefined;
@@ -499,6 +508,16 @@ export default class Checks extends EventEmitter {
         LiveCaptions.Instance.phase.on('phase', changed());
         LiveCaptions.Instance.events.on('message', changed());
         LiveCaptions.Instance.events.on('connection', changed());
+        AudienceDisplayAddon.Instance.phase.on('phase', changed());
+        AudienceDisplayAddon.Instance.events.on('message', (m) => {
+            // An error stands until FMS reconnects or the display restarts
+            // (it re-sends standing errors right after 'hello').
+            if (m.type === 'error') this.adError = String(m.message ?? '');
+            else if (m.type === 'hello') this.adError = null;
+            else if (m.type === 'fms' && m.connected) this.adError = null;
+            this.kick?.();
+        });
+        AudienceDisplayAddon.Instance.events.on('connection', changed());
         this.vmixEvents.on('change', changed('vmix'));
         // Stream / recording settings send no activator; vMix's autosave
         // (about once a minute) does change.
@@ -598,6 +617,23 @@ export default class Checks extends EventEmitter {
                       lastChangeAt: this.mixerWatch.lastAt || null,
                   }
                 : null,
+            audienceDisplay: {
+                phase: AudienceDisplayAddon.Instance.getPhase(),
+                eventStream: AudienceDisplayAddon.Instance.events.connected,
+                profile:
+                    AudienceDisplayAddon.Instance.events.latest.get(
+                        'profile'
+                    ) ??
+                    AudienceDisplayAddon.Instance.events.latest.get('hello')
+                        ?.profile ??
+                    null,
+                fms:
+                    AudienceDisplayAddon.Instance.events.latest.get('fms') ??
+                    AudienceDisplayAddon.Instance.events.latest.get('hello')
+                        ?.fms ??
+                    null,
+                error: this.adError,
+            },
             liveCaptions: {
                 phase: LiveCaptions.Instance.getPhase(),
                 eventStream: LiveCaptions.Instance.events.connected,
@@ -783,6 +819,7 @@ export default class Checks extends EventEmitter {
         this.checkBuzzer(v);
         this.checkCaptions(v);
         this.checkCaptionsEngine();
+        this.checkAudienceDisplay();
         this.checkCaptionsYoutube(streaming);
         [...this.since.keys()].forEach((id) => {
             if (!this.heldSeen.has(id)) this.since.delete(id);
@@ -1344,6 +1381,64 @@ export default class Checks extends EventEmitter {
         // whether or not a match is on.
         if (problem) this.set('captions', 'warning', problem, fix);
         else this.set('captions', 'ok', `On overlay ${CAPTIONS_OVERLAY}`);
+    }
+
+    // The custom audience display (FRC off-season, when Settings picks it):
+    // running, connected to FMS, its last error, and which profile it chose
+    // (it picks one from the FMS event code itself).
+    private checkAudienceDisplay() {
+        const ad = AudienceDisplayAddon.Instance;
+        if (!AutoAV.Instance.runsCustomAd()) {
+            this.set('audience-display', 'unknown', 'Not used');
+            return;
+        }
+        const phase = ad.getPhase();
+        if (phase === 'updating' || phase === 'starting') {
+            this.set(
+                'audience-display',
+                'unknown',
+                phase === 'updating' ? 'Updating' : 'Starting'
+            );
+            return;
+        }
+        if (phase !== 'running') {
+            this.set('audience-display', 'warning', 'Stopped', {
+                label: 'Start',
+                run: async () => {
+                    if (!(await ad.start()))
+                        throw new Error('Audience display did not start');
+                },
+            });
+            return;
+        }
+        const { latest, connected, supported } = ad.events;
+        if (!connected) {
+            this.set(
+                'audience-display',
+                'ok',
+                supported === false ? 'Running' : 'Running, no status yet'
+            );
+            return;
+        }
+        const hello = latest.get('hello') as any;
+        const fms = (latest.get('fms') ?? hello?.fms) as
+            | { connected: boolean; eventCode: string | null }
+            | undefined;
+        const profile = (latest.get('profile') ?? hello?.profile) as
+            | { name: string }
+            | undefined;
+
+        if (fms && !fms.connected) {
+            this.set('audience-display', 'warning', 'Not connected to FMS');
+        } else if (this.adError) {
+            this.set('audience-display', 'warning', this.adError);
+        } else {
+            this.set(
+                'audience-display',
+                'ok',
+                profile ? `Profile: ${profile.name}` : 'Running'
+            );
+        }
     }
 
     // The transcription engine inside live-captions, from its event stream

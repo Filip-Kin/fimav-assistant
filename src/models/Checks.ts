@@ -3,7 +3,13 @@ export type CheckState = 'ok' | 'warning' | 'critical' | 'unknown';
 
 export interface CheckResult {
     id: string;
-    group: 'Hardware' | 'Stream' | 'Audio' | 'Recording' | 'Captions';
+    group:
+        | 'Hardware'
+        | 'Stream'
+        | 'Audio'
+        | 'Recording'
+        | 'Captions'
+        | 'Display';
     label: string;
     state: CheckState;
     detail: string;

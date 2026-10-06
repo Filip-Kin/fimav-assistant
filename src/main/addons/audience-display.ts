@@ -4,6 +4,7 @@ import log from 'electron-log';
 import { appdataPath } from '../util';
 import { AddonLoggers } from './addon-loggers';
 import AddonPhaseTracker from './addon-phase';
+import AddonEvents from './addon-events';
 import { getStore } from '../store';
 import AutoAV from './autoav';
 import {
@@ -35,6 +36,14 @@ export default class AudienceDisplayAddon {
 
     // Updating / starting / running / stopped, with a 'phase' event.
     public readonly phase = new AddonPhaseTracker();
+
+    // Its /api/events stream while running (profile, FMS, Companion,
+    // errors). It picks its profile from the FMS event code itself.
+    public readonly events = new AddonEvents(
+        'audience-display',
+        'http://127.0.0.1:3001/api/events',
+        this.phase
+    );
 
     private currentVersion = '0.0.0';
 

@@ -13,6 +13,7 @@ const GROUPS: CheckResult['group'][] = [
     'Audio',
     'Recording',
     'Captions',
+    'Display',
 ];
 
 const STATE_TAG: Record<CheckState, { color: string; label: string }> = {

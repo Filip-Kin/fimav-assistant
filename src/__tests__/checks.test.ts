@@ -22,6 +22,14 @@ const lcEvents = {
     on: () => undefined,
 };
 let audioDevices: any[] = [];
+let customAd = false;
+let adPhase = 'running';
+const adEvents = {
+    connected: false,
+    supported: null as boolean | null,
+    latest: new Map<string, any>(),
+    on: () => undefined,
+};
 const xairOut = (over: Record<string, unknown> = {}) => ({
     name: 'OUT 1-2',
     sub_name: 'BEHRINGER X-AIR',
@@ -84,6 +92,7 @@ jest.mock('../main/addons/autoav', () => ({
     default: {
         Instance: {
             matchInPlay: () => match,
+            runsCustomAd: () => customAd,
             getStatus: () => ({ saveFolder: '/event' }),
         },
     },
@@ -96,6 +105,18 @@ jest.mock('../main/addons/live-captions', () => ({
             getPhase: () => captionsPhase,
             get events() {
                 return lcEvents;
+            },
+        },
+    },
+}));
+jest.mock('../main/addons/audience-display', () => ({
+    __esModule: true,
+    default: {
+        Instance: {
+            getPhase: () => adPhase,
+            start: jest.fn(async () => true),
+            get events() {
+                return adEvents;
             },
         },
     },
@@ -274,6 +295,11 @@ beforeEach(() => {
     lcEvents.connected = false;
     lcEvents.supported = null;
     lcEvents.latest.clear();
+    customAd = false;
+    adPhase = 'running';
+    adEvents.connected = false;
+    adEvents.supported = null;
+    adEvents.latest.clear();
     audioDevices = [xairOut()];
     matches = [];
     Object.keys(store).forEach((k) => delete store[k]);
@@ -304,6 +330,7 @@ beforeEach(() => {
         'captions',
         'captions-engine',
         'captions-youtube',
+        'audience-display',
     ].forEach((id) =>
         checks.results.set(id, {
             id,
@@ -766,6 +793,41 @@ describe('stream checks', () => {
         expect(get('captions-engine')).toMatchObject({
             state: 'unknown',
             detail: 'No status from this Live Captions version',
+        });
+    });
+
+    it('custom audience display: not used, stopped, FMS, profile', async () => {
+        await tick(1);
+        expect(get('audience-display').detail).toBe('Not used');
+        customAd = true;
+        adPhase = 'stopped';
+        await tick(1);
+        expect(get('audience-display')).toMatchObject({
+            state: 'warning',
+            detail: 'Stopped',
+            fix: 'Start',
+        });
+        adPhase = 'running';
+        adEvents.connected = true;
+        adEvents.latest.set('hello', {
+            type: 'hello',
+            profile: {
+                id: 'fsu-roboday',
+                name: 'FSU RoboDay',
+                source: 'event',
+            },
+            fms: { connected: true, eventCode: 'MIBIG1' },
+        });
+        await tick(1);
+        expect(get('audience-display')).toMatchObject({
+            state: 'ok',
+            detail: 'Profile: FSU RoboDay',
+        });
+        adEvents.latest.set('fms', { type: 'fms', connected: false });
+        await tick(1);
+        expect(get('audience-display')).toMatchObject({
+            state: 'warning',
+            detail: 'Not connected to FMS',
         });
     });
 
