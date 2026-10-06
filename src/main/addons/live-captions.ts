@@ -173,7 +173,10 @@ export default class LiveCaptions {
             // Start the live-captions process directly (NO shell wrapper).
             // shell:true meant `this.process` was a cmd.exe wrapper, so kill()
             // took down the wrapper and orphaned the real exe on port 3000.
-            const child = spawn(exePath, ['--skip-update-check']);
+            const child = spawn(exePath, ['--skip-update-check'], {
+                // Run by AV Assistant: its settings hide what AV Assistant does.
+                env: { ...process.env, FIMAV_MANAGED: '1' },
+            });
             this.process = child;
             child.stdout.on('data', (d) => this.logs.out.info(d.toString()));
             child.stderr.on('data', (d) => this.logs.err.error(d.toString()));

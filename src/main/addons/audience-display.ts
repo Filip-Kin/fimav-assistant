@@ -182,7 +182,9 @@ export default class AudienceDisplayAddon {
             // Its own auto-update is off: this addon picks the version.
             const child = spawn(exePath, [], {
                 cwd: appdataPath,
-                env: { ...process.env, AUTO_UPDATE: '0' },
+                // FIMAV_MANAGED: run by AV Assistant, so its root page hides the
+                // vMix setup AV Assistant's vMix tab does.
+                env: { ...process.env, AUTO_UPDATE: '0', FIMAV_MANAGED: '1' },
             });
             this.process = child;
             child.stdout.on('data', (d) => this.logs.out.info(d.toString()));

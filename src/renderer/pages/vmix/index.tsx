@@ -166,6 +166,20 @@ function StatusLine({
     );
 }
 
+// The audience display the "Add ... input" button adds (Settings picks
+// FMS or the custom one at FRC off-season events).
+const DISPLAY_LABEL: Record<AutoAVStatus['audienceDisplay'], string> = {
+    ftcLive: 'FTC Live',
+    fms: 'FMS',
+    customAd: 'Offseason AD',
+};
+
+const ADD_DISPLAY_LABEL: Record<AutoAVStatus['audienceDisplay'], string> = {
+    ftcLive: 'Add Audience Display input',
+    fms: 'Add FMS input',
+    customAd: 'Add Offseason AD input',
+};
+
 export default function VmixPage() {
     const [status, setStatus] = useState<VmixStatus | null>(null);
     const [bandwidth, setBandwidth] = useState<VmixBandwidth | null>(null);
@@ -177,15 +191,19 @@ export default function VmixPage() {
     const [compositeOpen, setCompositeOpen] = useState(false);
     // null until the first AutoAV status, so FTC never flashes FRC controls.
     const [program, setProgram] = useState<Program | null>(null);
+    const [display, setDisplay] = useState<
+        AutoAVStatus['audienceDisplay'] | null
+    >(null);
     const oneShot = useOneShot();
 
     // FRC or FTC decides which audience display input the tab adds.
     useEffect(() => {
         if (!window.electron) return undefined;
         const { ipcRenderer } = window.electron;
-        const off = ipcRenderer.on('autoav:status', (s: AutoAVStatus) =>
-            setProgram(s.program)
-        );
+        const off = ipcRenderer.on('autoav:status', (s: AutoAVStatus) => {
+            setProgram(s.program);
+            setDisplay(s.audienceDisplay);
+        });
         ipcRenderer.sendMessage('autoav:getState', []);
         return off;
     }, []);
@@ -507,6 +525,12 @@ export default function VmixPage() {
                 <Title level={5} style={{ margin: '16px 0 8px' }}>
                     vMix inputs
                 </Title>
+                {display && (
+                    <div style={{ marginBottom: 8 }}>
+                        <Text type="secondary">Audience display: </Text>
+                        <Text strong>{DISPLAY_LABEL[display]}</Text>
+                    </div>
+                )}
                 <Space wrap>
                     <Button
                         icon={<AudioOutlined />}
@@ -521,9 +545,7 @@ export default function VmixPage() {
                             disabled={!reachable}
                             onClick={() => send('vmix:addAudienceDisplayInput')}
                         >
-                            {program === 'ftc'
-                                ? 'Add Audience Display input'
-                                : 'Add FMS input'}
+                            {ADD_DISPLAY_LABEL[display ?? 'fms']}
                         </Button>
                     )}
                     {/* Sized to the FMS or FTC Live display's camera box. */}

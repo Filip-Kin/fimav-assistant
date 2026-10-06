@@ -21,6 +21,10 @@ export interface AutoAVStatus {
     // FRC off-season audience display (Settings): the official FMS display or
     // our custom one. In-season it is always the FMS display.
     frcAudienceDisplay: 'fms' | 'customAd';
+    // The audience display in use now (what the vMix tab's button adds):
+    // FTC Live's at FTC events, the custom one when the off-season setting
+    // picks it, otherwise FMS.
+    audienceDisplay: 'ftcLive' | 'fms' | 'customAd';
     // vMix reachability + whether it is currently recording
     vmix: { reachable: boolean; recording: boolean };
     // Whether AutoAV itself kicked off the current recording

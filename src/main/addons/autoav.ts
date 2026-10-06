@@ -99,6 +99,7 @@ export default class AutoAV {
         program: 'frc',
         programDetected: null,
         frcAudienceDisplay: 'fms',
+        audienceDisplay: 'fms',
         sampleFileName: '',
         lastMessage: null,
     };
@@ -865,6 +866,9 @@ export default class AutoAV {
             store.get('frcAudienceDisplay', 'fms') === 'customAd'
                 ? 'customAd'
                 : 'fms';
+        if (this.isFtc()) this.status.audienceDisplay = 'ftcLive';
+        else if (this.runsCustomAd()) this.status.audienceDisplay = 'customAd';
+        else this.status.audienceDisplay = 'fms';
         this.status.fileNameModeForced =
             typeof this.event()?.isOfficial === 'boolean';
         this.status.sampleFileName = sampleFileName(

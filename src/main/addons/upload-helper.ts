@@ -233,7 +233,11 @@ export default class YoutubeUploaderAddon {
 
             // Start directly (NO shell wrapper) so this.process is the real exe
             // and kill() takes it down rather than a cmd.exe shell.
-            const child = spawn(exePath, args);
+            const child = spawn(exePath, args, {
+                // Run by AV Assistant: its own page shows the folder and
+                // event read-only.
+                env: { ...process.env, FIMAV_MANAGED: '1' },
+            });
             this.process = child;
             child.stdout.on('data', (d) => this.logs.out.info(d.toString()));
             child.stderr.on('data', (d) => this.logs.err.error(d.toString()));
