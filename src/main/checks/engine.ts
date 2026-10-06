@@ -236,7 +236,9 @@ export default class Checks extends EventEmitter {
             this.results.set(d.id, {
                 ...d,
                 state: 'unknown',
-                detail: '',
+                detail: ['match-buzzer', 'mic-balance'].includes(d.id)
+                    ? 'No match yet'
+                    : '',
                 ignoredUntil: null,
             })
         );
@@ -333,7 +335,7 @@ export default class Checks extends EventEmitter {
         this.checkMixer();
         this.checkMatchSounds(v);
         this.checkBuzzer(v);
-        this.checkCaptions(v, match, streaming);
+        this.checkCaptions(v);
         this.publish();
     }
 
@@ -355,11 +357,13 @@ export default class Checks extends EventEmitter {
                 'critical',
                 `${match!.label} running, not streaming`
             );
+        } else if (!match) {
+            // Between matches there is nothing to check.
+            this.set('stream-match', 'unknown', 'No match');
+        } else if (streaming) {
+            this.set('stream-match', 'ok', 'Streaming');
         } else {
-            let detail = 'No match';
-            if (match) detail = `${match.label} running`;
-            if (streaming) detail = 'Streaming';
-            this.set('stream-match', 'ok', detail);
+            this.set('stream-match', 'ok', `${match.label} starting`);
         }
 
         if (!streaming) {
@@ -419,12 +423,10 @@ export default class Checks extends EventEmitter {
                 'warning',
                 `${match!.label} running, not recording`
             );
+        } else if (!match) {
+            this.set('recording-match', 'unknown', 'No match');
         } else {
-            this.set(
-                'recording-match',
-                'ok',
-                recording ? 'Recording' : 'Not recording'
-            );
+            this.set('recording-match', 'ok', 'Recording');
         }
     }
 
@@ -638,16 +640,11 @@ export default class Checks extends EventEmitter {
         this.buzzer = null;
     }
 
-    private checkCaptions(
-        v: any,
-        match: { label: string } | null,
-        streaming: boolean
-    ) {
+    private checkCaptions(v: any) {
         if (!v) {
             this.set('captions', 'unknown', 'vMix not answering');
             return;
         }
-        const live = streaming || !!match;
         const input = list<any>(v.inputs?.input).find((i) =>
             /live captions/i.test(String(i.title))
         );
@@ -664,8 +661,10 @@ export default class Checks extends EventEmitter {
             problem = 'Live Captions stopped';
         else if (!input) problem = 'No Live Captions input in vMix';
         else if (!onOverlay) problem = 'Live Captions not on an overlay';
-        if (problem && live) this.set('captions', 'warning', problem);
-        else this.set('captions', 'ok', problem || 'On overlay');
+        // Captions are set up for the whole event, so a problem counts
+        // whether or not a match is on.
+        if (problem) this.set('captions', 'warning', problem);
+        else this.set('captions', 'ok', 'On overlay');
     }
 
     // #endregion

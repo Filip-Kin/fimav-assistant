@@ -1,7 +1,7 @@
 import { Button, Empty, Spin, Tag, Typography } from 'antd';
-import { CheckResult, CheckState } from '../../../models/Checks';
-import useChecks, { ignoreCheck, unignoreCheck } from '../../hooks/checks';
-import './index.css';
+import { CheckResult, CheckState } from '../../models/Checks';
+import useChecks, { ignoreCheck, unignoreCheck } from '../hooks/checks';
+import './ChecksList.css';
 
 const { Text } = Typography;
 
@@ -59,7 +59,7 @@ function Row({ check }: { check: CheckResult }) {
     );
 }
 
-export default function ChecksPage() {
+export default function ChecksList() {
     const checks = useChecks();
     if (!checks) {
         return (

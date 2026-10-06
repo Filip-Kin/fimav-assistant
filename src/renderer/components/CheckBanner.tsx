@@ -1,15 +1,14 @@
 import { Button } from 'antd';
 import { WarningFilled } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
 import { isAlerting } from '../../models/Checks';
 import useChecks, { ignoreCheck } from '../hooks/checks';
+import { openChecks } from './ChecksDialog';
 import './CheckBanner.css';
 
 // A bar at the top of every page for each failing check that is not
 // ignored. It stays up only while the problem lasts.
 export default function CheckBanner() {
     const checks = useChecks();
-    const nav = useNavigate();
     const alerts = (checks ?? []).filter(isAlerting);
     if (!alerts.length) return null;
     return (
@@ -23,7 +22,7 @@ export default function CheckBanner() {
                     <button
                         type="button"
                         className="check-banner__text"
-                        onClick={() => nav('/checks')}
+                        onClick={openChecks}
                     >
                         <strong>{c.label}</strong>
                         <span>{c.detail}</span>

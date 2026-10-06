@@ -974,7 +974,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     });
     // A check that starts failing (and is not ignored): a Windows
     // notification, since FIM-AV is often behind vMix. Clicking it brings
-    // FIM-AV forward on the Checks tab.
+    // FIM-AV forward with the Checks dialog open.
     Checks.Instance.on('alert', (r) => {
         if (!Notification.isSupported()) return;
         const n = new Notification({
@@ -985,7 +985,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         n.on('click', () => {
             if (window?.isMinimized()) window.restore();
             window?.focus();
-            window?.webContents.send('app:navigate', '/checks');
+            window?.webContents.send('app:openChecks');
         });
         n.show();
     });

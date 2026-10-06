@@ -22,6 +22,9 @@ export default class MenuBuilder {
 
     addons: Addons;
 
+    // "Checks", or "Checks (2)" while two checks are failing.
+    checksLabel = 'Checks';
+
     constructor(mainWindow: BrowserWindow, addons: Addons) {
         this.mainWindow = mainWindow;
         this.addons = addons;
@@ -34,6 +37,14 @@ export default class MenuBuilder {
         Menu.setApplicationMenu(menu);
 
         return menu;
+    }
+
+    // Rebuild the menu when the number of failing checks changes.
+    setChecksAlerts(count: number) {
+        const label = count ? `Checks (${count})` : 'Checks';
+        if (label === this.checksLabel) return;
+        this.checksLabel = label;
+        this.buildMenu();
     }
 
     buildDefaultTemplate(dev: boolean) {
@@ -93,6 +104,12 @@ export default class MenuBuilder {
                     label: 'Settings',
                     click: () => {
                         this.mainWindow.webContents.send('app:openSettings');
+                    },
+                },
+                {
+                    label: this.checksLabel,
+                    click: () => {
+                        this.mainWindow.webContents.send('app:openChecks');
                     },
                 },
                 {

@@ -2,6 +2,8 @@ import path from 'path';
 import { app, BrowserWindow, shell, globalShortcut, session } from 'electron';
 import log from 'electron-log';
 import MenuBuilder from './window_components/menu'; // eslint-disable-line import/no-cycle
+import Checks from './checks/engine';
+import { CheckResult, isAlerting } from '../models/Checks';
 import {
     RESOURCES_PATH,
     getAssetPath,
@@ -140,6 +142,10 @@ const createWindow = async () => {
 
     const menuBuilder = new MenuBuilder(mainWindow, addons);
     menuBuilder.buildMenu();
+    // The Checks menu item shows how many checks are failing.
+    Checks.Instance.on('checks', (list: CheckResult[]) =>
+        menuBuilder.setChecksAlerts(list.filter(isAlerting).length)
+    );
 
     // Open urls in the user's browser
     mainWindow.webContents.setWindowOpenHandler((edata) => {
