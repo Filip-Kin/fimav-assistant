@@ -2,6 +2,7 @@ import { Button, Empty, Spin, Tag, Typography } from 'antd';
 import { CheckResult, CheckState } from '../../models/Checks';
 import useChecks, { ignoreCheck, unignoreCheck } from '../hooks/checks';
 import CheckFixButton from './CheckFixButton';
+import CheckDocButton from './CheckDocButton';
 import './ChecksList.css';
 
 const { Text } = Typography;
@@ -25,10 +26,9 @@ const time = (ms: number) =>
     new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 function Row({ check }: { check: CheckResult }) {
+    const failing = check.state === 'warning' || check.state === 'critical';
     // Hardware is list only, so it has nothing to ignore.
-    const failing =
-        (check.state === 'warning' || check.state === 'critical') &&
-        check.group !== 'Hardware';
+    const ignorable = failing && check.group !== 'Hardware';
     const tag = STATE_TAG[check.state];
     return (
         <div className="check-row">
@@ -57,12 +57,15 @@ function Row({ check }: { check: CheckResult }) {
                 {!check.ignoredUntil && failing && (
                     <>
                         <CheckFixButton check={check} />
-                        <Button
-                            size="small"
-                            onClick={() => ignoreCheck(check.id)}
-                        >
-                            Ignore
-                        </Button>
+                        <CheckDocButton check={check} />
+                        {ignorable && (
+                            <Button
+                                size="small"
+                                onClick={() => ignoreCheck(check.id)}
+                            >
+                                Ignore
+                            </Button>
+                        )}
                     </>
                 )}
             </span>

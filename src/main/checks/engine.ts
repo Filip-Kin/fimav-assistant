@@ -47,40 +47,114 @@ const OFF_DB = -40;
 // Mics vs match sounds on the stream bus: only a big gap is reported.
 const BALANCE_DB = 15;
 
-type Def = Pick<CheckResult, 'id' | 'group' | 'label'>;
+type Def = Pick<CheckResult, 'id' | 'group' | 'label'> & { doc?: string };
+
+const DOCS = 'https://docs.fimav.us/docs';
 
 type Fix = { label: string; run: () => Promise<unknown> };
 
-const vmixFn = (fn: string, params: Record<string, string> = {}): Fix['run'] =>
-    () => VmixService.Instance.Function(fn, params);
+const vmixFn =
+    (fn: string, params: Record<string, string> = {}): Fix['run'] =>
+    () =>
+        VmixService.Instance.Function(fn, params);
 
 // The overlay channel FIM puts Live Captions on.
 const CAPTIONS_OVERLAY = 8;
 
 const DEFS: Def[] = [
-    { id: 'hw-network', group: 'Hardware', label: 'Network' },
-    { id: 'hw-ip', group: 'Hardware', label: 'IP config' },
+    {
+        id: 'hw-network',
+        group: 'Hardware',
+        label: 'Network',
+        doc: `${DOCS}/troubleshooting-guides/stream-wont-start/#1-check-internet-connection`,
+    },
+    {
+        id: 'hw-ip',
+        group: 'Hardware',
+        label: 'IP config',
+        doc: `${DOCS}/setting-up-the-fim-av-system/#check-network-configuration`,
+    },
     { id: 'hw-switch', group: 'Hardware', label: 'Switch' },
     { id: 'hw-mixer', group: 'Hardware', label: 'Mixer' },
     { id: 'hw-camera1', group: 'Hardware', label: 'Camera 1' },
     { id: 'hw-camera2', group: 'Hardware', label: 'Camera 2' },
-    { id: 'stream-match', group: 'Stream', label: 'Stream during match' },
-    { id: 'stream-health', group: 'Stream', label: 'Stream health' },
-    { id: 'stream-bus', group: 'Stream', label: 'Stream audio source' },
-    { id: 'stream-output', group: 'Stream', label: 'Stream output' },
+    {
+        id: 'stream-match',
+        group: 'Stream',
+        label: 'Stream during match',
+        doc: `${DOCS}/troubleshooting-guides/stream-wont-start/`,
+    },
+    {
+        id: 'stream-health',
+        group: 'Stream',
+        label: 'Stream health',
+        doc: `${DOCS}/troubleshooting-guides/stream-wont-start/#1-check-internet-connection`,
+    },
+    {
+        id: 'stream-bus',
+        group: 'Stream',
+        label: 'Stream audio source',
+        doc: `${DOCS}/troubleshooting-guides/no-audio/#3-check-stream-settings-in-vmix`,
+    },
     {
         id: 'recording-match',
         group: 'Recording',
         label: 'Recording during match',
     },
-    { id: 'stream-audio', group: 'Audio', label: 'Stream audio (Bus A)' },
-    { id: 'stream-loudness', group: 'Audio', label: 'Stream loudness' },
-    { id: 'dj-stream', group: 'Audio', label: 'DJ on stream bus' },
-    { id: 'match-sounds', group: 'Audio', label: 'Match sounds' },
-    { id: 'match-buzzer', group: 'Audio', label: 'Match start sound' },
-    { id: 'mic-balance', group: 'Audio', label: 'Mics vs match sounds' },
-    { id: 'captions', group: 'Captions', label: 'Captions overlay' },
-    { id: 'captions-youtube', group: 'Captions', label: 'YouTube captions' },
+    {
+        id: 'stream-audio',
+        group: 'Audio',
+        label: 'Stream audio (Bus A)',
+        doc: `${DOCS}/troubleshooting-guides/no-audio/#4-check-levels-in-vmix`,
+    },
+    {
+        id: 'stream-loudness',
+        group: 'Audio',
+        label: 'Stream loudness',
+        doc: `${DOCS}/audio-volume/`,
+    },
+    {
+        id: 'dj-stream',
+        group: 'Audio',
+        label: 'DJ on stream bus',
+        doc: `${DOCS}/troubleshooting-guides/no-audio/#1-test-using-game-sounds-or-a-microphone`,
+    },
+    {
+        id: 'match-sounds',
+        group: 'Audio',
+        label: 'Match sounds',
+        doc: `${DOCS}/troubleshooting-guides/no-game-sounds/`,
+    },
+    {
+        id: 'match-buzzer',
+        group: 'Audio',
+        label: 'Match start sound',
+        doc: `${DOCS}/troubleshooting-guides/no-game-sounds/`,
+    },
+    {
+        id: 'mic-balance',
+        group: 'Audio',
+        label: 'Mics vs match sounds',
+        doc: `${DOCS}/audio-volume/#helpful-guide-to-implementing-and-auditing-yourself`,
+    },
+    {
+        id: 'captions',
+        group: 'Captions',
+        label: 'Captions overlay',
+        doc: `${DOCS}/software-guides/captions/#adding-the-captions-to-vmix`,
+    },
+    {
+        id: 'captions-youtube',
+        group: 'Captions',
+        label: 'YouTube captions',
+        doc: `${DOCS}/software-guides/captions/#youtube-caption-push`,
+    },
+    {
+        id: 'stream-output',
+        group: 'Captions',
+        label: 'Captions off stream',
+        doc: `${DOCS}/software-guides/captions/#hiding-captions-from-streamrecording`,
+    },
 ];
 
 const truthy = (v: unknown) =>
@@ -273,13 +347,14 @@ export default class Checks extends EventEmitter {
                 detail: ['match-buzzer', 'mic-balance'].includes(d.id)
                     ? 'No match yet'
                     : '',
+                doc: d.doc ?? null,
                 ignoredUntil: null,
                 fix: null,
             })
         );
         const loop = async () => {
             try {
-                await this.tick();
+                await this.runTick();
             } catch (e) {
                 log.warn('Checks tick failed', e);
             }
@@ -346,6 +421,21 @@ export default class Checks extends EventEmitter {
         if (!f) throw new Error('Nothing to fix');
         log.info(`checks: fix ${id}: ${f.label}`);
         await f.run();
+        // Check again now, not on the next loop, so the result (and the
+        // button) updates as soon as the fix is in.
+        this.captionPushAt = 0;
+        this.mixer = null;
+        await this.runTick();
+    }
+
+    // One tick at a time: a fix's re-check and the loop share this.
+    private ticking: Promise<void> = Promise.resolve();
+
+    private runTick(): Promise<void> {
+        this.ticking = this.ticking
+            .catch(() => undefined)
+            .then(() => this.tick());
+        return this.ticking;
     }
 
     private async tick() {
@@ -516,23 +606,25 @@ export default class Checks extends EventEmitter {
             this.set(
                 'stream-bus',
                 'critical',
-                wrong.map((s) => `Stream ${s.index}: ${s.audioBus}`).join(', ')
+                wrong
+                    .map((s) => `Stream ${s.index} on ${s.audioBus}, not Bus A`)
+                    .join(', ')
             );
         } else if (setting && setting !== 'Bus A') {
             // Live on Bus A but changed in settings: the next start is wrong.
             this.set(
                 'stream-bus',
                 live.length ? 'warning' : 'critical',
-                `Stream settings: ${setting}`
+                `Stream settings on ${setting}, not Bus A`
             );
         } else if (live.length) {
             this.set(
                 'stream-bus',
                 'ok',
-                live.map((s) => `Stream ${s.index}: Bus A`).join(', ')
+                live.map((s) => `Stream ${s.index} on Bus A`).join(', ')
             );
         } else if (setting) {
-            this.set('stream-bus', 'ok', 'Stream settings: Bus A');
+            this.set('stream-bus', 'ok', 'Stream settings on Bus A');
         } else if (!streaming) {
             this.set('stream-bus', 'unknown', 'No vMix settings file');
         }
@@ -546,15 +638,23 @@ export default class Checks extends EventEmitter {
         if (!st || st.output === null) {
             this.set('stream-output', 'unknown', 'No vMix settings file');
         } else if (st.output !== 2) {
-            this.set('stream-output', 'critical', `Output ${st.output}`);
+            this.set(
+                'stream-output',
+                'warning',
+                `Stream on Output ${st.output}, not Output 2`
+            );
         } else if (st.output2Overlays?.includes(CAPTIONS_OVERLAY)) {
             this.set(
                 'stream-output',
                 'warning',
-                `Overlay ${CAPTIONS_OVERLAY} on Output 2`
+                `Overlay ${CAPTIONS_OVERLAY} (captions) on Output 2`
             );
         } else {
-            this.set('stream-output', 'ok', 'Output 2');
+            this.set(
+                'stream-output',
+                'ok',
+                `Output 2, no overlay ${CAPTIONS_OVERLAY}`
+            );
         }
     }
 
@@ -681,8 +781,7 @@ export default class Checks extends EventEmitter {
     // stream, so a missing main mix is critical and a missing stream send a
     // warning.
     private checkMatchSounds(v: any) {
-        const problems: { state: CheckState; text: string; fix?: Fix }[] =
-            [];
+        const problems: { state: CheckState; text: string; fix?: Fix }[] = [];
         const input = this.displayInput(v);
         if (v && !input) {
             problems.push({

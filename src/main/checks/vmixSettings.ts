@@ -14,7 +14,7 @@ import path from 'path';
 //     channel 1..16 shown on that output.
 
 export interface VmixStreamSettings {
-    // "Bus A", "Master", or "Not Bus A (n)"
+    // "Bus A", "Master", or "audio source <n>" for a value not yet mapped
     audioBus: string | null;
     // 1-based output number the stream shows
     output: number | null;
@@ -24,8 +24,7 @@ export interface VmixStreamSettings {
     youtubeKey: string | null;
 }
 
-let cache: { mtimeMs: number; value: VmixStreamSettings | null } | null =
-    null;
+let cache: { mtimeMs: number; value: VmixStreamSettings | null } | null = null;
 
 export function lastVmixPath(): string {
     return path.join(process.env.APPDATA ?? '', 'last.vmix');
@@ -71,7 +70,7 @@ export function parseStreamSettings(xml: string): VmixStreamSettings | null {
     let audioBus: string | null = null;
     if (audio === 10) audioBus = 'Bus A';
     else if (audio === 0) audioBus = 'Master';
-    else if (audio !== null) audioBus = `Not Bus A (${audio})`;
+    else if (audio !== null) audioBus = `audio source ${audio}`;
     const source = field(entry, 'Source');
     return {
         audioBus,

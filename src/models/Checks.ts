@@ -7,6 +7,8 @@ export interface CheckResult {
     label: string;
     state: CheckState;
     detail: string;
+    // docs.fimav.us page that explains how to put it right.
+    doc: string | null;
     // Label of a one-click fix the app can do for the current problem.
     fix: string | null;
     // Set while "Ignore" (6 h) is in force for this check (epoch ms).

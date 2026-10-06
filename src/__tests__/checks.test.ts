@@ -400,10 +400,17 @@ describe('stream checks', () => {
         vmix = v;
         await tick(1);
         expect(get('match-sounds').fix).toBe('Unmute');
+        (VmixService.Instance.Function as jest.Mock).mockImplementationOnce(
+            async () => {
+                v.inputs.input[0].muted = 'False';
+            }
+        );
         await checks.fix('match-sounds');
         expect(VmixService.Instance.Function).toHaveBeenCalledWith('AudioOn', {
             Input: 'fms-key',
         });
+        // Checked again straight after the fix: the button is gone.
+        expect(get('match-sounds')).toMatchObject({ state: 'ok', fix: null });
     });
 
     it('an input titled "Audience" is the display input', async () => {
@@ -440,7 +447,7 @@ describe('stream checks', () => {
         await tick(1);
         expect(get('stream-bus')).toMatchObject({
             state: 'critical',
-            detail: 'Stream 1: Master',
+            detail: 'Stream 1 on Master, not Bus A',
         });
     });
 
@@ -450,7 +457,7 @@ describe('stream checks', () => {
         await tick(1);
         expect(get('stream-bus')).toMatchObject({
             state: 'critical',
-            detail: 'Stream settings: Master',
+            detail: 'Stream settings on Master, not Bus A',
         });
     });
 
@@ -459,23 +466,23 @@ describe('stream checks', () => {
         await tick(1);
         expect(get('stream-bus')).toMatchObject({
             state: 'warning',
-            detail: 'Stream settings: Master',
+            detail: 'Stream settings on Master, not Bus A',
         });
     });
 
-    it('stream on Output 1 is critical; overlay 8 on Output 2 a warning', async () => {
+    it('stream on Output 1 or overlay 8 on Output 2: a warning', async () => {
         settings.output = 1;
         await tick(1);
         expect(get('stream-output')).toMatchObject({
-            state: 'critical',
-            detail: 'Output 1',
+            state: 'warning',
+            detail: 'Stream on Output 1, not Output 2',
         });
         settings.output = 2;
         settings.output2Overlays = [1, 8];
         await tick(1);
         expect(get('stream-output')).toMatchObject({
             state: 'warning',
-            detail: 'Overlay 8 on Output 2',
+            detail: 'Overlay 8 (captions) on Output 2',
         });
     });
 
