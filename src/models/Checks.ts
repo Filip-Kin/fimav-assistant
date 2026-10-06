@@ -7,7 +7,9 @@ export interface CheckResult {
     label: string;
     state: CheckState;
     detail: string;
-    // Set while "Ignore 6 h" is in force for this check (epoch ms).
+    // Label of a one-click fix the app can do for the current problem.
+    fix: string | null;
+    // Set while "Ignore" (6 h) is in force for this check (epoch ms).
     ignoredUntil: number | null;
 }
 

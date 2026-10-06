@@ -3,6 +3,7 @@ import { WarningFilled } from '@ant-design/icons';
 import { isAlerting } from '../../models/Checks';
 import useChecks, { ignoreCheck } from '../hooks/checks';
 import { openChecks } from './ChecksDialog';
+import CheckFixButton from './CheckFixButton';
 import './CheckBanner.css';
 
 // A bar at the top of every page for each failing check that is not
@@ -27,8 +28,9 @@ export default function CheckBanner() {
                         <strong>{c.label}</strong>
                         <span>{c.detail}</span>
                     </button>
+                    <CheckFixButton check={c} />
                     <Button size="small" onClick={() => ignoreCheck(c.id)}>
-                        Ignore 6 h
+                        Ignore
                     </Button>
                 </div>
             ))}

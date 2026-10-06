@@ -1,5 +1,8 @@
 import Checks from '../main/checks/engine';
 import { decodeReply, levelToDb } from '../main/checks/xair';
+import { parseStreamSettings } from '../main/checks/vmixSettings';
+import { setCaptionKey } from '../main/checks/captionsYoutube';
+import VmixService from '../services/VmixService';
 import { CheckResult } from '../models/Checks';
 
 // The world the checks read, set per test.
@@ -10,6 +13,8 @@ let mixer = new Map<string, string | number>();
 let captionsRunning = true;
 let matches: any[] = [];
 const store: Record<string, unknown> = {};
+let settings: any = null;
+let push: any = null;
 
 jest.mock('electron-log', () => {
     const l = { warn: jest.fn(), error: jest.fn(), info: jest.fn() };
@@ -17,7 +22,22 @@ jest.mock('electron-log', () => {
 });
 jest.mock('../services/VmixService', () => ({
     __esModule: true,
-    default: { Instance: { GetBase: async () => (vmix ? { vmix } : null) } },
+    default: {
+        Instance: {
+            GetBase: async () => (vmix ? { vmix } : null),
+            Function: jest.fn(async () => undefined),
+        },
+    },
+}));
+jest.mock('../main/checks/vmixSettings', () => ({
+    ...jest.requireActual('../main/checks/vmixSettings'),
+    readStreamSettings: () => settings,
+}));
+jest.mock('../main/checks/captionsYoutube', () => ({
+    ...jest.requireActual('../main/checks/captionsYoutube'),
+    getCaptionPushStatus: async () => push,
+    setCaptionKey: jest.fn(async () => undefined),
+    enableCaptionPush: jest.fn(async () => undefined),
 }));
 jest.mock('../main/addons/autoav', () => ({
     __esModule: true,
@@ -38,6 +58,8 @@ jest.mock('../main/addons/hw-ping', () => ({
 }));
 jest.mock('../main/vmixBandwidth', () => ({
     __esModule: true,
+    streamKeyFromUrl: jest.requireActual('../main/vmixBandwidth')
+        .streamKeyFromUrl,
     default: async () => bandwidth,
 }));
 jest.mock('../main/recordings/matchStore', () => ({
@@ -104,6 +126,7 @@ function fimVmix(over: Record<string, unknown> = {}) {
         inputs: {
             input: [
                 {
+                    key: 'fms-key',
                     number: 1,
                     title: 'FMS',
                     muted: 'False',
@@ -111,6 +134,7 @@ function fimVmix(over: Record<string, unknown> = {}) {
                     meterF1: 0,
                 },
                 {
+                    key: 'lc-key',
                     number: 2,
                     title: 'Live Captions',
                     muted: 'True',
@@ -144,8 +168,33 @@ beforeEach(() => {
     match = null;
     bandwidth = {
         supported: true,
-        streams: [{ index: 1, liveKbps: 6000, targetKbps: 6000, speed: 1 }],
+        streams: [
+            {
+                index: 1,
+                liveKbps: 6000,
+                targetKbps: 6000,
+                speed: 1,
+                audioBus: 'Bus A',
+                rtmpUrl: 'rtmp://a.rtmp.youtube.com/live2/abcd-efgh',
+            },
+        ],
     };
+    settings = {
+        audioBus: 'Bus A',
+        output: 2,
+        output2Overlays: [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16],
+        youtubeKey: 'abcd-efgh',
+    };
+    push = {
+        enabled: true,
+        url: 'http://upload.youtube.com/closedcaption?cid=abcd-efgh',
+        running: true,
+        lastPushAt: null,
+        queueDepth: 0,
+        lastError: null,
+    };
+    (VmixService.Instance.Function as jest.Mock).mockClear();
+    (setCaptionKey as jest.Mock).mockClear();
     mixer = fimMixer();
     captionsRunning = true;
     matches = [];
@@ -157,6 +206,8 @@ beforeEach(() => {
     [
         'stream-match',
         'stream-health',
+        'stream-bus',
+        'stream-output',
         'recording-match',
         'stream-audio',
         'stream-loudness',
@@ -165,6 +216,7 @@ beforeEach(() => {
         'match-buzzer',
         'mic-balance',
         'captions',
+        'captions-youtube',
     ].forEach((id) =>
         checks.results.set(id, {
             id,
@@ -173,6 +225,7 @@ beforeEach(() => {
             state: 'unknown',
             detail: '',
             ignoredUntil: null,
+            fix: null,
         })
     );
 });
@@ -312,12 +365,109 @@ describe('stream checks', () => {
         });
     });
 
-    it('captions overlay off while streaming', async () => {
-        vmix = fimVmix({ overlays: { overlay: [{ number: 1 }] } });
+    it('FMS muted: Unmute sends AudioOn for that input', async () => {
+        const v = fimVmix();
+        v.inputs.input[0].muted = 'True';
+        vmix = v;
+        await tick(1);
+        expect(get('match-sounds').fix).toBe('Unmute');
+        await checks.fix('match-sounds');
+        expect(VmixService.Instance.Function).toHaveBeenCalledWith('AudioOn', {
+            Input: 'fms-key',
+        });
+    });
+
+    it('an input titled "Audience" is the display input', async () => {
+        const v = fimVmix();
+        v.inputs.input[0].title = 'Audience';
+        v.inputs.input[0].muted = 'True';
+        vmix = v;
+        await tick(1);
+        expect(get('match-sounds').detail).toBe('Audience muted in vMix');
+    });
+
+    it('captions on another overlay: fix puts them on overlay 8', async () => {
+        vmix = fimVmix({
+            overlays: { overlay: [{ number: 3, '#text': 2 }, { number: 8 }] },
+        });
         await tick(1);
         expect(get('captions')).toMatchObject({
             state: 'warning',
-            detail: 'Live Captions not on an overlay',
+            detail: 'Live Captions not on overlay 8',
+            fix: 'Put on overlay 8',
+        });
+        await checks.fix('captions');
+        expect(VmixService.Instance.Function).toHaveBeenCalledWith(
+            'OverlayInput8In',
+            { Input: 'lc-key' }
+        );
+        vmix = fimVmix();
+        await tick(1);
+        expect(get('captions')).toMatchObject({ state: 'ok', fix: null });
+    });
+
+    it('a live stream on Master is critical', async () => {
+        bandwidth.streams[0].audioBus = 'Master';
+        await tick(1);
+        expect(get('stream-bus')).toMatchObject({
+            state: 'critical',
+            detail: 'Stream 1: Master',
+        });
+    });
+
+    it('stream settings on Master before going live are critical', async () => {
+        vmix = fimVmix({ streaming: 'False' });
+        settings.audioBus = 'Master';
+        await tick(1);
+        expect(get('stream-bus')).toMatchObject({
+            state: 'critical',
+            detail: 'Stream settings: Master',
+        });
+    });
+
+    it('live on Bus A, settings changed to Master: a warning', async () => {
+        settings.audioBus = 'Master';
+        await tick(1);
+        expect(get('stream-bus')).toMatchObject({
+            state: 'warning',
+            detail: 'Stream settings: Master',
+        });
+    });
+
+    it('stream on Output 1 is critical; overlay 8 on Output 2 a warning', async () => {
+        settings.output = 1;
+        await tick(1);
+        expect(get('stream-output')).toMatchObject({
+            state: 'critical',
+            detail: 'Output 1',
+        });
+        settings.output = 2;
+        settings.output2Overlays = [1, 8];
+        await tick(1);
+        expect(get('stream-output')).toMatchObject({
+            state: 'warning',
+            detail: 'Overlay 8 on Output 2',
+        });
+    });
+
+    it('caption key not the stream key: Set key uses the stream key', async () => {
+        push.url = 'http://upload.youtube.com/closedcaption?cid=old-key';
+        await tick(1);
+        expect(get('captions-youtube')).toMatchObject({
+            state: 'warning',
+            detail: 'Caption key not the stream key',
+            fix: 'Set key',
+        });
+        await checks.fix('captions-youtube');
+        expect(setCaptionKey).toHaveBeenCalledWith('abcd-efgh');
+    });
+
+    it('no caption key in Live Captions', async () => {
+        push.url = null;
+        await tick(1);
+        expect(get('captions-youtube')).toMatchObject({
+            state: 'warning',
+            detail: 'No YouTube caption key',
         });
     });
 
@@ -345,7 +495,7 @@ describe('stream checks', () => {
         });
     });
 
-    it('Ignore 6 h stops alerting, then lapses', async () => {
+    it('Ignore stops alerting for 6 h, then lapses', async () => {
         vmix = fimVmix({ streaming: 'False' });
         match = { label: 'Q14', level: 'Qualification' };
         const alerts: string[] = [];
@@ -359,6 +509,29 @@ describe('stream checks', () => {
         jest.setSystemTime(Date.now() + 6 * 3600 * 1000 + 1000);
         await tick(1);
         expect(get('stream-match').ignoredUntil).toBeNull();
+    });
+});
+
+describe('vMix autosave', () => {
+    const dest = (url: string, key: string) =>
+        `&lt;Stream&gt;${key}&lt;/Stream&gt;&lt;URL&gt;${url}&lt;/URL&gt;`;
+    const xml = `<XML><StreamingSettings SelectedIndex="1">
+<StreamingSetting><AudioChannel>0</AudioChannel><Source>0</Source></StreamingSetting>
+<StreamingSetting><Destination0>${dest(
+        'rtmp://a.rtmp.youtube.com/live2',
+        'yt-key'
+    )}</Destination0><AudioChannel>10</AudioChannel><AudioChannel1>0</AudioChannel1><Source>1</Source></StreamingSetting>
+</StreamingSettings>
+<OutputsExternal><Overlay7>1</Overlay7></OutputsExternal>
+<OutputsExternal2><Overlay0>1</Overlay0><Overlay7>0</Overlay7></OutputsExternal2></XML>`;
+
+    it('reads the selected stream profile and Output 2 overlays', () => {
+        expect(parseStreamSettings(xml)).toEqual({
+            audioBus: 'Bus A',
+            output: 2,
+            output2Overlays: [1],
+            youtubeKey: 'yt-key',
+        });
     });
 });
 

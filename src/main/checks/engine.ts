@@ -4,10 +4,18 @@ import VmixService from '../../services/VmixService';
 import AutoAV from '../addons/autoav';
 import LiveCaptions from '../addons/live-captions';
 import HWPing from '../addons/hw-ping';
-import getVmixBandwidth from '../vmixBandwidth';
+import getVmixBandwidth, { streamKeyFromUrl } from '../vmixBandwidth';
 import { listMatches } from '../recordings/matchStore';
 import { getStore } from '../store';
 import { levelToDb, queryXair, XairMeters } from './xair';
+import { readStreamSettings, VmixStreamSettings } from './vmixSettings';
+import {
+    CaptionPushStatus,
+    enableCaptionPush,
+    getCaptionPushStatus,
+    keyFromCaptionUrl,
+    setCaptionKey,
+} from './captionsYoutube';
 import { CheckResult, CheckState } from '../../models/Checks';
 
 // Stream and audio checks for a live event. Every check reads state the cart
@@ -16,11 +24,12 @@ import { CheckResult, CheckState } from '../../models/Checks';
 // audio or video live. Light by design:
 //  - vMix API: every 2 s during a match, every 5 s otherwise
 //  - stream logs: every 5 s (ffmpeg's speed=, not bitrate: the stream is VBR)
+//  - vMix autosave (last.vmix): re-read only when vMix rewrites it, ~1/min
 //  - X-Air settings: ~30 tiny UDP queries every 10 s (network, not USB)
 //  - X-Air meters: subscribed only while a qual/playoff match is in play
 //  - loudness: one audio-only ffmpeg pass per finished match (loudness.ts)
 // A check that is failing raises a banner and a Windows notification once;
-// "Ignore 6 h" silences that one check (kept in the store across restarts).
+// "Ignore" silences that one check for 6 h (kept in the store across restarts).
 
 export type { CheckResult, CheckState } from '../../models/Checks';
 
@@ -40,9 +49,19 @@ const BALANCE_DB = 15;
 
 type Def = Pick<CheckResult, 'id' | 'group' | 'label'>;
 
+type Fix = { label: string; run: () => Promise<unknown> };
+
+const vmixFn = (fn: string, params: Record<string, string> = {}): Fix['run'] =>
+    () => VmixService.Instance.Function(fn, params);
+
+// The overlay channel FIM puts Live Captions on.
+const CAPTIONS_OVERLAY = 8;
+
 const DEFS: Def[] = [
     { id: 'stream-match', group: 'Stream', label: 'Stream during match' },
     { id: 'stream-health', group: 'Stream', label: 'Stream health' },
+    { id: 'stream-bus', group: 'Stream', label: 'Stream audio source' },
+    { id: 'stream-output', group: 'Stream', label: 'Stream output' },
     {
         id: 'recording-match',
         group: 'Recording',
@@ -55,6 +74,7 @@ const DEFS: Def[] = [
     { id: 'match-buzzer', group: 'Audio', label: 'Match start sound' },
     { id: 'mic-balance', group: 'Audio', label: 'Mics vs match sounds' },
     { id: 'captions', group: 'Captions', label: 'Captions overlay' },
+    { id: 'captions-youtube', group: 'Captions', label: 'YouTube captions' },
 ];
 
 const truthy = (v: unknown) =>
@@ -196,6 +216,14 @@ export default class Checks extends EventEmitter {
 
     private since = new Map<string, number>();
 
+    private fixes = new Map<string, Fix>();
+
+    private settings: VmixStreamSettings | null = null;
+
+    private captionPush: CaptionPushStatus | null = null;
+
+    private captionPushAt = 0;
+
     private notified = new Set<string>();
 
     private vmix: any = null;
@@ -240,6 +268,7 @@ export default class Checks extends EventEmitter {
                     ? 'No match yet'
                     : '',
                 ignoredUntil: null,
+                fix: null,
             })
         );
         const loop = async () => {
@@ -296,9 +325,21 @@ export default class Checks extends EventEmitter {
         return Date.now() - t >= ms;
     }
 
-    private set(id: string, state: CheckState, detail: string) {
+    // `fix` is a one-click repair for this exact problem; any later set()
+    // without one clears it.
+    private set(id: string, state: CheckState, detail: string, fix?: Fix) {
         const r = this.results.get(id);
-        if (r) this.results.set(id, { ...r, state, detail });
+        if (!r) return;
+        if (fix) this.fixes.set(id, fix);
+        else this.fixes.delete(id);
+        this.results.set(id, { ...r, state, detail, fix: fix?.label ?? null });
+    }
+
+    public async fix(id: string): Promise<void> {
+        const f = this.fixes.get(id);
+        if (!f) throw new Error('Nothing to fix');
+        log.info(`checks: fix ${id}: ${f.label}`);
+        await f.run();
     }
 
     private async tick() {
@@ -325,10 +366,21 @@ export default class Checks extends EventEmitter {
             this.lastMatch = label;
         }
 
+        // vMix's autosave; only re-read when vMix has rewritten it.
+        this.settings = readStreamSettings();
+        if (now - this.captionPushAt >= 10000) {
+            this.captionPushAt = now;
+            this.captionPush = LiveCaptions.Instance.isRunning()
+                ? await getCaptionPushStatus()
+                : null;
+        }
+
         const v = this.vmix;
         const streaming = !!v && truthy(v.streaming);
         const recording = !!v && truthy(v.recording);
         this.checkStream(v, match, streaming);
+        this.checkStreamBus(v, streaming);
+        this.checkStreamOutput();
         this.checkRecording(v, match, recording);
         this.checkStreamAudio(v, match, streaming);
         this.checkLoudness();
@@ -336,6 +388,7 @@ export default class Checks extends EventEmitter {
         this.checkMatchSounds(v);
         this.checkBuzzer(v);
         this.checkCaptions(v);
+        this.checkCaptionsYoutube(streaming);
         this.publish();
     }
 
@@ -355,7 +408,8 @@ export default class Checks extends EventEmitter {
             this.set(
                 'stream-match',
                 'critical',
-                `${match!.label} running, not streaming`
+                `${match!.label} running, not streaming`,
+                { label: 'Start stream', run: vmixFn('StartStreaming') }
             );
         } else if (!match) {
             // Between matches there is nothing to check.
@@ -376,6 +430,7 @@ export default class Checks extends EventEmitter {
             this.set('stream-health', 'unknown', 'No stream data yet');
             return;
         }
+
         // getVmixBandwidth lists only streams whose log grew since its last
         // read, so a stalled stream drops out of the list.
         const live = bw.streams;
@@ -405,6 +460,66 @@ export default class Checks extends EventEmitter {
                     kbps
                 )} Mbps`
             );
+        }
+    }
+
+    // Two sources. While live, the audio device each stream's ffmpeg reads,
+    // from its log's command line: the stream as it runs. Always, the stream
+    // settings in vMix's autosave, so a wrong bus shows before going live.
+    // Anything other than Bus A puts the venue mix on the stream.
+    private checkStreamBus(v: any, streaming: boolean) {
+        if (!v) {
+            this.set('stream-bus', 'unknown', 'vMix not answering');
+            return;
+        }
+        const setting = this.settings?.audioBus ?? null;
+        const live = streaming
+            ? (this.bandwidth?.streams ?? []).filter((s) => s.audioBus)
+            : [];
+        const wrong = live.filter((s) => s.audioBus !== 'Bus A');
+        if (wrong.length) {
+            this.set(
+                'stream-bus',
+                'critical',
+                wrong.map((s) => `Stream ${s.index}: ${s.audioBus}`).join(', ')
+            );
+        } else if (setting && setting !== 'Bus A') {
+            // Live on Bus A but changed in settings: the next start is wrong.
+            this.set(
+                'stream-bus',
+                live.length ? 'warning' : 'critical',
+                `Stream settings: ${setting}`
+            );
+        } else if (live.length) {
+            this.set(
+                'stream-bus',
+                'ok',
+                live.map((s) => `Stream ${s.index}: Bus A`).join(', ')
+            );
+        } else if (setting) {
+            this.set('stream-bus', 'ok', 'Stream settings: Bus A');
+        } else if (!streaming) {
+            this.set('stream-bus', 'unknown', 'No vMix settings file');
+        }
+        // Live with no stream data (stalled or first read): keep the last.
+    }
+
+    // FIM streams Output 2, and Output 2 leaves out overlay 8 (Live
+    // Captions, which go to YouTube as real captions, not burned in).
+    private checkStreamOutput() {
+        const st = this.settings;
+        if (!st || st.output === null) {
+            this.set('stream-output', 'unknown', 'No vMix settings file');
+        } else if (st.output !== 2) {
+            this.set('stream-output', 'critical', `Output ${st.output}`);
+        } else if (st.output2Overlays?.includes(CAPTIONS_OVERLAY)) {
+            this.set(
+                'stream-output',
+                'warning',
+                `Overlay ${CAPTIONS_OVERLAY} on Output 2`
+            );
+        } else {
+            this.set('stream-output', 'ok', 'Output 2');
         }
     }
 
@@ -453,7 +568,10 @@ export default class Checks extends EventEmitter {
         const db = Math.max(meterDb(bus.meterF1), meterDb(bus.meterF2));
         const live = streaming && !!match;
         if (live && truthy(bus.muted)) {
-            this.set('stream-audio', 'critical', 'Bus A muted');
+            this.set('stream-audio', 'critical', 'Bus A muted', {
+                label: 'Unmute',
+                run: vmixFn('BusXAudioOn', { Value: 'A' }),
+            });
         } else if (this.busMissedStart) {
             this.set('stream-audio', 'critical', this.busMissedStart);
         } else if (this.held('stream-clip', live && db > -0.5, 6000)) {
@@ -528,7 +646,8 @@ export default class Checks extends EventEmitter {
     // stream, so a missing main mix is critical and a missing stream send a
     // warning.
     private checkMatchSounds(v: any) {
-        const problems: { state: CheckState; text: string }[] = [];
+        const problems: { state: CheckState; text: string; fix?: Fix }[] =
+            [];
         const input = this.displayInput(v);
         if (v && !input) {
             problems.push({
@@ -540,6 +659,10 @@ export default class Checks extends EventEmitter {
                 problems.push({
                     state: 'critical',
                     text: `${input.title} muted in vMix`,
+                    fix: {
+                        label: 'Unmute',
+                        run: vmixFn('AudioOn', { Input: String(input.key) }),
+                    },
                 });
             else if (
                 !String(input.audiobusses ?? '')
@@ -549,6 +672,13 @@ export default class Checks extends EventEmitter {
                 problems.push({
                     state: 'critical',
                     text: `${input.title} not on Master in vMix`,
+                    fix: {
+                        label: 'Add to Master',
+                        run: vmixFn('AudioBusOn', {
+                            Input: String(input.key),
+                            Value: 'M',
+                        }),
+                    },
                 });
         }
         const m = this.mixer;
@@ -592,7 +722,7 @@ export default class Checks extends EventEmitter {
         }
         const worst =
             problems.find((p) => p.state === 'critical') ?? problems[0];
-        this.set('match-sounds', worst.state, worst.text);
+        this.set('match-sounds', worst.state, worst.text, worst.fix);
     }
 
     // The FMS / audience display browser input whose sounds are the match
@@ -602,7 +732,7 @@ export default class Checks extends EventEmitter {
         const inputs = list<any>(v?.inputs?.input);
         return (
             inputs.find((i) => String(i.title) === 'FMS') ??
-            inputs.find((i) => /audience display|^fms/i.test(String(i.title)))
+            inputs.find((i) => /^fms\b|audience/i.test(String(i.title)))
         );
     }
 
@@ -648,23 +778,99 @@ export default class Checks extends EventEmitter {
         const input = list<any>(v.inputs?.input).find((i) =>
             /live captions/i.test(String(i.title))
         );
-        const overlays = list<any>(v.overlays?.overlay);
+        const overlay = list<any>(v.overlays?.overlay).find(
+            (o) => String(o?.number) === String(CAPTIONS_OVERLAY)
+        );
         const onOverlay =
             !!input &&
-            overlays.some(
-                (o) =>
-                    String(typeof o === 'object' ? o['#text'] : o) ===
-                    String(input.number)
-            );
+            String(typeof overlay === 'object' ? overlay['#text'] : '') ===
+                String(input.number);
         let problem = '';
-        if (!LiveCaptions.Instance.isRunning())
+        let fix: Fix | undefined;
+        if (!LiveCaptions.Instance.isRunning()) {
             problem = 'Live Captions stopped';
-        else if (!input) problem = 'No Live Captions input in vMix';
-        else if (!onOverlay) problem = 'Live Captions not on an overlay';
+            fix = {
+                label: 'Start',
+                run: async () => {
+                    if (!(await LiveCaptions.Instance.start()))
+                        throw new Error('Live Captions did not start');
+                },
+            };
+        } else if (!input) {
+            problem = 'No Live Captions input in vMix';
+            fix = {
+                label: 'Add input',
+                run: () => VmixService.Instance.AddLiveCaptionsInput(),
+            };
+        } else if (!onOverlay) {
+            problem = `Live Captions not on overlay ${CAPTIONS_OVERLAY}`;
+            fix = {
+                label: `Put on overlay ${CAPTIONS_OVERLAY}`,
+                run: vmixFn(`OverlayInput${CAPTIONS_OVERLAY}In`, {
+                    Input: String(input.key),
+                }),
+            };
+        }
         // Captions are set up for the whole event, so a problem counts
         // whether or not a match is on.
-        if (problem) this.set('captions', 'warning', problem);
-        else this.set('captions', 'ok', 'On overlay');
+        if (problem) this.set('captions', 'warning', problem, fix);
+        else this.set('captions', 'ok', `On overlay ${CAPTIONS_OVERLAY}`);
+    }
+
+    // live-captions sends captions to YouTube by the stream key. The key it
+    // holds must be the one vMix streams with: the live stream's, or the
+    // settings' before going live.
+    private checkCaptionsYoutube(streaming: boolean) {
+        if (!LiveCaptions.Instance.isRunning()) {
+            this.set('captions-youtube', 'unknown', 'Live Captions stopped');
+            return;
+        }
+        const p = this.captionPush;
+        if (!p) {
+            this.set(
+                'captions-youtube',
+                'unknown',
+                'Live Captions not answering'
+            );
+            return;
+        }
+        const live = (this.bandwidth?.streams ?? []).find((s) =>
+            /youtube/i.test(s.rtmpUrl)
+        );
+        const streamKey =
+            (streaming && live ? streamKeyFromUrl(live.rtmpUrl) : null) ||
+            this.settings?.youtubeKey ||
+            null;
+        const key = keyFromCaptionUrl(p.url);
+        const setKey: Fix | undefined = streamKey
+            ? { label: 'Set key', run: () => setCaptionKey(streamKey) }
+            : undefined;
+        if (!key) {
+            this.set(
+                'captions-youtube',
+                'warning',
+                'No YouTube caption key',
+                setKey
+            );
+        } else if (streamKey && key !== streamKey) {
+            this.set(
+                'captions-youtube',
+                'warning',
+                'Caption key not the stream key',
+                setKey
+            );
+        } else if (!p.enabled) {
+            this.set('captions-youtube', 'warning', 'YouTube captions off', {
+                label: 'Turn on',
+                run: enableCaptionPush,
+            });
+        } else if (
+            this.held('captions-push-error', streaming && !!p.lastError, 30000)
+        ) {
+            this.set('captions-youtube', 'warning', p.lastError!);
+        } else {
+            this.set('captions-youtube', 'ok', 'Key set');
+        }
     }
 
     // #endregion

@@ -176,6 +176,19 @@ export default class VmixService {
         }));
     }
 
+    // Run one vMix API function, e.g. ('AudioOn', { Input: key }). Throws
+    // when vMix rejects it.
+    async Function(fn: string, params: Record<string, string> = {}) {
+        const q = Object.entries(params)
+            .map(([k, v]) => `&${k}=${encodeURIComponent(v)}`)
+            .join('');
+        const rsp = await fetch(`${this.settings.baseUrl}?Function=${fn}${q}`, {
+            headers: this.createHeaders(),
+            signal: AbortSignal.timeout(5_000),
+        });
+        if (!rsp.ok) throw new Error(`vMix ${fn}: ${rsp.status}`);
+    }
+
     private vmixCall(inputKey: string, fn: string, value: string) {
         return fetch(
             `${this.settings.baseUrl}?Function=${fn}&Input=${encodeURIComponent(

@@ -1,6 +1,7 @@
 import { Button, Empty, Spin, Tag, Typography } from 'antd';
 import { CheckResult, CheckState } from '../../models/Checks';
 import useChecks, { ignoreCheck, unignoreCheck } from '../hooks/checks';
+import CheckFixButton from './CheckFixButton';
 import './ChecksList.css';
 
 const { Text } = Typography;
@@ -50,9 +51,15 @@ function Row({ check }: { check: CheckResult }) {
                     </Button>
                 )}
                 {!check.ignoredUntil && failing && (
-                    <Button size="small" onClick={() => ignoreCheck(check.id)}>
-                        Ignore 6 h
-                    </Button>
+                    <>
+                        <CheckFixButton check={check} />
+                        <Button
+                            size="small"
+                            onClick={() => ignoreCheck(check.id)}
+                        >
+                            Ignore
+                        </Button>
+                    </>
                 )}
             </span>
         </div>

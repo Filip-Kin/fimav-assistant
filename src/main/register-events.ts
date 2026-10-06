@@ -995,6 +995,19 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     ipcMain.on('checks:ignore', (_event, [id]) => {
         if (typeof id === 'string') Checks.Instance.ignore(id);
     });
+    ipcMain.on('checks:fix', async (event, [id]) => {
+        try {
+            await Checks.Instance.fix(id);
+            event.reply('checks:fixed', { id, ok: true });
+        } catch (e) {
+            log.warn(`checks: fix ${id} failed`, e);
+            event.reply('checks:fixed', {
+                id,
+                ok: false,
+                message: (e as Error).message,
+            });
+        }
+    });
     ipcMain.on('checks:unignore', (_event, [id]) => {
         if (typeof id === 'string') Checks.Instance.unignore(id);
     });

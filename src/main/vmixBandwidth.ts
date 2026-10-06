@@ -14,6 +14,9 @@ export interface VmixStream {
     // time. Under 1 means it cannot send as fast as vMix produces (network
     // trouble); with variable bitrate this, not the bitrate, shows a stall.
     speed: number | null;
+    // vMix audio bus the stream takes its sound from, from the ffmpeg input
+    // device: "vMix Audio - Bus A" is "Bus A", plain "vMix Audio" is Master.
+    audioBus: string | null;
     // Friendly destination label (e.g. "YouTube (primary)")
     destination: string;
     // Full rtmp URL ffmpeg is streaming to (includes the stream key)
@@ -63,6 +66,12 @@ function labelDestination(commandLine: string): string {
 function rtmpUrl(commandLine: string): string {
     const m = /rtmp:\/\/[^\s"]+/i.exec(commandLine);
     return m?.[0] ?? '';
+}
+
+export function parseAudioBus(commandLine: string): string | null {
+    const m = /audio=vMix Audio(?: - ([^":]+))?/i.exec(commandLine);
+    if (!m) return null;
+    return m[1]?.trim() || 'Master';
 }
 
 function parseKbps(commandLine: string, flag: string): number | null {
@@ -151,7 +160,7 @@ export default function getVmixBandwidth(): Promise<VmixBandwidth> {
             // so a stream shows up one tick later - cheaper than sleeping.
             if (prev === undefined || parts.size <= prev) return;
 
-            const cmd = (/^.*ffmpeg6\.exe.*$/im.exec(parts.head) || [''])[0];
+            const cmd = (/^.*ffmpeg\d*\.exe.*$/im.exec(parts.head) || [''])[0];
             // Bitrate = the last bitrate= value in the log, verbatim (m -> kbps).
             const ms = [
                 ...parts.tail.matchAll(/bitrate=\s*([\d.]+)(k|m)bits\/s/gi),
@@ -170,6 +179,7 @@ export default function getVmixBandwidth(): Promise<VmixBandwidth> {
             streams.push({
                 index,
                 speed,
+                audioBus: parseAudioBus(cmd),
                 targetKbps: parseKbps(cmd, '-b:v'),
                 maxrateKbps: parseKbps(cmd, '-maxrate:v'),
                 liveKbps: kbps != null ? Math.max(0, kbps) : null,
