@@ -176,6 +176,15 @@ export default class VmixService {
         }));
     }
 
+    // Host vMix runs on, from the API address (for its TCP API on 8099).
+    Host(): string {
+        try {
+            return new URL(this.settings.baseUrl).hostname;
+        } catch {
+            return '127.0.0.1';
+        }
+    }
+
     // Run one vMix API function, e.g. ('AudioOn', { Input: key }). Throws
     // when vMix rejects it.
     async Function(fn: string, params: Record<string, string> = {}) {

@@ -69,8 +69,11 @@ function localIpv4() {
 
 export default function startStatusApi(sources: StatusApiSources) {
     const routes: Record<string, () => Promise<unknown> | unknown> = {
-        // Stream and audio checks (the Checks tab).
+        // Checks (menu bar): every check's state, detail, fix, docs link.
         checks: () => Checks.Instance.list(),
+        // What the checks read: vMix stream/recorder settings, Windows audio,
+        // X-Air routing, Live Captions YouTube push. No stream keys.
+        sources: () => Checks.Instance.sources(),
         network: () => ({
             ...HWPing.Instance.currentStatus,
             interfaces: localIpv4(),
@@ -111,6 +114,7 @@ export default function startStatusApi(sources: StatusApiSources) {
         },
         captions: () => ({
             running: LiveCaptions.Instance.isRunning(),
+            phase: LiveCaptions.Instance.getPhase(),
             version: LiveCaptions.Instance.getVersion(),
         }),
         // FTC Live scorekeeper connection and the FTC recorder.

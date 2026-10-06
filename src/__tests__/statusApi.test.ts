@@ -63,7 +63,7 @@ jest.mock('../main/bitfocus', () => ({
 }));
 jest.mock('../main/checks/engine', () => ({
     __esModule: true,
-    default: { Instance: { list: () => [] } },
+    default: { Instance: { list: () => [], sources: () => ({}) } },
 }));
 jest.mock('../main/store', () => ({
     getStore: () => ({ get: (_k: string, d: unknown) => d }),
@@ -99,7 +99,11 @@ global.fetch = jest.fn(async (url: any) => {
     return realFetch(url);
 }) as any;
 jest.mock('../main/addons/live-captions', () => ({
-    Instance: { isRunning: () => true, getVersion: () => '1.2.3' },
+    Instance: {
+        isRunning: () => true,
+        getPhase: () => 'running',
+        getVersion: () => '1.2.3',
+    },
 }));
 jest.mock('../main/recordings/matchStore', () => ({ listMatches: () => [] }));
 jest.mock('../main/vmixBandwidth', () => ({
@@ -188,6 +192,7 @@ describe('status API', () => {
                 'display',
                 'ftc',
                 'network',
+                'sources',
                 'stream',
                 'upload',
                 'vmix',

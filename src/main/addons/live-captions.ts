@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events';
 import path from 'path';
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import log from 'electron-log';
@@ -21,7 +22,21 @@ export default class LiveCaptions {
     // Where start() is: checking for / downloading an update, launching and
     // waiting for :3000, serving, or stopped. Lets the checks tell "not up
     // yet" from "down".
-    private phase: 'stopped' | 'updating' | 'starting' | 'running' = 'stopped';
+    private phaseValue: 'stopped' | 'updating' | 'starting' | 'running' =
+        'stopped';
+
+    // Told on every phase change (the checks re-run on it).
+    public readonly events = new EventEmitter();
+
+    private set phase(p: LiveCaptions['phaseValue']) {
+        if (p === this.phaseValue) return;
+        this.phaseValue = p;
+        this.events.emit('phase', p);
+    }
+
+    private get phase() {
+        return this.phaseValue;
+    }
 
     // Version of the live-captions build currently launched, surfaced in the tab
     private currentVersion = '0.0.0';

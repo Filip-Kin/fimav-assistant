@@ -1,3 +1,4 @@
+/* eslint-disable max-classes-per-file */
 import Checks from '../main/checks/engine';
 import { decodeReply, levelToDb } from '../main/checks/xair';
 import { parseStreamSettings } from '../main/checks/vmixSettings';
@@ -50,6 +51,16 @@ jest.mock('../main/events/HWCheck', () => ({
     setDefaultAudioDevice: jest.fn(async () => true),
     setVolumePercent: jest.fn(async () => true),
     unmuteDevice: jest.fn(async () => true),
+}));
+jest.mock('../main/checks/xairWatch', () => ({
+    __esModule: true,
+    default: class {
+        // eslint-disable-next-line class-methods-use-this
+        start() {}
+
+        // eslint-disable-next-line class-methods-use-this
+        stop() {}
+    },
 }));
 jest.mock('../main/checks/vmixSettings', () => ({
     ...jest.requireActual('../main/checks/vmixSettings'),
@@ -679,6 +690,22 @@ describe('stream checks', () => {
         });
         await checks.fix('captions-youtube');
         expect(setCaptionKey).toHaveBeenCalledWith('abcd-efgh');
+    });
+
+    it('sources for the status API carry no stream key', async () => {
+        await tick(1);
+        const src = checks.sources();
+        expect(JSON.stringify(src)).not.toContain('abcd-efgh');
+        expect(src.vmixSettings).toMatchObject({
+            streamAudioBus: 'Bus A',
+            streamOutput: 2,
+            recorder1Output: 2,
+            youtubeKeySet: true,
+        });
+        expect(src.liveCaptions.youtube).toMatchObject({
+            keySet: true,
+            keyMatchesStream: true,
+        });
     });
 
     it('no caption key in Live Captions', async () => {

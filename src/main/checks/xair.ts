@@ -24,7 +24,7 @@ function pad4(b: Buffer): Buffer {
 }
 
 // An OSC message with an address and no arguments.
-function encodeQuery(address: string): Buffer {
+export function encodeQuery(address: string): Buffer {
     return Buffer.concat([
         pad4(Buffer.from(address, 'ascii')),
         pad4(Buffer.from(',', 'ascii')),
@@ -145,6 +145,9 @@ export class XairMeters {
 
     public lastAt = 0;
 
+    // Called on every meter packet (about every 50 ms while subscribed).
+    public onData: (() => void) | null = null;
+
     public start(host: string) {
         if (this.socket && this.host === host) return;
         this.stop();
@@ -190,6 +193,7 @@ export class XairMeters {
             }
             this.latest = values;
             this.lastAt = Date.now();
+            this.onData?.();
         } catch {
             // a malformed packet is skipped
         }
