@@ -271,10 +271,8 @@ export default async function HWCheck(): Promise<HWCheckResponse> {
         }
     );
 
-    // Ensure that "OUT 1-2" of "BEHRINGER X-AIR" is the default, is unmuted, and the volume is over 75%
-    const xAirIndex = resp.audio_devices_found.findIndex(
-        (a) => a.name === 'OUT 1-2' && a.sub_name.includes('BEHRINGER X-AIR')
-    );
+    // Ensure that "OUT 1-2" of "BEHRINGER X-AIR" is the default, is unmuted, and the volume is 100%
+    const xAirIndex = resp.audio_devices_found.findIndex(isXairOut);
     const xAir = resp.audio_devices_found[xAirIndex];
 
     if (!xAir) {
@@ -324,15 +322,15 @@ export default async function HWCheck(): Promise<HWCheckResponse> {
             await setVolumePercent(xAir.name, 100)
                 .then(() => {
                     resp.logs.push(
-                        `Set BEHRINGER X-AIR 'OUT 1-2' volume to 75%`
+                        `Set BEHRINGER X-AIR 'OUT 1-2' volume to 100%`
                     );
                     resp.audio_devices_found[xAirIndex].volume_percent =
-                        '75.0%';
+                        '100.0%';
                     return undefined;
                 })
                 .catch((err) => {
                     resp.errors.push(
-                        `Could not set BEHRINGER X-AIR 'OUT 1-2' volume to 75%.  Please set it from the task bar.`
+                        `Could not set BEHRINGER X-AIR 'OUT 1-2' volume to 100%.  Please set it from the task bar.`
                     );
                     log.error('Could not set volume: ', err);
                     resp.audio_ready = false;
@@ -502,6 +500,11 @@ function getIntefaceStaticInfo(
             return {};
         });
 }
+
+// The X-Air's "OUT 1-2" playback device: what Windows plays the match
+// sounds (the audience display browser) through.
+export const isXairOut = (a: { name: string; sub_name: string }) =>
+    a.name === 'OUT 1-2' && a.sub_name.includes('BEHRINGER X-AIR');
 
 /*
  * Fetch and parse audio devices

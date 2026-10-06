@@ -3,6 +3,7 @@ import { decodeReply, levelToDb } from '../main/checks/xair';
 import { parseStreamSettings } from '../main/checks/vmixSettings';
 import { setCaptionKey } from '../main/checks/captionsYoutube';
 import VmixService from '../services/VmixService';
+import { setDefaultAudioDevice } from '../main/events/HWCheck';
 import { CheckResult } from '../models/Checks';
 
 // The world the checks read, set per test.
@@ -12,6 +13,16 @@ let bandwidth: any = { supported: true, streams: [] };
 let mixer = new Map<string, string | number>();
 let captionsRunning = true;
 let captionsPhase = 'running';
+let audioDevices: any[] = [];
+const xairOut = (over: Record<string, unknown> = {}) => ({
+    name: 'OUT 1-2',
+    sub_name: 'BEHRINGER X-AIR',
+    default: 'Render',
+    muted: false,
+    volume_percent: '100.0%',
+    control_id: 'BEHRINGER X-AIR\\Device\\OUT 1-2\\Render',
+    ...over,
+});
 let matches: any[] = [];
 const store: Record<string, unknown> = {};
 let settings: any = null;
@@ -31,6 +42,14 @@ jest.mock('../services/VmixService', () => ({
             Function: jest.fn(async () => undefined),
         },
     },
+}));
+jest.mock('../main/events/HWCheck', () => ({
+    fetchAndParseAudioDevices: async () => audioDevices,
+    isXairOut: (a: any) =>
+        a.name === 'OUT 1-2' && a.sub_name.includes('BEHRINGER X-AIR'),
+    setDefaultAudioDevice: jest.fn(async () => true),
+    setVolumePercent: jest.fn(async () => true),
+    unmuteDevice: jest.fn(async () => true),
 }));
 jest.mock('../main/checks/vmixSettings', () => ({
     ...jest.requireActual('../main/checks/vmixSettings'),
@@ -229,6 +248,7 @@ beforeEach(() => {
     mixer = fimMixer();
     captionsRunning = true;
     captionsPhase = 'running';
+    audioDevices = [xairOut()];
     matches = [];
     Object.keys(store).forEach((k) => delete store[k]);
     checks = new (Checks as any)();
@@ -252,6 +272,7 @@ beforeEach(() => {
         'stream-loudness',
         'dj-stream',
         'match-sounds',
+        'windows-audio',
         'match-buzzer',
         'mic-balance',
         'captions',
@@ -567,6 +588,41 @@ describe('stream checks', () => {
             detail: 'Live Captions stopped',
             fix: 'Start',
         });
+    });
+
+    it('Windows audio: X-Air OUT 1-2 default, unmuted, 100%', async () => {
+        const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        try {
+            audioDevices = [xairOut({ default: '' })];
+            await tick(1);
+            expect(get('windows-audio')).toMatchObject({
+                state: 'critical',
+                detail: 'X-Air OUT 1-2 not default',
+                fix: 'Set as default',
+            });
+            audioDevices = [xairOut({ volume_percent: '62.0%' })];
+            await checks.fix('windows-audio');
+            expect(setDefaultAudioDevice).toHaveBeenCalledWith(
+                'BEHRINGER X-AIR\\Device\\OUT 1-2\\Render',
+                'all'
+            );
+            // Re-read straight after the fix.
+            expect(get('windows-audio')).toMatchObject({
+                state: 'warning',
+                detail: 'X-Air OUT 1-2 at 62%, not 100%',
+                fix: 'Set to 100%',
+            });
+            audioDevices = [];
+            jest.setSystemTime(Date.now() + 61000);
+            await tick(1);
+            expect(get('windows-audio')).toMatchObject({
+                state: 'warning',
+                detail: 'No X-Air OUT 1-2 device',
+            });
+        } finally {
+            Object.defineProperty(process, 'platform', platform);
+        }
     });
 
     it('recorder 1 on Master is a warning', async () => {

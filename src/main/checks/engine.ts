@@ -10,6 +10,14 @@ import { getStore } from '../store';
 import { levelToDb, queryXair, XairMeters } from './xair';
 import { readStreamSettings, VmixStreamSettings } from './vmixSettings';
 import {
+    fetchAndParseAudioDevices,
+    isXairOut,
+    setDefaultAudioDevice,
+    setVolumePercent,
+    unmuteDevice,
+} from '../events/HWCheck';
+import { ParsedSoundOutput } from '../../models/SoundVolumeViewOutput';
+import {
     CaptionPushStatus,
     enableCaptionPush,
     getCaptionPushStatus,
@@ -147,6 +155,15 @@ const DEFS: Def[] = [
         id: 'match-sounds',
         group: 'Audio',
         label: 'Match sounds',
+        doc: `${DOCS}/troubleshooting-guides/no-game-sounds/`,
+    },
+    {
+        id: 'windows-audio',
+        group: 'Audio',
+        label: 'Windows audio',
+        hint:
+            'Windows plays the match sounds through its default device; ' +
+            "the X-Air's OUT 1-2 must be default, unmuted and at 100%.",
         doc: `${DOCS}/troubleshooting-guides/no-game-sounds/`,
     },
     {
@@ -332,6 +349,12 @@ export default class Checks extends EventEmitter {
 
     private captionPushAt = 0;
 
+    // Windows' X-Air playback device, from SoundVolumeView; undefined until
+    // the first read, null when it is not there.
+    private winAudio: ParsedSoundOutput | null | undefined;
+
+    private winAudioAt = 0;
+
     private notified = new Set<string>();
 
     private vmix: any = null;
@@ -453,6 +476,7 @@ export default class Checks extends EventEmitter {
         // Check again now, not on the next loop, so the result (and the
         // button) updates as soon as the fix is in.
         this.captionPushAt = 0;
+        this.winAudioAt = 0;
         this.mixer = null;
         await this.runTick();
     }
@@ -491,6 +515,13 @@ export default class Checks extends EventEmitter {
             this.lastMatch = label;
         }
 
+        // One SoundVolumeView run a minute (it lists every audio device).
+        if (process.platform === 'win32' && now - this.winAudioAt >= 60000) {
+            this.winAudioAt = now;
+            this.winAudio = await fetchAndParseAudioDevices(log)
+                .then((ds) => ds.find(isXairOut) ?? null)
+                .catch(() => undefined);
+        }
         // vMix's autosave; only re-read when vMix has rewritten it.
         // With vMix closed the file holds the last session's settings, which
         // may not be what vMix opens next: only read it while vMix answers.
@@ -515,6 +546,7 @@ export default class Checks extends EventEmitter {
         this.checkLoudness();
         this.checkMixer();
         this.checkMatchSounds(v);
+        this.checkWindowsAudio();
         this.checkBuzzer(v);
         this.checkCaptions(v);
         this.checkCaptionsYoutube(streaming);
@@ -920,6 +952,52 @@ export default class Checks extends EventEmitter {
         const worst =
             problems.find((p) => p.state === 'critical') ?? problems[0];
         this.set('match-sounds', worst.state, worst.text, worst.fix);
+    }
+
+    // Setup's audio check (events/HWCheck.ts), kept running: the X-Air's
+    // OUT 1-2 is Windows' default playback device, unmuted, at 100%.
+    private checkWindowsAudio() {
+        const d = this.winAudio;
+        if (process.platform !== 'win32') {
+            this.set('windows-audio', 'unknown', 'Not Windows');
+            return;
+        }
+        if (d === undefined) {
+            this.set('windows-audio', 'unknown', 'Not read yet');
+            return;
+        }
+        if (d === null) {
+            // Off a cart (no cart number) there is no X-Air to expect.
+            if (HWPing.Instance.mixerAddress())
+                this.set('windows-audio', 'warning', 'No X-Air OUT 1-2 device');
+            else this.set('windows-audio', 'unknown', 'No X-Air (not a cart)');
+            return;
+        }
+        const id = d.control_id || d.name;
+        const volume = parseInt(String(d.volume_percent).replace('%', ''), 10);
+        if (d.default !== 'Render') {
+            this.set('windows-audio', 'critical', 'X-Air OUT 1-2 not default', {
+                label: 'Set as default',
+                run: () => setDefaultAudioDevice(id, 'all'),
+            });
+        } else if (d.muted) {
+            this.set('windows-audio', 'critical', 'X-Air OUT 1-2 muted', {
+                label: 'Unmute',
+                run: () => unmuteDevice(id),
+            });
+        } else if (Number.isFinite(volume) && volume < 100) {
+            this.set(
+                'windows-audio',
+                'warning',
+                `X-Air OUT 1-2 at ${volume}%, not 100%`,
+                {
+                    label: 'Set to 100%',
+                    run: () => setVolumePercent(id, 100),
+                }
+            );
+        } else {
+            this.set('windows-audio', 'ok', 'X-Air OUT 1-2, default, 100%');
+        }
     }
 
     // The FMS / audience display browser input whose sounds are the match
