@@ -4,6 +4,7 @@ import VmixService from '../../services/VmixService';
 import AutoAV from '../addons/autoav';
 import LiveCaptions from '../addons/live-captions';
 import AudienceDisplayAddon from '../addons/audience-display';
+import YoutubeUploaderAddon from '../addons/upload-helper';
 import HWPing from '../addons/hw-ping';
 import getVmixBandwidth, { streamKeyFromUrl } from '../vmixBandwidth';
 import { listMatches } from '../recordings/matchStore';
@@ -164,6 +165,11 @@ const DEFS: Def[] = [
             'Bus A keeps the copyrighted DJ music out of the match ' +
             'recordings, which go to YouTube.',
         doc: `${DOCS}/setting-up-the-fim-av-system/#verify-stream`,
+    },
+    {
+        id: 'uploader',
+        group: 'Recording',
+        label: 'YouTube uploads',
     },
     {
         id: 'stream-audio',
@@ -399,6 +405,9 @@ export default class Checks extends EventEmitter {
 
     private captionPushAt = 0;
 
+    // The uploader's last quota / rate-limit error, from its event stream.
+    private uploadQuota: string | null = null;
+
     // The custom audience display's standing error, from its event stream.
     private adError: string | null = null;
 
@@ -508,6 +517,15 @@ export default class Checks extends EventEmitter {
         LiveCaptions.Instance.phase.on('phase', changed());
         LiveCaptions.Instance.events.on('message', changed());
         LiveCaptions.Instance.events.on('connection', changed());
+        YoutubeUploaderAddon.Instance.phase.on('phase', changed());
+        YoutubeUploaderAddon.Instance.events.on('message', (m) => {
+            // A quota error stands until an upload goes through again.
+            if (m.type === 'quota') this.uploadQuota = String(m.error ?? '');
+            else if (m.type === 'upload' && m.status === 'done')
+                this.uploadQuota = null;
+            this.kick?.();
+        });
+        YoutubeUploaderAddon.Instance.events.on('connection', changed());
         AudienceDisplayAddon.Instance.phase.on('phase', changed());
         AudienceDisplayAddon.Instance.events.on('message', (m) => {
             // An error stands until FMS reconnects or the display restarts
@@ -617,6 +635,28 @@ export default class Checks extends EventEmitter {
                       lastChangeAt: this.mixerWatch.lastAt || null,
                   }
                 : null,
+            uploader: {
+                phase: YoutubeUploaderAddon.Instance.getPhase(),
+                eventStream: YoutubeUploaderAddon.Instance.events.connected,
+                signin:
+                    YoutubeUploaderAddon.Instance.events.latest.get('signin') ??
+                    YoutubeUploaderAddon.Instance.events.latest.get('hello')
+                        ?.signin ??
+                    null,
+                queue:
+                    YoutubeUploaderAddon.Instance.events.latest.get('queue') ??
+                    YoutubeUploaderAddon.Instance.events.latest.get('hello')
+                        ?.queue ??
+                    null,
+                watching:
+                    YoutubeUploaderAddon.Instance.events.latest.get(
+                        'watching'
+                    ) ??
+                    YoutubeUploaderAddon.Instance.events.latest.get('hello')
+                        ?.watching ??
+                    null,
+                quotaError: this.uploadQuota,
+            },
             audienceDisplay: {
                 phase: AudienceDisplayAddon.Instance.getPhase(),
                 eventStream: AudienceDisplayAddon.Instance.events.connected,
@@ -820,6 +860,7 @@ export default class Checks extends EventEmitter {
         this.checkCaptions(v);
         this.checkCaptionsEngine();
         this.checkAudienceDisplay();
+        this.checkUploader();
         this.checkCaptionsYoutube(streaming);
         [...this.since.keys()].forEach((id) => {
             if (!this.heldSeen.has(id)) this.since.delete(id);
@@ -1381,6 +1422,75 @@ export default class Checks extends EventEmitter {
         // whether or not a match is on.
         if (problem) this.set('captions', 'warning', problem, fix);
         else this.set('captions', 'ok', `On overlay ${CAPTIONS_OVERLAY}`);
+    }
+
+    // The YouTube match-video uploader (FTC events, FRC off-season): up,
+    // signed in, no failed uploads, no quota error. Sign-in and the queue
+    // come from its event stream; an older uploader without one is only
+    // checked for running.
+    private checkUploader() {
+        const up = YoutubeUploaderAddon.Instance;
+        if (!AutoAV.Instance.runsUploader()) {
+            this.set('uploader', 'unknown', 'Not used');
+            return;
+        }
+        const phase = up.getPhase();
+        if (phase === 'updating' || phase === 'starting') {
+            this.set(
+                'uploader',
+                'unknown',
+                phase === 'updating' ? 'Updating' : 'Starting'
+            );
+            return;
+        }
+        if (phase !== 'running') {
+            if (!AutoAV.Instance.getStatus().saveFolder)
+                this.set('uploader', 'unknown', 'No event folder');
+            else
+                this.set('uploader', 'warning', 'Stopped', {
+                    label: 'Start',
+                    run: async () => {
+                        if (!(await up.start()))
+                            throw new Error('Uploader did not start');
+                    },
+                });
+            return;
+        }
+        const { latest, connected, supported } = up.events;
+        if (!connected) {
+            this.set(
+                'uploader',
+                'ok',
+                supported === false ? 'Running' : 'Running, no status yet'
+            );
+            return;
+        }
+        const hello = latest.get('hello') as any;
+        const signin = (latest.get('signin') ?? hello?.signin) as
+            | { signedIn: boolean; channel: string | null }
+            | undefined;
+        const queue = (latest.get('queue') ?? hello?.queue) as
+            | { counts?: Record<string, number> }
+            | undefined;
+        const failed = queue?.counts?.failed ?? 0;
+        if (signin && !signin.signedIn) {
+            this.set('uploader', 'warning', 'YouTube sign-in needed');
+        } else if (this.uploadQuota) {
+            this.set('uploader', 'warning', this.uploadQuota);
+        } else if (failed > 0) {
+            this.set(
+                'uploader',
+                'warning',
+                `${failed} upload${failed === 1 ? '' : 's'} failed`
+            );
+        } else {
+            const done = queue?.counts?.uploaded ?? 0;
+            this.set(
+                'uploader',
+                'ok',
+                `${signin?.channel ?? 'Signed in'}, ${done} uploaded`
+            );
+        }
     }
 
     // The custom audience display (FRC off-season, when Settings picks it):

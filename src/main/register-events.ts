@@ -852,6 +852,21 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     // #region Upload tab (youtube-tba-upload process)
 
+    // A match video just became final (renamed, cut, or the FTC recorder's
+    // file made): tell the uploader at once instead of after its folder
+    // scan. Once per record.
+    const announcedVideos = new Set<string>();
+    AutoAV.Instance.on('match', (rec: MatchRecord) => {
+        if (!rec?.filePath || announcedVideos.has(rec.id)) return;
+        const ps = rec.processing?.state;
+        const final =
+            ps === 'done' ||
+            (rec.status === 'recorded' && (!ps || ps === 'unprocessed'));
+        if (!final) return;
+        announcedVideos.add(rec.id);
+        YoutubeUploaderAddon.Instance.videoReady(rec.filePath);
+    });
+
     // YouTube uploader status + controls for the Upload tab's control row. The
     // event key rides along so the renderer can scope its direct :8807 fetches.
     const uploadStatus = () => ({
@@ -859,7 +874,16 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         phase: YoutubeUploaderAddon.Instance.getPhase(),
         version: YoutubeUploaderAddon.Instance.getVersion(),
         eventKey: AutoAV.Instance.getStatus().currentEvent?.code ?? '',
+        // The tab reloads on uploader events instead of polling while true.
+        events: YoutubeUploaderAddon.Instance.events.connected,
     });
+    // Uploader event stream -> Upload tab (sign-in, queue, uploads).
+    YoutubeUploaderAddon.Instance.events.on('message', (m) =>
+        window?.webContents.send('upload:event', m)
+    );
+    YoutubeUploaderAddon.Instance.events.on('connection', () =>
+        window?.webContents.send('upload:status', uploadStatus())
+    );
     YoutubeUploaderAddon.Instance.phase.on('phase', () =>
         window?.webContents.send('upload:status', uploadStatus())
     );
@@ -870,10 +894,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // should be doing changes, it is started or stopped. At boot the mode is
     // the stored fallback until FMS or the scorekeeper reports, so that change
     // is what starts them.
-    // The uploader value carries the program: it is launched with
-    // -program frc|ftc, so a program change restarts it.
-    // The folder is part of the value too: the uploader watches the folder it
-    // was launched with, so a new event folder is a restart.
+    // The uploader value carries the program and the folder: a change is a
+    // live switch (POST /api/control/event) on uploaders that have it, a
+    // restart with new flags on older ones.
     const wanted = () => ({
         uploader: AutoAV.Instance.runsUploader()
             ? `${AutoAV.Instance.getStatus().program}|${
@@ -899,7 +922,12 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         const next = wanted();
         const apply = <K extends keyof Wanted>(
             key: K,
-            addon: { start(): Promise<boolean>; stop(): Promise<boolean> }
+            addon: {
+                start(): Promise<boolean>;
+                stop(): Promise<boolean>;
+                // Switch a running instance without a restart, if it can.
+                retarget?(): Promise<boolean>;
+            }
         ) => {
             const target = next[key];
             const current = key in applying ? applying[key] : running[key];
@@ -924,7 +952,11 @@ export default function registerAllEvents(window: BrowserWindow | null) {
                 }
                 if (applying[key] === target) delete applying[key];
             };
-            (target ? addon.start() : addon.stop())
+            let change: Promise<boolean>;
+            if (!target) change = addon.stop();
+            else if (current && addon.retarget) change = addon.retarget();
+            else change = addon.start();
+            change
                 .then((ok) => {
                     settle(ok);
                     return undefined;

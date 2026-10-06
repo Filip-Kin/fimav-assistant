@@ -23,6 +23,14 @@ const lcEvents = {
 };
 let audioDevices: any[] = [];
 let customAd = false;
+let uploaderUsed = false;
+let upPhase = 'running';
+const upEvents = {
+    connected: false,
+    supported: null as boolean | null,
+    latest: new Map<string, any>(),
+    on: () => undefined,
+};
 let adPhase = 'running';
 const adEvents = {
     connected: false,
@@ -93,6 +101,7 @@ jest.mock('../main/addons/autoav', () => ({
         Instance: {
             matchInPlay: () => match,
             runsCustomAd: () => customAd,
+            runsUploader: () => uploaderUsed,
             getStatus: () => ({ saveFolder: '/event' }),
         },
     },
@@ -105,6 +114,18 @@ jest.mock('../main/addons/live-captions', () => ({
             getPhase: () => captionsPhase,
             get events() {
                 return lcEvents;
+            },
+        },
+    },
+}));
+jest.mock('../main/addons/upload-helper', () => ({
+    __esModule: true,
+    default: {
+        Instance: {
+            getPhase: () => upPhase,
+            start: jest.fn(async () => true),
+            get events() {
+                return upEvents;
             },
         },
     },
@@ -296,6 +317,11 @@ beforeEach(() => {
     lcEvents.supported = null;
     lcEvents.latest.clear();
     customAd = false;
+    uploaderUsed = false;
+    upPhase = 'running';
+    upEvents.connected = false;
+    upEvents.supported = null;
+    upEvents.latest.clear();
     adPhase = 'running';
     adEvents.connected = false;
     adEvents.supported = null;
@@ -331,6 +357,7 @@ beforeEach(() => {
         'captions-engine',
         'captions-youtube',
         'audience-display',
+        'uploader',
     ].forEach((id) =>
         checks.results.set(id, {
             id,
@@ -828,6 +855,37 @@ describe('stream checks', () => {
         expect(get('audience-display')).toMatchObject({
             state: 'warning',
             detail: 'Not connected to FMS',
+        });
+    });
+
+    it('YouTube uploads: sign-in, failures, channel', async () => {
+        uploaderUsed = true;
+        upEvents.connected = true;
+        upEvents.latest.set('hello', {
+            type: 'hello',
+            signin: { signedIn: true, channel: 'FIRST in Michigan' },
+            queue: { eventKey: '2026mimarc', counts: { uploaded: 12 } },
+        });
+        await tick(1);
+        expect(get('uploader')).toMatchObject({
+            state: 'ok',
+            detail: 'FIRST in Michigan, 12 uploaded',
+        });
+        upEvents.latest.set('queue', {
+            type: 'queue',
+            counts: { uploaded: 12, failed: 2 },
+        });
+        await tick(1);
+        expect(get('uploader').detail).toBe('2 uploads failed');
+        upEvents.latest.set('signin', {
+            type: 'signin',
+            signedIn: false,
+            channel: null,
+        });
+        await tick(1);
+        expect(get('uploader')).toMatchObject({
+            state: 'warning',
+            detail: 'YouTube sign-in needed',
         });
     });
 

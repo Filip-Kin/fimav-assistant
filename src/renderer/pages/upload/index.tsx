@@ -697,6 +697,8 @@ function renderTitlePreview(tmpl: string, sample?: UploadRow): string {
 // hidden keeps the field registered (and its value saved) while not shown.
 interface UploadAddonStatus {
     running: boolean;
+    // The uploader's event stream is up: reload on its events, no polling.
+    events?: boolean;
     phase?: AddonPhase;
     version: string;
     eventKey: string;
@@ -784,7 +786,19 @@ export default function UploadPage() {
         setSignIn({ signedIn: false, channelName: '' });
     }, [running]);
 
-    // Match/upload state straight from the uploader (permissive CORS), polled.
+    // Uploader events (via the main process) bump this; the loads below
+    // re-run on it instead of on a timer when the stream is up.
+    const [uploaderTick, setUploaderTick] = useState(0);
+    const live = !!status?.events;
+    useEffect(() => {
+        if (!window.electron) return undefined;
+        return window.electron.ipcRenderer.on('upload:event', () =>
+            setUploaderTick((n) => n + 1)
+        );
+    }, []);
+
+    // Match/upload state straight from the uploader (permissive CORS):
+    // reloaded on its events, polled every 5 s for an uploader without them.
     useEffect(() => {
         if (!running) return undefined;
         let cancelled = false;
@@ -803,14 +817,15 @@ export default function UploadPage() {
             }
         };
         load();
-        const timer = setInterval(load, 5000);
+        const timer = live ? null : setInterval(load, 5000);
         return () => {
             cancelled = true;
-            clearInterval(timer);
+            if (timer) clearInterval(timer);
         };
-    }, [running, eventKey]);
+    }, [running, eventKey, live, uploaderTick]);
 
-    // Sign-in status straight from the uploader's health endpoint, polled.
+    // Sign-in status straight from the uploader's health endpoint: reloaded
+    // on its events, polled every 4 s for an uploader without them.
     useEffect(() => {
         if (!running) return undefined;
         let cancelled = false;
@@ -831,12 +846,12 @@ export default function UploadPage() {
             }
         };
         load();
-        const timer = setInterval(load, 4000);
+        const timer = live ? null : setInterval(load, 4000);
         return () => {
             cancelled = true;
-            clearInterval(timer);
+            if (timer) clearInterval(timer);
         };
-    }, [running]);
+    }, [running, live, uploaderTick]);
 
     const loadPlaylists = useCallback(
         (refresh: boolean) => {

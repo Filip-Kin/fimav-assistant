@@ -4,6 +4,7 @@ import log from 'electron-log';
 import { appdataPath } from '../util';
 import { AddonLoggers } from './addon-loggers';
 import AddonPhaseTracker from './addon-phase';
+import AddonEvents from './addon-events';
 import { getStore } from '../store';
 import AutoAV from './autoav';
 import FtcScorekeeper from '../ftc/scorekeeper';
@@ -37,6 +38,14 @@ export default class YoutubeUploaderAddon {
 
     // Updating / starting / running / stopped, with a 'phase' event.
     public readonly phase = new AddonPhaseTracker();
+
+    // Its /api/events stream while running (sign-in, queue, uploads, quota,
+    // what it watches).
+    public readonly events = new AddonEvents(
+        'youtube-tba-upload',
+        'http://127.0.0.1:8807/api/events',
+        this.phase
+    );
 
     private currentVersion = '0.0.0';
 
@@ -309,6 +318,65 @@ export default class YoutubeUploaderAddon {
         }
         this.killExisting();
         return true;
+    }
+
+    // POST to the uploader's live control routes (uploaders with /api/events
+    // have them). Throws on a refusal.
+    private static async control(route: string, body: unknown) {
+        const rsp = await fetch(
+            `http://127.0.0.1:${YoutubeUploaderAddon.PORT}/api/control/${route}`,
+            {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(5000),
+            }
+        );
+        const out = (await rsp.json().catch(() => null)) as {
+            ok?: boolean;
+            error?: string;
+        } | null;
+        if (!rsp.ok || !out?.ok)
+            throw new Error(out?.error ?? `HTTP ${rsp.status}`);
+    }
+
+    // Point a running uploader at the current event folder, event and
+    // program without restarting it. Uploaders without the control route,
+    // or one not running, are (re)started as before.
+    public async retarget(): Promise<boolean> {
+        const videoDir = this.videoDir();
+        if (
+            this.phase.get() === 'running' &&
+            this.events.supported &&
+            videoDir
+        ) {
+            const ftc = AutoAV.Instance.isFtc();
+            const { address } = FtcScorekeeper.Instance.getStatus();
+            try {
+                await YoutubeUploaderAddon.control('event', {
+                    videoDir,
+                    eventKey:
+                        AutoAV.Instance.getStatus().currentEvent?.code ||
+                        undefined,
+                    program: ftc ? 'ftc' : 'frc',
+                    ftcUrl: ftc && address ? `http://${address}` : undefined,
+                });
+                this.logs.out.log(`YouTube uploader now watching ${videoDir}`);
+                return true;
+            } catch (e) {
+                this.logs.err.warn('Live switch refused, restarting', e);
+            }
+        }
+        return this.start();
+    }
+
+    // A match video is final: tell the uploader now rather than waiting for
+    // its folder scan. Best effort; the scan still picks it up.
+    public videoReady(filePath: string) {
+        if (this.phase.get() !== 'running' || !this.events.supported) return;
+        YoutubeUploaderAddon.control('video', { path: filePath }).catch((e) =>
+            this.logs.out.log(`Video ready not taken: ${(e as Error).message}`)
+        );
     }
 
     public getPhase() {
