@@ -21,7 +21,7 @@ import attemptRename, {
 } from '../../utils/recording';
 import { AddonLoggers } from './addon-loggers';
 import { getCurrentEvent, signalrToElectronLog } from '../util';
-import VmixService from '../../services/VmixService';
+import ObsService from '../../services/ObsService';
 import FmsApi from '../../services/FmsApi';
 import Event from '../../models/Event';
 import { AutoAVStatus, Program } from '../../models/AutoAVStatus';
@@ -135,7 +135,7 @@ export default class AutoAV {
      */
     private async stopRecording() {
         // Check if we're recording
-        if (!(await VmixService.Instance.isRecording())) {
+        if (!(await ObsService.Instance.isRecording())) {
             this.logRecording(
                 '🟥 Not Recording',
                 undefined,
@@ -144,8 +144,11 @@ export default class AutoAV {
             return;
         }
 
-        VmixService.Instance.StopRecording()
+        ObsService.Instance.StopRecording()
             .then(async () => {
+                // OBS names the file only when it stops.
+                this.currentFile =
+                    await ObsService.Instance.GetCurrentRecording();
                 this.logRecording('🟥 Stopped Recording');
                 this.weAreRecording = false;
                 this.willStopRecording = false;
@@ -275,7 +278,7 @@ export default class AutoAV {
      * @returns void
      */
     private startRecording(matchInfo: FMSMatchStatus) {
-        VmixService.Instance.StartRecording()
+        ObsService.Instance.StartRecording()
             .then(() => {
                 this.logRecording(
                     `🔴 Started Recording ${matchInfo.Level} Match #${matchInfo.MatchNumber}-${matchInfo.PlayNumber}`
@@ -310,17 +313,11 @@ export default class AutoAV {
                 this.status.vmix.recording = true;
                 this.emitStatus();
 
-                // Give it some time, then attempt to find the file
-                setTimeout(async () => {
-                    this.currentFile =
-                        await VmixService.Instance.GetCurrentRecording();
-                }, 3000);
-
                 return undefined;
             })
             .catch((err) => {
                 this.logRecording(
-                    `‼️ Error Starting Recording. Is Vmix at ${VmixService.Instance.getUrl()}?`,
+                    `‼️ Error Starting Recording. Is OBS's websocket server on at ${ObsService.Instance.getUrl()}?`,
                     err,
                     EquipmentLogType.Error
                 );
@@ -999,33 +996,12 @@ export default class AutoAV {
         return null;
     }
 
+    // OBS build: OBS stands in for vMix here (reachable, recording, and
+    // its record folder, the base for the event folders).
     private async pollVmix() {
-        let reachable = false;
-        let recording = false;
-        let recordFolder: string | null = this.vmixRecordFolder;
-        try {
-            const parsed = await VmixService.Instance.GetBase();
-            reachable = !!parsed?.vmix;
-            recording = parsed?.vmix?.recording?.['#text'] === 'True';
-            // vMix reports the record destination as recording.filename1, but
-            // only while actively recording. When idle, fall back to reading its
-            // config file.
-            const file =
-                parsed?.vmix?.recording?.filename1 ??
-                parsed?.vmix?.recording?.filename;
-            if (typeof file === 'string' && file.trim()) {
-                const i = Math.max(
-                    file.lastIndexOf('\\'),
-                    file.lastIndexOf('/')
-                );
-                recordFolder = i > 0 ? file.slice(0, i) : file;
-            } else if (!recordFolder) {
-                recordFolder = AutoAV.readVmixConfigRecordFolder();
-            }
-        } catch {
-            reachable = false;
-            recording = false;
-        }
+        const obs = await ObsService.Instance.Status();
+        const { reachable, recording } = obs;
+        const recordFolder = obs.folder ?? this.vmixRecordFolder;
         const folderChanged = recordFolder !== this.vmixRecordFolder;
         if (folderChanged) this.vmixRecordFolder = recordFolder;
         if (

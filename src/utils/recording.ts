@@ -137,6 +137,17 @@ export default async function attemptRename(
         throw new Error('Video location does not exist');
     }
 
+    // OBS build: the file is named .mp4 and the uploader only takes .mp4, so
+    // OBS must record MP4 (Settings > Output > Recording Format: MP4 or
+    // Hybrid MP4). Anything else is left where OBS put it.
+    if (path.extname(videoLocation).toLowerCase() !== '.mp4') {
+        throw new Error(
+            `OBS recorded ${path.extname(
+                videoLocation
+            )}: set OBS Recording Format to MP4`
+        );
+    }
+
     // vMix finishes the file (its MP4 index) after it reports the recording
     // stopped; moving it before then leaves an unreadable copy.
     if (!(await waitForFinishedVideo(videoLocation))) {
