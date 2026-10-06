@@ -18,6 +18,11 @@ export default class LiveCaptions {
 
     private running = false;
 
+    // Where start() is: checking for / downloading an update, launching and
+    // waiting for :3000, serving, or stopped. Lets the checks tell "not up
+    // yet" from "down".
+    private phase: 'stopped' | 'updating' | 'starting' | 'running' = 'stopped';
+
     // Version of the live-captions build currently launched, surfaced in the tab
     private currentVersion = '0.0.0';
 
@@ -80,12 +85,18 @@ export default class LiveCaptions {
      * Starts the live-captions process
      */
     public start(): Promise<boolean> {
-        return this.queue.run(() => this.doStart());
+        this.phase = 'starting';
+        return this.queue.run(async () => {
+            const ok = await this.doStart();
+            this.phase = ok ? 'running' : 'stopped';
+            return ok;
+        });
     }
 
     private async doStart(): Promise<boolean> {
         this.killExisting();
 
+        this.phase = 'updating';
         // Newest live-captions-<version>.exe already downloaded
         let currentVersion = newestLocalVersion('live-captions');
 
@@ -121,6 +132,7 @@ export default class LiveCaptions {
             return false;
         }
 
+        this.phase = 'starting';
         this.logs.out.log(`Starting live-captions v${currentVersion}`);
         this.currentVersion = currentVersion;
 
@@ -137,6 +149,7 @@ export default class LiveCaptions {
     public stop(): Promise<boolean> {
         return this.queue.run(async () => {
             this.killExisting();
+            this.phase = 'stopped';
             return true;
         });
     }
@@ -158,20 +171,20 @@ export default class LiveCaptions {
             child.stderr.on('data', (d) => this.logs.err.error(d.toString()));
             // Identity-guarded: an OLD child exiting must not clobber the state
             // of a NEWer one started on retry.
-            child.on(
-                'exit',
-                (code: number | null, signal: string | null) => {
-                    this.logs.out.log(
-                        `Live-captions exited (code ${code ?? 'null'}, signal ${
-                            signal ?? 'none'
-                        })`
-                    );
-                    if (this.process === child) {
-                        this.running = false;
-                        this.process = null;
-                    }
+            child.on('exit', (code: number | null, signal: string | null) => {
+                this.logs.out.log(
+                    `Live-captions exited (code ${code ?? 'null'}, signal ${
+                        signal ?? 'none'
+                    })`
+                );
+                if (this.process === child) {
+                    this.running = false;
+                    this.process = null;
+                    // Exited after it was up: down. During start, the
+                    // retry loop decides.
+                    if (this.phase === 'running') this.phase = 'stopped';
                 }
-            );
+            });
             child.on('error', (err) => {
                 this.logs.err.error(
                     `Live-captions failed to start: ${err.message}`
@@ -194,8 +207,9 @@ export default class LiveCaptions {
             }
 
             this.logs.err.error(
-                `Live-captions did not come up on attempt ${attempt}${ 
-                    attempt < 2 ? ' - retrying after a clean port sweep' : ''}`
+                `Live-captions did not come up on attempt ${attempt}${
+                    attempt < 2 ? ' - retrying after a clean port sweep' : ''
+                }`
             );
         }
 
@@ -208,6 +222,11 @@ export default class LiveCaptions {
     // Whether the live-captions process is currently running
     public isRunning(): boolean {
         return this.running;
+    }
+
+    // Updating or starting: not running yet, but on its way.
+    public getPhase() {
+        return this.phase;
     }
 
     // Version string of the launched live-captions build

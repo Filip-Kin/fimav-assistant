@@ -11,6 +11,7 @@ let match: { label: string; level: string } | null = null;
 let bandwidth: any = { supported: true, streams: [] };
 let mixer = new Map<string, string | number>();
 let captionsRunning = true;
+let captionsPhase = 'running';
 let matches: any[] = [];
 const store: Record<string, unknown> = {};
 let settings: any = null;
@@ -52,7 +53,12 @@ jest.mock('../main/addons/autoav', () => ({
 }));
 jest.mock('../main/addons/live-captions', () => ({
     __esModule: true,
-    default: { Instance: { isRunning: () => captionsRunning } },
+    default: {
+        Instance: {
+            isRunning: () => captionsRunning,
+            getPhase: () => captionsPhase,
+        },
+    },
 }));
 jest.mock('../main/addons/hw-ping', () => ({
     __esModule: true,
@@ -222,6 +228,7 @@ beforeEach(() => {
     hwPingedAt = T0;
     mixer = fimMixer();
     captionsRunning = true;
+    captionsPhase = 'running';
     matches = [];
     Object.keys(store).forEach((k) => delete store[k]);
     checks = new (Checks as any)();
@@ -539,6 +546,26 @@ describe('stream checks', () => {
             state: 'warning',
             detail: 'Bus A muted',
             fix: 'Unmute',
+        });
+    });
+
+    it('Live Captions updating or starting is not a problem yet', async () => {
+        captionsRunning = false;
+        captionsPhase = 'updating';
+        await tick(1);
+        expect(get('captions')).toMatchObject({
+            state: 'unknown',
+            detail: 'Live Captions updating',
+        });
+        captionsPhase = 'starting';
+        await tick(1);
+        expect(get('captions').detail).toBe('Live Captions starting');
+        captionsPhase = 'stopped';
+        await tick(1);
+        expect(get('captions')).toMatchObject({
+            state: 'warning',
+            detail: 'Live Captions stopped',
+            fix: 'Start',
         });
     });
 

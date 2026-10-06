@@ -61,6 +61,15 @@ const vmixFn =
     () =>
         VmixService.Instance.Function(fn, params);
 
+// "Live Captions updating" / "starting" while start() is on its way, else
+// null. At app launch it checks for an update first, then waits for :3000.
+const liveCaptionsWait = (): string | null => {
+    const phase = LiveCaptions.Instance.getPhase();
+    if (phase === 'updating') return 'Live Captions updating';
+    if (phase === 'starting') return 'Live Captions starting';
+    return null;
+};
+
 // The overlay channel FIM puts Live Captions on.
 const CAPTIONS_OVERLAY = 8;
 
@@ -973,6 +982,11 @@ export default class Checks extends EventEmitter {
             !!input &&
             String(typeof overlay === 'object' ? overlay['#text'] : '') ===
                 String(input.number);
+        const lcWait = liveCaptionsWait();
+        if (lcWait) {
+            this.set('captions', 'unknown', lcWait);
+            return;
+        }
         let problem = '';
         let fix: Fix | undefined;
         if (!LiveCaptions.Instance.isRunning()) {
@@ -1010,7 +1024,11 @@ export default class Checks extends EventEmitter {
     // settings' before going live.
     private checkCaptionsYoutube(streaming: boolean) {
         if (!LiveCaptions.Instance.isRunning()) {
-            this.set('captions-youtube', 'unknown', 'Live Captions stopped');
+            this.set(
+                'captions-youtube',
+                'unknown',
+                liveCaptionsWait() ?? 'Live Captions stopped'
+            );
             return;
         }
         const p = this.captionPush;
