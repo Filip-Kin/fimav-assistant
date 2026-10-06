@@ -4,9 +4,11 @@ import { AutoAVStatus } from 'models/AutoAVStatus';
 import AddonControlRow from '../../components/AddonControlRow';
 import { useLifecycleBusy, useOneShot } from '../../hooks/ipc_busy';
 import './index.css';
+import { AddonPhase } from '../../../models/AddonPhase';
 
 interface AudienceDisplayStatus {
     running: boolean;
+    phase?: AddonPhase;
     version: string;
 }
 
@@ -104,6 +106,7 @@ export default function AudienceDisplayPage() {
         <div className="ad-page">
             <AddonControlRow
                 running={running}
+                phase={status?.phase}
                 version={status?.version}
                 onVersionClick={checkUpdate}
                 versionTooltip="Updates"

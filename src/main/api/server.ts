@@ -149,6 +149,7 @@ export default function startStatusApi(sources: StatusApiSources) {
             );
             return {
                 running,
+                phase: YoutubeUploaderAddon.Instance.getPhase(),
                 version: YoutubeUploaderAddon.Instance.getVersion(),
                 program: health?.program ?? null,
                 signedIn: health ? !!health.signed_in : null,
@@ -160,6 +161,7 @@ export default function startStatusApi(sources: StatusApiSources) {
         // Custom audience display (FRC off-season).
         display: () => ({
             running: AudienceDisplayAddon.Instance.isRunning(),
+            phase: AudienceDisplayAddon.Instance.getPhase(),
             version: AudienceDisplayAddon.Instance.getVersion(),
             selected: AutoAV.Instance.runsCustomAd(),
         }),

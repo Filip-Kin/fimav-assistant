@@ -1,9 +1,9 @@
-import { EventEmitter } from 'events';
 import path from 'path';
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import log from 'electron-log';
 import { appdataPath } from '../util';
 import { AddonLoggers } from './addon-loggers';
+import AddonPhaseTracker from './addon-phase';
 import { getStore } from '../store';
 import {
     SerialQueue,
@@ -22,21 +22,8 @@ export default class LiveCaptions {
     // Where start() is: checking for / downloading an update, launching and
     // waiting for :3000, serving, or stopped. Lets the checks tell "not up
     // yet" from "down".
-    private phaseValue: 'stopped' | 'updating' | 'starting' | 'running' =
-        'stopped';
-
-    // Told on every phase change (the checks re-run on it).
-    public readonly events = new EventEmitter();
-
-    private set phase(p: LiveCaptions['phaseValue']) {
-        if (p === this.phaseValue) return;
-        this.phaseValue = p;
-        this.events.emit('phase', p);
-    }
-
-    private get phase() {
-        return this.phaseValue;
-    }
+    // Updating / starting / running / stopped, with a 'phase' event.
+    public readonly phase = new AddonPhaseTracker();
 
     // Version of the live-captions build currently launched, surfaced in the tab
     private currentVersion = '0.0.0';
@@ -100,10 +87,10 @@ export default class LiveCaptions {
      * Starts the live-captions process
      */
     public start(): Promise<boolean> {
-        this.phase = 'starting';
+        this.phase.set('starting');
         return this.queue.run(async () => {
             const ok = await this.doStart();
-            this.phase = ok ? 'running' : 'stopped';
+            this.phase.set(ok ? 'running' : 'stopped');
             return ok;
         });
     }
@@ -111,7 +98,7 @@ export default class LiveCaptions {
     private async doStart(): Promise<boolean> {
         this.killExisting();
 
-        this.phase = 'updating';
+        this.phase.set('updating');
         // Newest live-captions-<version>.exe already downloaded
         let currentVersion = newestLocalVersion('live-captions');
 
@@ -147,7 +134,7 @@ export default class LiveCaptions {
             return false;
         }
 
-        this.phase = 'starting';
+        this.phase.set('starting');
         this.logs.out.log(`Starting live-captions v${currentVersion}`);
         this.currentVersion = currentVersion;
 
@@ -164,7 +151,7 @@ export default class LiveCaptions {
     public stop(): Promise<boolean> {
         return this.queue.run(async () => {
             this.killExisting();
-            this.phase = 'stopped';
+            this.phase.set('stopped');
             return true;
         });
     }
@@ -197,7 +184,8 @@ export default class LiveCaptions {
                     this.process = null;
                     // Exited after it was up: down. During start, the
                     // retry loop decides.
-                    if (this.phase === 'running') this.phase = 'stopped';
+                    if (this.phase.get() === 'running')
+                        this.phase.set('stopped');
                 }
             });
             child.on('error', (err) => {
@@ -241,7 +229,7 @@ export default class LiveCaptions {
 
     // Updating or starting: not running yet, but on its way.
     public getPhase() {
-        return this.phase;
+        return this.phase.get();
     }
 
     // Version string of the launched live-captions build

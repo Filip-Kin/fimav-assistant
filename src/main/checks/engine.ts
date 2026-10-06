@@ -471,7 +471,7 @@ export default class Checks extends EventEmitter {
         AutoAV.Instance.on('matches', changed('loudness'));
         HWPing.Instance.on('hw-change', changed('mixer'));
         HWPing.Instance.on('ip-config-changed', changed());
-        LiveCaptions.Instance.events.on('phase', changed());
+        LiveCaptions.Instance.phase.on('phase', changed());
         this.vmixEvents.on('change', changed('vmix'));
         // Stream / recording settings send no activator; vMix's autosave
         // (about once a minute) does change.

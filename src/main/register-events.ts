@@ -654,6 +654,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // Live Captions status + controls for the Live Captions tab
     const liveCaptionsStatus = () => ({
         running: LiveCaptions.Instance.isRunning(),
+        phase: LiveCaptions.Instance.getPhase(),
         version: LiveCaptions.Instance.getVersion(),
     });
 
@@ -850,6 +851,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // event key rides along so the renderer can scope its direct :8807 fetches.
     const uploadStatus = () => ({
         running: YoutubeUploaderAddon.Instance.isRunning(),
+        phase: YoutubeUploaderAddon.Instance.getPhase(),
         version: YoutubeUploaderAddon.Instance.getVersion(),
         eventKey: AutoAV.Instance.getStatus().currentEvent?.code ?? '',
     });
@@ -1033,6 +1035,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     const audienceDisplayStatus = () => ({
         running: AudienceDisplayAddon.Instance.isRunning(),
+        phase: AudienceDisplayAddon.Instance.getPhase(),
         version: AudienceDisplayAddon.Instance.getVersion(),
     });
 

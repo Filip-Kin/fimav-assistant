@@ -3,6 +3,7 @@ import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import log from 'electron-log';
 import { appdataPath } from '../util';
 import { AddonLoggers } from './addon-loggers';
+import AddonPhaseTracker from './addon-phase';
 import { getStore } from '../store';
 import AutoAV from './autoav';
 import {
@@ -31,6 +32,9 @@ export default class AudienceDisplayAddon {
     private static instance: AudienceDisplayAddon;
 
     private running = false;
+
+    // Updating / starting / running / stopped, with a 'phase' event.
+    public readonly phase = new AddonPhaseTracker();
 
     private currentVersion = '0.0.0';
 
@@ -94,7 +98,12 @@ export default class AudienceDisplayAddon {
 
     // start() and stop() run one at a time (see SerialQueue).
     public start(): Promise<boolean> {
-        return this.queue.run(() => this.doStart());
+        this.phase.set('starting');
+        return this.queue.run(async () => {
+            const ok = await this.doStart();
+            this.phase.set(ok ? 'running' : 'stopped');
+            return ok;
+        });
     }
 
     private async doStart(): Promise<boolean> {
@@ -112,6 +121,7 @@ export default class AudienceDisplayAddon {
 
         // Update check + download is best-effort: offline at a venue we fall
         // back to the newest local exe rather than leaving the display down.
+        this.phase.set('updating');
         try {
             const baseUrl = getStore().get('audienceDisplayDownloadBase');
             const latestVersion = await latestReleaseVersion(baseUrl);
@@ -144,6 +154,7 @@ export default class AudienceDisplayAddon {
             return false;
         }
 
+        this.phase.set('starting');
         this.currentVersion = currentVersion;
         return this.launch(
             path.join(appdataPath, `audience-display-${currentVersion}.exe`)
@@ -176,6 +187,10 @@ export default class AudienceDisplayAddon {
                 if (this.process === child) {
                     this.running = false;
                     this.process = null;
+                    // Exited after it was up: down. During start, the retry
+                    // loop decides.
+                    if (this.phase.get() === 'running')
+                        this.phase.set('stopped');
                 }
             });
             child.on('error', (err) => {
@@ -216,8 +231,13 @@ export default class AudienceDisplayAddon {
     public stop(): Promise<boolean> {
         return this.queue.run(async () => {
             this.killExisting();
+            this.phase.set('stopped');
             return true;
         });
+    }
+
+    public getPhase() {
+        return this.phase.get();
     }
 
     public isRunning(): boolean {

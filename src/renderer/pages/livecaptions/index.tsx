@@ -3,9 +3,11 @@ import { Empty, Modal, message } from 'antd';
 import AddonControlRow from '../../components/AddonControlRow';
 import { useLifecycleBusy, useOneShot } from '../../hooks/ipc_busy';
 import './index.css';
+import { AddonPhase } from '../../../models/AddonPhase';
 
 interface LiveCaptionsStatus {
     running: boolean;
+    phase?: AddonPhase;
     version: string;
 }
 
@@ -98,6 +100,7 @@ export default function LiveCaptionsPage() {
         <div className="livecaptions-page">
             <AddonControlRow
                 running={running}
+                phase={status?.phase}
                 version={status?.version}
                 onVersionClick={checkUpdate}
                 versionTooltip="Updates"

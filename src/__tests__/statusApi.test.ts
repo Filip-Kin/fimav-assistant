@@ -46,13 +46,21 @@ jest.mock('../main/addons/upload-helper', () => ({
     __esModule: true,
     default: {
         PORT: 8807,
-        Instance: { isRunning: () => true, getVersion: () => '0.1.11' },
+        Instance: {
+            isRunning: () => true,
+            getPhase: () => 'running',
+            getVersion: () => '0.1.11',
+        },
     },
 }));
 jest.mock('../main/addons/audience-display', () => ({
     __esModule: true,
     default: {
-        Instance: { isRunning: () => false, getVersion: () => '26.7.6' },
+        Instance: {
+            isRunning: () => false,
+            getPhase: () => 'stopped',
+            getVersion: () => '26.7.6',
+        },
     },
 }));
 jest.mock('../main/bitfocus', () => ({

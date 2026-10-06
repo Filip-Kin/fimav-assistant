@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
     Button,
     Col,
@@ -27,6 +27,7 @@ import AddonControlRow from '../../components/AddonControlRow';
 import { useLifecycleBusy } from '../../hooks/ipc_busy';
 import { AutoAVStatus, Program } from '../../../models/AutoAVStatus';
 import './index.css';
+import { AddonPhase } from '../../../models/AddonPhase';
 
 // Filename portion of a Windows or POSIX path (renderer has no node path).
 function baseName(p: string): string {
@@ -696,6 +697,7 @@ function renderTitlePreview(tmpl: string, sample?: UploadRow): string {
 // hidden keeps the field registered (and its value saved) while not shown.
 interface UploadAddonStatus {
     running: boolean;
+    phase?: AddonPhase;
     version: string;
     eventKey: string;
 }
@@ -1025,16 +1027,11 @@ export default function UploadPage() {
         [post, ftc]
     );
 
-    const statusLabel = useMemo(() => {
-        if (running) return 'Running';
-        return 'Stopped';
-    }, [running]);
-
     return (
         <>
             <AddonControlRow
                 running={running}
-                statusLabel={statusLabel}
+                phase={status?.phase}
                 version={status?.version}
                 onStart={restart}
                 onRestart={restart}
