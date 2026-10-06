@@ -7,6 +7,8 @@ export interface CheckResult {
     label: string;
     state: CheckState;
     detail: string;
+    // Why the problem matters, shown on hover over the detail.
+    hint: string | null;
     // docs.fimav.us page that explains how to put it right.
     doc: string | null;
     // Label of a one-click fix the app can do for the current problem.

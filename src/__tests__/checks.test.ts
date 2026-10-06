@@ -255,6 +255,8 @@ beforeEach(() => {
             detail: '',
             ignoredUntil: null,
             fix: null,
+            doc: null,
+            hint: null,
         })
     );
 });

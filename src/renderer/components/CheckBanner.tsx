@@ -1,4 +1,4 @@
-import { Button } from 'antd';
+import { Button, Tooltip } from 'antd';
 import { WarningFilled } from '@ant-design/icons';
 import { isAlerting } from '../../models/Checks';
 import useChecks, { ignoreCheck } from '../hooks/checks';
@@ -21,14 +21,16 @@ export default function CheckBanner() {
                     className={`check-banner__row check-banner__row--${c.state}`}
                 >
                     <WarningFilled />
-                    <button
-                        type="button"
-                        className="check-banner__text"
-                        onClick={openChecks}
-                    >
-                        <strong>{c.label}</strong>
-                        <span>{c.detail}</span>
-                    </button>
+                    <Tooltip title={c.hint}>
+                        <button
+                            type="button"
+                            className="check-banner__text"
+                            onClick={openChecks}
+                        >
+                            <strong>{c.label}</strong>
+                            <span>{c.detail}</span>
+                        </button>
+                    </Tooltip>
                     <CheckFixButton check={c} />
                     <CheckDocButton check={c} />
                     <Button size="small" onClick={() => ignoreCheck(c.id)}>

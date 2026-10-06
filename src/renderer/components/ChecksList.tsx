@@ -1,4 +1,4 @@
-import { Button, Empty, Spin, Tag, Typography } from 'antd';
+import { Button, Empty, Spin, Tag, Tooltip, Typography } from 'antd';
 import { CheckResult, CheckState } from '../../models/Checks';
 import useChecks, { ignoreCheck, unignoreCheck } from '../hooks/checks';
 import CheckFixButton from './CheckFixButton';
@@ -42,9 +42,11 @@ function Row({ check }: { check: CheckResult }) {
                     <Tag color={tag.color}>{tag.label}</Tag>
                 )}
             </span>
-            <Text type="secondary" className="check-row__detail">
-                {check.detail}
-            </Text>
+            <Tooltip title={failing ? check.hint : null}>
+                <Text type="secondary" className="check-row__detail">
+                    {check.detail}
+                </Text>
+            </Tooltip>
             <span className="check-row__action">
                 {check.ignoredUntil && (
                     <Button

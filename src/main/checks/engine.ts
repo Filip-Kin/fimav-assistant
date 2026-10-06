@@ -47,7 +47,10 @@ const OFF_DB = -40;
 // Mics vs match sounds on the stream bus: only a big gap is reported.
 const BALANCE_DB = 15;
 
-type Def = Pick<CheckResult, 'id' | 'group' | 'label'> & { doc?: string };
+type Def = Pick<CheckResult, 'id' | 'group' | 'label'> & {
+    doc?: string;
+    hint?: string;
+};
 
 const DOCS = 'https://docs.fimav.us/docs';
 
@@ -94,6 +97,9 @@ const DEFS: Def[] = [
         id: 'stream-bus',
         group: 'Stream',
         label: 'Stream audio source',
+        hint:
+            'Bus A is the stream mix from the X-Air (mics and match sounds). ' +
+            'Master leaves the mics out of the stream.',
         doc: `${DOCS}/troubleshooting-guides/no-audio/#3-check-stream-settings-in-vmix`,
     },
     {
@@ -153,6 +159,10 @@ const DEFS: Def[] = [
         id: 'stream-output',
         group: 'Captions',
         label: 'Captions off stream',
+        hint:
+            'Output 1 and overlay 8 carry the venue captions. On the live ' +
+            'stream or the match recordings they are baked into the video; ' +
+            'YouTube gets its captions from Live Captions instead.',
         doc: `${DOCS}/software-guides/captions/#hiding-captions-from-streamrecording`,
     },
 ];
@@ -348,6 +358,7 @@ export default class Checks extends EventEmitter {
                     ? 'No match yet'
                     : '',
                 doc: d.doc ?? null,
+                hint: d.hint ?? null,
                 ignoredUntil: null,
                 fix: null,
             })
