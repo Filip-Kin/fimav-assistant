@@ -642,31 +642,32 @@ export default class Checks extends EventEmitter {
         // Live with no stream data (stalled or first read): keep the last.
     }
 
-    // FIM streams Output 2, and Output 2 leaves out overlay 8 (Live
-    // Captions, which go to YouTube as real captions, not burned in).
+    // FIM streams and records (recorder 1) Output 2, and Output 2 leaves
+    // out overlay 8 (Live Captions, which go to YouTube as real captions,
+    // not burned in).
     private checkStreamOutput() {
         const st = this.settings;
         if (!st || st.output === null) {
             this.set('stream-output', 'unknown', 'No vMix settings file');
-        } else if (st.output !== 2) {
-            this.set(
-                'stream-output',
-                'warning',
-                `Stream on Output ${st.output}, not Output 2`
+            return;
+        }
+        const problems: string[] = [];
+        if (st.output !== 2)
+            problems.push(`Stream on Output ${st.output}, not Output 2`);
+        if (st.recordOutput !== null && st.recordOutput !== 2)
+            problems.push(
+                `Recorder 1 on Output ${st.recordOutput}, not Output 2`
             );
-        } else if (st.output2Overlays?.includes(CAPTIONS_OVERLAY)) {
-            this.set(
-                'stream-output',
-                'warning',
-                `Overlay ${CAPTIONS_OVERLAY} (captions) on Output 2`
-            );
-        } else {
+        if (st.output2Overlays?.includes(CAPTIONS_OVERLAY))
+            problems.push(`Overlay ${CAPTIONS_OVERLAY} (captions) on Output 2`);
+        if (problems.length)
+            this.set('stream-output', 'warning', problems.join(', '));
+        else
             this.set(
                 'stream-output',
                 'ok',
-                `Output 2, no overlay ${CAPTIONS_OVERLAY}`
+                `Stream and recorder 1 on Output 2, no overlay ${CAPTIONS_OVERLAY}`
             );
-        }
     }
 
     private checkRecording(

@@ -196,6 +196,7 @@ beforeEach(() => {
         output: 2,
         output2Overlays: [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16],
         youtubeKey: 'abcd-efgh',
+        recordOutput: 2,
     };
     push = {
         enabled: true,
@@ -480,6 +481,13 @@ describe('stream checks', () => {
             detail: 'Stream on Output 1, not Output 2',
         });
         settings.output = 2;
+        settings.recordOutput = 1;
+        await tick(1);
+        expect(get('stream-output')).toMatchObject({
+            state: 'warning',
+            detail: 'Recorder 1 on Output 1, not Output 2',
+        });
+        settings.recordOutput = 2;
         settings.output2Overlays = [1, 8];
         await tick(1);
         expect(get('stream-output')).toMatchObject({
@@ -589,6 +597,8 @@ describe('vMix autosave', () => {
         'yt-key'
     )}</Destination0><AudioChannel>10</AudioChannel><AudioChannel1>0</AudioChannel1><Source>1</Source></StreamingSetting>
 </StreamingSettings>
+<RecordingSettings><AudioChannel>10</AudioChannel><Channel>1</Channel></RecordingSettings>
+<RecordingSettings2><Channel>0</Channel></RecordingSettings2>
 <OutputsExternal><Overlay7>1</Overlay7></OutputsExternal>
 <OutputsExternal2><Overlay0>1</Overlay0><Overlay7>0</Overlay7></OutputsExternal2></XML>`;
 
@@ -598,6 +608,7 @@ describe('vMix autosave', () => {
             output: 2,
             output2Overlays: [1],
             youtubeKey: 'yt-key',
+            recordOutput: 2,
         });
     });
 });

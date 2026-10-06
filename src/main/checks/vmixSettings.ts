@@ -10,6 +10,7 @@ import path from 'path';
 //     <AudioChannel>  stream audio source: 0 = Master, 10 = Bus A
 //     <Source>        stream video source: 0 = Output 1, 1 = Output 2
 //     <Destination0..2> streams 1-3, escaped XML holding <URL> and <Stream>
+//   <RecordingSettings> (recorder 1) <Channel>: 0 = Output 1, 1 = Output 2
 //   <OutputsExternal2> (Output 2) <Overlay0>..<Overlay15>: 1 = overlay
 //     channel 1..16 shown on that output.
 
@@ -20,6 +21,8 @@ export interface VmixStreamSettings {
     output: number | null;
     // Overlay channels (1-based) shown on Output 2
     output2Overlays: number[] | null;
+    // 1-based output number recorder 1 records
+    recordOutput: number | null;
     // Stream key of the first YouTube destination
     youtubeKey: string | null;
 }
@@ -63,6 +66,12 @@ function youtubeKey(entry: string): string | null {
     return key ? key[1].trim() : null;
 }
 
+function recordOutput(xml: string): number | null {
+    const m = /<RecordingSettings>([\s\S]*?)<\/RecordingSettings>/.exec(xml);
+    const ch = m && field(m[1], 'Channel');
+    return ch === null || ch === undefined ? null : ch + 1;
+}
+
 export function parseStreamSettings(xml: string): VmixStreamSettings | null {
     const entry = selectedStream(xml);
     if (!entry) return null;
@@ -77,6 +86,7 @@ export function parseStreamSettings(xml: string): VmixStreamSettings | null {
         output: source === null ? null : source + 1,
         output2Overlays: output2Overlays(xml),
         youtubeKey: youtubeKey(entry),
+        recordOutput: recordOutput(xml),
     };
 }
 
