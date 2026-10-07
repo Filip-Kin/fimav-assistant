@@ -336,11 +336,21 @@ export default function VmixPage() {
         );
         ipcRenderer.sendMessage('vmix:getInputs', []);
         ipcRenderer.sendMessage('vmix:getComposite', []);
+        // Offseason AD: pre-fill the team count from FMS's rankings.
+        const offTeams = ipcRenderer.on(
+            'vmix:teamCount',
+            (n: number | null) => {
+                if (n) setTeamCount((cur) => cur ?? n);
+            }
+        );
+        if (display === 'customAd')
+            ipcRenderer.sendMessage('vmix:getTeamCount', []);
         return () => {
             offInputs();
             offComp();
+            offTeams();
         };
-    }, [compositeOpen]);
+    }, [compositeOpen, display]);
 
     const applyComposite = useCallback(() => {
         if (!cameraKey || !fmsKey) {

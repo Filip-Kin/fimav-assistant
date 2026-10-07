@@ -537,6 +537,26 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         }
     });
 
+    // Teams at the event, for the Offseason AD composite: the count of FMS's
+    // qualification rankings, the same list the display pre-fills from
+    // (audience-display getRankings). null when FMS does not answer.
+    ipcMain.on('vmix:getTeamCount', async (event) => {
+        let count: number | null = null;
+        try {
+            const rsp = await fetch(
+                'http://10.0.100.5/api/v1.0/audience/get/GetQualRankings',
+                { signal: AbortSignal.timeout(3000) }
+            );
+            const list = (await rsp.json()) as { teamNumber?: number }[];
+            if (Array.isArray(list))
+                count =
+                    list.filter((t) => (t?.teamNumber ?? 0) > 0).length || null;
+        } catch {
+            count = null;
+        }
+        event.reply('vmix:teamCount', count);
+    });
+
     ipcMain.on('vmix:getComposite', (event) => {
         event.reply('vmix:composite', store.get('vmixComposite'));
     });
