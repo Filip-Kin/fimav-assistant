@@ -546,10 +546,34 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // panX = (centerX-960)/960, panY = (540-centerY)/540.
     const FTC_COMPOSITE = { zoom: 0.475, panX: -0.401, panY: -0.1361 };
 
+    // The Offseason AD's alliance selection camera box, copied from its own
+    // vMix camera setup (audience-display packages/server/src/vmix.ts,
+    // boxRect): the team grid has one row per 7 teams, which sets where the
+    // camera area starts; the box is the 16:9 rectangle centred in it, in the
+    // display's 1920x1080 space. Returned as the composite's zoom/pan.
+    const customAdComposite = (teamCount: number) => {
+        const rankRows = Math.max(1, Math.ceil(Math.max(1, teamCount) / 7));
+        const camX = 56;
+        const camW = 1158;
+        const camY = 232 + 44 * rankRows;
+        const camH = 820 - 44 * rankRows;
+        const boxW = Math.min(camW, (camH * 16) / 9);
+        const cx = camX + camW / 2;
+        const cy = camY + camH / 2;
+        return {
+            zoom: boxW / 1920,
+            panX: (cx - 960) / 960,
+            panY: (540 - cy) / 540,
+        };
+    };
+
     ipcMain.on('vmix:applyComposite', async (event, [cfg]) => {
         try {
             const ftc = AutoAV.Instance.isFtc();
-            const geo = ftc ? FTC_COMPOSITE : cfg;
+            const customAd = !ftc && AutoAV.Instance.runsCustomAd();
+            let geo = cfg;
+            if (ftc) geo = FTC_COMPOSITE;
+            else if (customAd) geo = customAdComposite(Number(cfg.teamCount));
             await VmixService.Instance.CreateAllianceComposite(
                 cfg.fmsKey,
                 cfg.cameraKey,
@@ -557,9 +581,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
                 geo.panX,
                 geo.panY
             );
-            // Persist the FRC geometry (not the input keys, which vary per
-            // session). FTC's is fixed.
-            if (!ftc) {
+            // Persist the FMS geometry (not the input keys, which vary per
+            // session). FTC's is fixed; the Offseason AD's follows the team count.
+            if (!ftc && !customAd) {
                 store.set('vmixComposite', {
                     layer: cfg.layer,
                     zoom: cfg.zoom,

@@ -4,6 +4,7 @@ import {
     Card,
     Form,
     Input,
+    InputNumber,
     Modal,
     Select,
     Space,
@@ -211,6 +212,9 @@ export default function VmixPage() {
         { key: string; number: number; title: string; type: string }[]
     >([]);
     const [cameraKey, setCameraKey] = useState<string | undefined>();
+    // Offseason AD: its camera box sits under a team grid of one row per 7
+    // teams, so the composite needs the event's team count.
+    const [teamCount, setTeamCount] = useState<number | null>(null);
     const [fmsKey, setFmsKey] = useState<string | undefined>();
     const [comp, setComp] = useState({
         layer: 1,
@@ -343,11 +347,15 @@ export default function VmixPage() {
             message.error('Display and camera required');
             return;
         }
+        if (display === 'customAd' && !teamCount) {
+            message.error('Teams required');
+            return;
+        }
         window.electron?.ipcRenderer.sendMessage('vmix:applyComposite', [
-            { cameraKey, fmsKey, ...comp },
+            { cameraKey, fmsKey, ...comp, teamCount },
         ]);
         setCompositeOpen(false);
-    }, [cameraKey, fmsKey, comp]);
+    }, [cameraKey, fmsKey, comp, display, teamCount]);
 
     const reachable = !!status?.reachable;
     const event = status?.currentEvent;
@@ -588,6 +596,18 @@ export default function VmixPage() {
                                 }))}
                             />
                         </div>
+                        {display === 'customAd' && (
+                            <div>
+                                <Text>Teams</Text>
+                                <InputNumber
+                                    style={{ width: '100%' }}
+                                    min={1}
+                                    max={200}
+                                    value={teamCount}
+                                    onChange={(v) => setTeamCount(v ?? null)}
+                                />
+                            </div>
+                        )}
                         <div>
                             <Text>Main camera input</Text>
                             <Select
