@@ -57,6 +57,9 @@ export type AppConfig = {
     // uploader and Upload tab, the custom audience display, dead-time
     // cutting). Its own setting; file naming is separate (autoAv.fileNameMode).
     season: 'in-season' | 'off-season';
+    // Port Bitfocus Companion's web server listens on, on this machine
+    // (Companion's default is 8000; some AV machines run it elsewhere).
+    companionPort: number;
     // Stream checks: check id -> epoch ms until which "Ignore" holds (6 h).
     checks: { ignoredUntil: Record<string, number> };
     // FTC Live scorekeeper: where it is, which event, and the Bitfocus
@@ -212,6 +215,7 @@ export function createStore(): Store<AppConfig> {
             program: { type: 'string', default: 'auto' },
             frcAudienceDisplay: { type: 'string', default: 'fms' },
             season: { type: 'string', default: 'in-season' },
+            companionPort: { type: 'number', default: 8000 },
             checks: {
                 type: 'object',
                 properties: {

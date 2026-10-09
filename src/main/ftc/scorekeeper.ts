@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import log from 'electron-log';
 import { getStore } from '../store';
+import { companionUrl } from '../bitfocus';
 import {
     FTC_UPDATE_TYPES,
     FtcScorekeeperStatus,
@@ -27,8 +28,6 @@ import {
 // Each update is also a Bitfocus trigger: the Companion button mapped to
 // "<type>:<field>" is pressed, the same job the FMS audience display does for
 // FRC (FTC's official display cannot press Companion buttons).
-
-const COMPANION_URL = 'http://127.0.0.1:8000';
 
 // Ports FTC Live uses: 80 by default, 28080 when 80 is taken (Linux
 // launcher), 8080 on a Windows install next to FMS (which holds 80).
@@ -199,7 +198,7 @@ export default class FtcScorekeeper extends EventEmitter {
         const loc = triggers[`${update.type}:${update.field}`];
         if (!loc) return;
         fetch(
-            `${COMPANION_URL}/api/location/${loc.page}/${loc.row}/${loc.column}/press`,
+            `${companionUrl()}/api/location/${loc.page}/${loc.row}/${loc.column}/press`,
             { method: 'POST', signal: AbortSignal.timeout(3000) }
         ).catch((e) =>
             logger.warn(`Companion press for ${update.type} failed`, e.message)

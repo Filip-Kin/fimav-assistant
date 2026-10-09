@@ -64,7 +64,7 @@ jest.mock('../main/addons/audience-display', () => ({
     },
 }));
 jest.mock('../main/bitfocus', () => ({
-    COMPANION_URL: 'http://127.0.0.1:8000',
+    companionUrl: () => 'http://127.0.0.1:8000',
     CUSTOM_AD_URL: 'http://127.0.0.1:3001',
     readCustomAd: jest.fn(),
     readFmsAutomation: jest.fn(),

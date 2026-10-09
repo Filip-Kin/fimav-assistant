@@ -10,6 +10,7 @@ import {
     FmsAutomationConfig,
     matchActionDef,
 } from '../models/Bitfocus';
+import { getStore } from './store';
 
 // Bitfocus Companion + audience-display trigger access for the Bitfocus tab.
 //
@@ -26,8 +27,10 @@ import {
 const FMS_URL = 'http://10.0.100.5';
 
 // Companion runs on the AV machine itself, for FIM-AV and for the FMS audience
-// display alike.
-export const COMPANION_URL = 'http://127.0.0.1:8000';
+// display alike, on the port set in Settings (Companion's default 8000).
+export function companionUrl(): string {
+    return `http://127.0.0.1:${getStore().get('companionPort', 8000)}`;
+}
 
 // The custom audience display is run by AudienceDisplayAddon on this machine.
 export const CUSTOM_AD_URL = 'http://127.0.0.1:3001';
@@ -423,7 +426,7 @@ export async function saveFmsAutomation(
         ...primary.ConfigValue,
         AutomationConfig: {
             ...automation,
-            BitfocusIntegrationAddress: COMPANION_URL,
+            BitfocusIntegrationAddress: companionUrl(),
         },
     };
     const save = await fetch(

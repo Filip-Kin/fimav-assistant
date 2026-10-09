@@ -39,7 +39,7 @@ import { getCurrentEvent } from './util';
 import startStatusApi from './api/server';
 import {
     clearCompanionButton,
-    COMPANION_URL,
+    companionUrl,
     CUSTOM_AD_URL,
     readCompanionLayout,
     readCustomAd,
@@ -758,12 +758,12 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     };
 
     ipcMain.on('bitfocus:getLayout', (event) =>
-        bitfocusReply(event, 'layout', () => readCompanionLayout(COMPANION_URL))
+        bitfocusReply(event, 'layout', () => readCompanionLayout(companionUrl()))
     );
 
     ipcMain.on('bitfocus:saveButton', (event, [edit]) =>
         bitfocusReply(event, 'saveButton', async () => {
-            const url = COMPANION_URL;
+            const url = companionUrl();
             await saveCompanionButton(url, edit);
             return readCompanionLayout(url);
         })
@@ -771,7 +771,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     ipcMain.on('bitfocus:clearButton', (event, [page, row, column]) =>
         bitfocusReply(event, 'clearButton', async () => {
-            const url = COMPANION_URL;
+            const url = companionUrl();
             await clearCompanionButton(url, page, row, column);
             return readCompanionLayout(url);
         })
@@ -871,7 +871,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             title: 'Companion',
             autoHideMenuBar: true,
         });
-        win.loadURL(COMPANION_URL);
+        win.loadURL(companionUrl());
     });
 
     // #endregion Bitfocus tab
@@ -1015,7 +1015,28 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         program: store.get('program', 'auto'),
         frcAudienceDisplay: store.get('frcAudienceDisplay', 'fms'),
         season: store.get('season', 'in-season'),
+        companionPort: store.get('companionPort', 8000),
     });
+
+    // The custom display presses Companion buttons through its own "Local"
+    // sink. When the port changes here, point that sink at the new port too,
+    // so one setting moves both. The display keeps the address it is given.
+    const pointCustomAdAtCompanion = async (oldUrl: string) => {
+        if (!AudienceDisplayAddon.Instance.isRunning()) return;
+        try {
+            const { config } = await readCustomAd(CUSTOM_AD_URL);
+            const url = companionUrl();
+            if (!config.sinks.some((k) => k.address === oldUrl)) return;
+            await saveCustomAd(CUSTOM_AD_URL, {
+                ...config,
+                sinks: config.sinks.map((k) =>
+                    k.address === oldUrl ? { ...k, address: url } : k
+                ),
+            });
+        } catch (e) {
+            log.warn('Custom AD Companion address not updated', e);
+        }
+    };
 
     ipcMain.on('app:getSettings', (event) => {
         event.reply('app:settings', appSettings());
@@ -1030,6 +1051,17 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         }
         if (['in-season', 'off-season'].includes(s?.season)) {
             store.set('season', s.season);
+        }
+        const port = Number(s?.companionPort);
+        if (
+            Number.isInteger(port) &&
+            port > 0 &&
+            port < 65536 &&
+            port !== store.get('companionPort', 8000)
+        ) {
+            const oldUrl = companionUrl();
+            store.set('companionPort', port);
+            pointCustomAdAtCompanion(oldUrl);
         }
         // Re-emits status, which starts or stops the custom display.
         AutoAV.Instance.applySettings();
