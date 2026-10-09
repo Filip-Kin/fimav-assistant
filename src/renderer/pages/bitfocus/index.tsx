@@ -715,7 +715,7 @@ export default function Bitfocus() {
             'autoav:status',
             (st: AutoAVStatus) => {
                 setProgram(st.program);
-                setOffSeason(st.fileNameMode === 'off-season');
+                setOffSeason(st.season === 'off-season');
                 setFrcAd(st.frcAudienceDisplay);
             }
         );

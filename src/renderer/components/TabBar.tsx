@@ -61,7 +61,7 @@ const tabs: TabDef[] = [
         icon: <YoutubeFilled />,
         isActive: (p) => p.startsWith('/upload'),
         // FTC events in either season; FRC off-season only.
-        showIf: (s) => s.program === 'ftc' || s.fileNameMode === 'off-season',
+        showIf: (s) => s.program === 'ftc' || s.season === 'off-season',
     },
     {
         key: '/audiencedisplay',
@@ -69,7 +69,7 @@ const tabs: TabDef[] = [
         icon: <DesktopOutlined />,
         isActive: (p) => p.startsWith('/audiencedisplay'),
         // The custom audience display is FRC off-season only.
-        showIf: (s) => s.program === 'frc' && s.fileNameMode === 'off-season',
+        showIf: (s) => s.program === 'frc' && s.season === 'off-season',
     },
 ];
 

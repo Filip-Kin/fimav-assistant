@@ -95,6 +95,7 @@ export default class AutoAV {
         saveFolder: null,
         fileNameMode: 'in-season',
         fileNameModeForced: false,
+        season: 'in-season',
         ftcConnected: false,
         program: 'frc',
         programDetected: null,
@@ -821,10 +822,12 @@ export default class AutoAV {
         return this.isFtc() || this.isOffSeason();
     }
 
-    // Off-season mode turns on the off-season-only features: the YouTube
-    // uploader, the Upload tab and dead-time cutting.
+    // Off-season turns on the off-season-only features: the YouTube uploader
+    // and Upload tab, the custom audience display and dead-time cutting. Set
+    // in Settings, on its own: file naming does not decide it.
+    // eslint-disable-next-line class-methods-use-this
     public isOffSeason(): boolean {
-        return this.effectiveFileNameMode() === 'off-season';
+        return getStore().get('season', 'in-season') === 'off-season';
     }
 
     // Build and broadcast the current status snapshot
@@ -862,6 +865,7 @@ export default class AutoAV {
               }
             : null;
         this.status.fileNameMode = this.effectiveFileNameMode();
+        this.status.season = this.isOffSeason() ? 'off-season' : 'in-season';
         this.status.frcAudienceDisplay =
             store.get('frcAudienceDisplay', 'fms') === 'customAd'
                 ? 'customAd'

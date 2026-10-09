@@ -1032,6 +1032,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     const appSettings = () => ({
         program: store.get('program', 'auto'),
         frcAudienceDisplay: store.get('frcAudienceDisplay', 'fms'),
+        season: store.get('season', 'in-season'),
     });
 
     ipcMain.on('app:getSettings', (event) => {
@@ -1044,6 +1045,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         }
         if (['fms', 'customAd'].includes(s?.frcAudienceDisplay)) {
             store.set('frcAudienceDisplay', s.frcAudienceDisplay);
+        }
+        if (['in-season', 'off-season'].includes(s?.season)) {
+            store.set('season', s.season);
         }
         // Re-emits status, which starts or stops the custom display.
         AutoAV.Instance.applySettings();
