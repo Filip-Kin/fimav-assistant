@@ -30,6 +30,9 @@ export default function GlobalSettings() {
     const [detected, setDetected] =
         useState<AutoAVStatus['programDetected']>(null);
     const [frcAd, setFrcAd] = useState<'fms' | 'customAd'>('fms');
+    const [season, setSeason] = useState<'in-season' | 'off-season'>(
+        'in-season'
+    );
     const [address, setAddress] = useState('');
     const [ftcStatus, setFtcStatus] = useState<FtcScorekeeperStatus | null>(
         null
@@ -54,9 +57,11 @@ export default function GlobalSettings() {
                 (s: {
                     program: ProgramSetting;
                     frcAudienceDisplay: 'fms' | 'customAd';
+                    season: 'in-season' | 'off-season';
                 }) => {
                     setProgram(s.program);
                     setFrcAd(s.frcAudienceDisplay);
+                    setSeason(s.season);
                 }
             ),
             ipcRenderer.on('ftc:settings', (s: FtcSettings) => {
@@ -92,7 +97,11 @@ export default function GlobalSettings() {
     };
 
     const save = () => {
-        send('app:saveSettings', { program, frcAudienceDisplay: frcAd });
+        send('app:saveSettings', {
+            program,
+            frcAudienceDisplay: frcAd,
+            season,
+        });
         if (program !== 'frc') {
             send('ftc:saveSettings', { address });
         }
@@ -130,7 +139,17 @@ export default function GlobalSettings() {
                         ]}
                     />
                 </Form.Item>
-                {effective !== 'ftc' && (
+                <Form.Item label="Season">
+                    <Select
+                        value={season}
+                        onChange={setSeason}
+                        options={[
+                            { value: 'in-season', label: 'In-season' },
+                            { value: 'off-season', label: 'Off-season' },
+                        ]}
+                    />
+                </Form.Item>
+                {effective !== 'ftc' && season === 'off-season' && (
                     <Form.Item label="FRC audience display">
                         <Select
                             value={frcAd}

@@ -34,9 +34,11 @@ export interface AutoAVStatus {
     // Folder recordings are filed into (the effective event folder)
     saveFolder: string | null;
     // Effective file naming mode for this event. Also the season switch: the
-    // off-season-only features (YouTube uploader, Upload tab, dead-time cutting)
-    // exist only in off-season mode.
+    // How match files are named; nothing else.
     fileNameMode: FileNameMode;
+    // In-season or off-season (Settings): the off-season-only features
+    // (YouTube uploader, Upload tab, custom display, dead-time cutting).
+    season: 'in-season' | 'off-season';
     // True when the event itself sets the mode (official = in-season,
     // unofficial = off-season), so the stored fallback setting does nothing.
     fileNameModeForced: boolean;

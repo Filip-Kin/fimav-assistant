@@ -53,6 +53,10 @@ export type AppConfig = {
     // decides whether the custom display runs, which display the vMix input
     // shows and whose Bitfocus triggers the tab edits.
     frcAudienceDisplay: 'fms' | 'customAd';
+    // In-season or off-season event: turns the off-season features on (the
+    // uploader and Upload tab, the custom audience display, dead-time
+    // cutting). Its own setting; file naming is separate (autoAv.fileNameMode).
+    season: 'in-season' | 'off-season';
     // Stream checks: check id -> epoch ms until which "Ignore" holds (6 h).
     checks: { ignoredUntil: Record<string, number> };
     // FTC Live scorekeeper: where it is, which event, and the Bitfocus
@@ -207,6 +211,7 @@ export function createStore(): Store<AppConfig> {
             },
             program: { type: 'string', default: 'auto' },
             frcAudienceDisplay: { type: 'string', default: 'fms' },
+            season: { type: 'string', default: 'in-season' },
             checks: {
                 type: 'object',
                 properties: {

@@ -416,7 +416,7 @@ export default function AutoAVPage() {
         : !!status?.fmsConnected;
     const working = fieldConnected && !!status?.vmix.reachable;
     // Dead-time cutting (and its settings switch) is FRC off-season only.
-    const offSeason = !ftc && status?.fileNameMode === 'off-season';
+    const offSeason = !ftc && status?.season === 'off-season';
 
     const columns: ColumnsType<MatchRecord> = [
         {
