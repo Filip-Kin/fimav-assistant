@@ -3,6 +3,7 @@ import {
     Button,
     Form,
     Input,
+    InputNumber,
     Modal,
     Select,
     Space,
@@ -33,6 +34,7 @@ export default function GlobalSettings() {
     const [season, setSeason] = useState<'in-season' | 'off-season'>(
         'in-season'
     );
+    const [companionPort, setCompanionPort] = useState(8000);
     const [address, setAddress] = useState('');
     const [ftcStatus, setFtcStatus] = useState<FtcScorekeeperStatus | null>(
         null
@@ -58,10 +60,12 @@ export default function GlobalSettings() {
                     program: ProgramSetting;
                     frcAudienceDisplay: 'fms' | 'customAd';
                     season: 'in-season' | 'off-season';
+                    companionPort: number;
                 }) => {
                     setProgram(s.program);
                     setFrcAd(s.frcAudienceDisplay);
                     setSeason(s.season);
+                    setCompanionPort(s.companionPort);
                 }
             ),
             ipcRenderer.on('ftc:settings', (s: FtcSettings) => {
@@ -101,6 +105,7 @@ export default function GlobalSettings() {
             program,
             frcAudienceDisplay: frcAd,
             season,
+            companionPort,
         });
         if (program !== 'frc') {
             send('ftc:saveSettings', { address });
@@ -164,6 +169,15 @@ export default function GlobalSettings() {
                         />
                     </Form.Item>
                 )}
+                <Form.Item label="Companion port">
+                    <InputNumber
+                        min={1}
+                        max={65535}
+                        precision={0}
+                        value={companionPort}
+                        onChange={(v) => v != null && setCompanionPort(v)}
+                    />
+                </Form.Item>
                 {program !== 'frc' && (
                     <Form.Item label="FTC scorekeeper">
                         <Space.Compact style={{ width: '100%' }}>

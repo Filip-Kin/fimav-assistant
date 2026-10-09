@@ -10,7 +10,7 @@ import FtcScorekeeper from '../ftc/scorekeeper';
 import YoutubeUploaderAddon from '../addons/upload-helper';
 import AudienceDisplayAddon from '../addons/audience-display';
 import {
-    COMPANION_URL,
+    companionUrl,
     CUSTOM_AD_URL,
     readCustomAd,
     readFmsAutomation,
@@ -169,7 +169,7 @@ export default function startStatusApi(sources: StatusApiSources) {
         companion: async () => {
             let reachable = false;
             try {
-                const res = await fetch(`${COMPANION_URL}/`, {
+                const res = await fetch(`${companionUrl()}/`, {
                     signal: AbortSignal.timeout(2000),
                 });
                 reachable = res.status < 500;
@@ -195,7 +195,7 @@ export default function startStatusApi(sources: StatusApiSources) {
             }
             return {
                 reachable,
-                url: COMPANION_URL,
+                url: companionUrl(),
                 triggerSource,
                 automations,
             };
