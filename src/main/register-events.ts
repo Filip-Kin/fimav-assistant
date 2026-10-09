@@ -11,6 +11,7 @@ import log from 'electron-log';
 import HWPingResponse, { IpConfigState } from 'models/HWPingResponse';
 import { EquipmentLogCategory, EquipmentLogType } from '../models/EquipmentLog';
 import VmixService from '../services/VmixService';
+import ObsService from '../services/ObsService';
 import HWCheck, { enableDhcp } from './events/HWCheck';
 import Checks from './checks/engine';
 import Alerts from './events/Alerts';
@@ -447,8 +448,24 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         invoke('GetStreamInfo');
     });
 
+    // OBS build: when OBS answers, the add-input buttons add browser sources
+    // to OBS instead of vMix inputs.
+    const obsUp = async () => (await ObsService.Instance.Status()).reachable;
+
     ipcMain.on('vmix:addLiveCaptionsInput', async (event) => {
         try {
+            if (await obsUp()) {
+                await ObsService.Instance.AddBrowserSource(
+                    'http://127.0.0.1:3000/',
+                    'Live Captions'
+                );
+                event.reply('vmix:action', {
+                    ok: true,
+                    action: 'addLiveCaptionsInput',
+                    message: 'Added Live Captions source to OBS',
+                });
+                return;
+            }
             await VmixService.Instance.AddLiveCaptionsInput();
             event.reply('vmix:action', {
                 ok: true,
@@ -512,6 +529,15 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     ipcMain.on('vmix:addAudienceDisplayInput', async (event) => {
         try {
             const { url, name } = audienceDisplayInput();
+            if (await obsUp()) {
+                await ObsService.Instance.AddBrowserSource(url, name);
+                event.reply('vmix:action', {
+                    ok: true,
+                    action: 'addAudienceDisplayInput',
+                    message: `Added ${name} source to OBS`,
+                });
+                return;
+            }
             await VmixService.Instance.AddAudienceDisplayInput(url, name);
             event.reply('vmix:action', {
                 ok: true,

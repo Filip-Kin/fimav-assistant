@@ -147,6 +147,74 @@ export default class ObsService {
         }
     }
 
+    // The vMix tab's "Add ... input" buttons, for OBS: a browser source in the
+    // scene on program, at the canvas size and fitted to it. A source of that
+    // name already in OBS is reused (put in this scene, its URL updated)
+    // rather than made twice, which OBS would refuse anyway.
+    async AddBrowserSource(url: string, name: string): Promise<void> {
+        const scene = await obsRequest('GetCurrentProgramScene');
+        const sceneName: string =
+            scene.currentProgramSceneName ?? scene.sceneName;
+        const video = await obsRequest('GetVideoSettings');
+        const width: number = video.baseWidth ?? 1920;
+        const height: number = video.baseHeight ?? 1080;
+        const { inputs } = await obsRequest('GetInputList');
+        const exists = (inputs ?? []).some(
+            (i: { inputName: string }) => i.inputName === name
+        );
+        let sceneItemId: number;
+        if (exists) {
+            await obsRequest('SetInputSettings', {
+                inputName: name,
+                inputSettings: { url, width, height },
+            });
+            const { sceneItems } = await obsRequest('GetSceneItemList', {
+                sceneName,
+            });
+            const inScene = (sceneItems ?? []).find(
+                (s: { sourceName: string }) => s.sourceName === name
+            );
+            sceneItemId = inScene
+                ? inScene.sceneItemId
+                : (
+                      await obsRequest('CreateSceneItem', {
+                          sceneName,
+                          sourceName: name,
+                      })
+                  ).sceneItemId;
+        } else {
+            sceneItemId = (
+                await obsRequest('CreateInput', {
+                    sceneName,
+                    inputName: name,
+                    inputKind: 'browser_source',
+                    inputSettings: {
+                        url,
+                        width,
+                        height,
+                        // Page audio (the AD's sounds) goes through OBS's
+                        // mixer like any other source.
+                        reroute_audio: true,
+                    },
+                    sceneItemEnabled: true,
+                })
+            ).sceneItemId;
+        }
+        await obsRequest('SetSceneItemTransform', {
+            sceneName,
+            sceneItemId,
+            sceneItemTransform: {
+                positionX: 0,
+                positionY: 0,
+                alignment: 5, // top left
+                boundsType: 'OBS_BOUNDS_SCALE_INNER',
+                boundsAlignment: 0,
+                boundsWidth: width,
+                boundsHeight: height,
+            },
+        });
+    }
+
     // eslint-disable-next-line class-methods-use-this
     getUrl(): string {
         return readObsConfig().url;

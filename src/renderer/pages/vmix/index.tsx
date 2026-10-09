@@ -194,6 +194,9 @@ export default function VmixPage() {
     const [display, setDisplay] = useState<
         AutoAVStatus['audienceDisplay'] | null
     >(null);
+    // OBS build: AutoAV's "vmix" status is OBS's, and the add-input buttons
+    // go to OBS when it answers.
+    const [obsReachable, setObsReachable] = useState(false);
     const oneShot = useOneShot();
 
     // FRC or FTC decides which audience display input the tab adds.
@@ -203,6 +206,7 @@ export default function VmixPage() {
         const off = ipcRenderer.on('autoav:status', (s: AutoAVStatus) => {
             setProgram(s.program);
             setDisplay(s.audienceDisplay);
+            setObsReachable(!!s.vmix?.reachable);
         });
         ipcRenderer.sendMessage('autoav:getState', []);
         return off;
@@ -534,7 +538,7 @@ export default function VmixPage() {
                 <Space wrap>
                     <Button
                         icon={<AudioOutlined />}
-                        disabled={!reachable}
+                        disabled={!reachable && !obsReachable}
                         onClick={() => send('vmix:addLiveCaptionsInput')}
                     >
                         Add Live Captions input
@@ -542,7 +546,7 @@ export default function VmixPage() {
                     {program && (
                         <Button
                             icon={<DesktopOutlined />}
-                            disabled={!reachable}
+                            disabled={!reachable && !obsReachable}
                             onClick={() => send('vmix:addAudienceDisplayInput')}
                         >
                             {ADD_DISPLAY_LABEL[display ?? 'fms']}
