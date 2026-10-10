@@ -233,15 +233,22 @@ export default class AutoAV {
                         // the card explanation lives in the dead time we'd remove.
                         if (mayCut && hasCard !== true) {
                             // Loudness is measured once the cut is made.
-                            this.queueCut(saveFolder, recordId);
+                            this.queueCut(saveFolder, recordId, {
+                                claimed: true,
+                            });
                         } else {
                             if (mayCut) {
                                 // A carded match is never cut: the raw file is
                                 // final after all, so release it.
-                                const released = updateMatch(saveFolder, recordId, {
-                                    processing: { state: 'unprocessed' },
-                                });
-                                if (released) this.emitter.emit('match', released);
+                                const released = updateMatch(
+                                    saveFolder,
+                                    recordId,
+                                    {
+                                        processing: { state: 'unprocessed' },
+                                    }
+                                );
+                                if (released)
+                                    this.emitter.emit('match', released);
                             }
                             queueLoudness(saveFolder, recordId, filename, (r) =>
                                 this.emitter.emit('match', r)
@@ -1120,11 +1127,15 @@ export default class AutoAV {
         }
         records.forEach((rec) => {
             const ps = rec.processing?.state;
-            if ((ps !== 'queued' && ps !== 'processing') || !rec.filePath) return;
+            if ((ps !== 'queued' && ps !== 'processing') || !rec.filePath)
+                return;
             if (rec.ftc) return;
             try {
                 const { name, ext } = path.parse(rec.filePath);
-                const original = path.join(originalsDir, path.basename(rec.filePath));
+                const original = path.join(
+                    originalsDir,
+                    path.basename(rec.filePath)
+                );
                 // Partial cuts: the current temp spot and the one older builds used.
                 [
                     path.join(originalsDir, `${name}.cutting${ext}`),
@@ -1144,17 +1155,30 @@ export default class AutoAV {
                     fs.renameSync(original, rec.filePath);
                 }
                 if (!fs.existsSync(rec.filePath)) return;
-                this.logRecording(`Recovering interrupted cut of ${path.basename(rec.filePath)}`);
-                if (this.isFrcOffSeason() && getStore().get('autoAv.autoCut', false)) {
-                    this.queueCut(folder, rec.id);
+                this.logRecording(
+                    `Recovering interrupted cut of ${path.basename(
+                        rec.filePath
+                    )}`
+                );
+                if (
+                    this.isFrcOffSeason() &&
+                    getStore().get('autoAv.autoCut', false)
+                ) {
+                    this.queueCut(folder, rec.id, { claimed: true });
                 } else {
                     const released = updateMatch(folder, rec.id, {
-                        processing: { state: 'error', error: 'cut interrupted' },
+                        processing: {
+                            state: 'error',
+                            error: 'cut interrupted',
+                        },
                     });
                     if (released) this.emitter.emit('match', released);
                 }
             } catch (e) {
-                this.logs?.err.warn(`Could not recover cut for ${rec.fileName}`, e);
+                this.logs?.err.warn(
+                    `Could not recover cut for ${rec.fileName}`,
+                    e
+                );
             }
         });
     }
@@ -1167,7 +1191,14 @@ export default class AutoAV {
     // restores the original and only marks the record. Refuses carded matches so
     // their explanation (which lives in the dead time) is preserved. Used by both
     // the auto-cut path and the manual Cut button.
-    public queueCut(folder: string, recordId: string): void {
+    // `claimed`: the caller already marked this record queued (the hold set at
+    // filing, or recovery of an interrupted cut) and is asking for the cut
+    // itself, so the already-queued guard below must not refuse it.
+    public queueCut(
+        folder: string,
+        recordId: string,
+        opts: { claimed?: boolean } = {}
+    ): void {
         const rec = getMatch(folder, recordId);
         if (!rec) return;
         if (rec.ftc) {
@@ -1184,7 +1215,8 @@ export default class AutoAV {
             return;
         }
         const state = rec.processing?.state;
-        if (state === 'queued' || state === 'processing') return;
+        if (!opts.claimed && (state === 'queued' || state === 'processing'))
+            return;
 
         const mainPath = rec.filePath;
         const originalsDir = path.join(folder, 'Originals');
