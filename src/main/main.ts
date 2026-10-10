@@ -39,8 +39,11 @@ let mainWindow: BrowserWindow | null = null;
 let appIsQuitting = false;
 const isDebug = isDebugFn();
 
-// Addons
-const addons = new Addons().init();
+// Addons. Only the first instance runs them: a second launch quits at once
+// and must not touch the first one's recordings (cut recovery), processes or
+// ports, so the lock is taken before anything starts.
+const instanceLock = app.requestSingleInstanceLock();
+const addons = instanceLock ? new Addons().init() : null;
 
 if (process.env.NODE_ENV === 'production') {
     const sourceMapSupport = require('source-map-support');
@@ -140,7 +143,7 @@ const createWindow = async () => {
         return true;
     });
 
-    const menuBuilder = new MenuBuilder(mainWindow, addons);
+    const menuBuilder = new MenuBuilder(mainWindow, addons as Addons);
     menuBuilder.buildMenu();
     // The Checks menu item shows how many checks are failing.
     Checks.Instance.on('checks', (list: CheckResult[]) =>
@@ -188,7 +191,10 @@ app.on('before-quit', (event) => {
     (async () => {
         try {
             await Promise.race([
-                addons.stop(),
+                // A second instance started nothing, so it stops nothing (the
+                // stops kill addon processes by name, which are the first
+                // instance's).
+                addons ? addons.stop() : Promise.resolve(),
                 new Promise((resolve) => {
                     setTimeout(resolve, 8000);
                 }),
@@ -201,7 +207,6 @@ app.on('before-quit', (event) => {
     })();
 });
 
-const instanceLock = app.requestSingleInstanceLock();
 if (!instanceLock) {
     // This is a second instance, we only want one at a time
     if (isDebug)

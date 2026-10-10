@@ -51,6 +51,8 @@ export type AutoAVEvent =
     // match start sound is sampled from the start, not up to 5 s late.
     | 'play';
 
+const stateOf = (r: MatchRecord) => r.processing?.state;
+
 export default class AutoAV {
     private static instance: AutoAV;
 
@@ -112,6 +114,16 @@ export default class AutoAV {
     // stops (we don't know the destination folder for its manifest until then),
     // so we hold it here and write it once the file is filed.
     private currentRecordObj: MatchRecord | null = null;
+
+    // Cuts this process has queued or is running, by folder|record id.
+    private cutJobs = new Set<string>();
+
+    // Matches being filed right now (written "queued", cut not asked for yet),
+    // by folder|record id. Recovery leaves them alone.
+    private filing = new Set<string>();
+
+    // Recovery runs once per folder this process points at (and again on start).
+    private recovering = false;
 
     // Periodic vMix reachability poll
     private vmixPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -179,6 +191,10 @@ export default class AutoAV {
                     this.emitStatus();
                 }
 
+                // Set once the match is written to its folder's manifest: an
+                // error after that must not overwrite the good record.
+                let filed = false;
+
                 // Attempt to rename the file
                 try {
                     const filename = await attemptRename(
@@ -215,44 +231,90 @@ export default class AutoAV {
                                 ? { processing: { state: 'queued' as const } }
                                 : {}),
                         };
-                        upsertMatch(saveFolder, record);
-                        this.emitter.emit('match', record);
-                        this.emitStatus();
+                        // From here until its cut is queued (or it is released)
+                        // this match is ours: recovery must not take it, even
+                        // though the record says "queued" and no cut job holds
+                        // it yet (the metadata fetch below can take seconds).
+                        const fileKey = AutoAV.cutJobKey(saveFolder, recordId);
+                        if (mayCut) this.filing.add(fileKey);
+                        try {
+                            upsertMatch(saveFolder, record);
+                            filed = true;
+                            this.emitter.emit('match', record);
+                            this.emitStatus();
 
-                        // Capture teams + cards first, so the card rule below can
-                        // be honoured. Best-effort: a failed fetch never risks
-                        // the file, and only means we can't confirm cards.
-                        const hasCard = await this.captureMetadata(
-                            saveFolder,
-                            recordId,
-                            matchData
-                        );
+                            // Capture teams + cards first, so the card rule below can
+                            // be honoured. Best-effort: a failed fetch never risks
+                            // the file, and only means we can't confirm cards.
+                            const hasCard = await this.captureMetadata(
+                                saveFolder,
+                                recordId,
+                                matchData
+                            );
 
-                        // Auto-cut the dead time in place (original moved to
-                        // Originals/), if enabled. Never cut a match with a card:
-                        // the card explanation lives in the dead time we'd remove.
-                        if (mayCut && hasCard !== true) {
-                            // Loudness is measured once the cut is made.
-                            this.queueCut(saveFolder, recordId, {
-                                claimed: true,
-                            });
-                        } else {
-                            if (mayCut) {
-                                // A carded match is never cut: the raw file is
-                                // final after all, so release it.
-                                const released = updateMatch(
+                            // Auto-cut the dead time in place (original moved to
+                            // Originals/), if enabled. Never cut a match with a card:
+                            // the card explanation lives in the dead time we'd remove.
+                            if (mayCut && hasCard !== true) {
+                                // Loudness is measured once the cut is made.
+                                this.queueCut(saveFolder, recordId, {
+                                    claimed: true,
+                                });
+                            } else {
+                                if (mayCut) {
+                                    // A carded match is never cut: the raw file is
+                                    // final after all, so release it.
+                                    const released = updateMatch(
+                                        saveFolder,
+                                        recordId,
+                                        {
+                                            processing: {
+                                                state: 'unprocessed',
+                                            },
+                                        }
+                                    );
+                                    if (released)
+                                        this.emitter.emit('match', released);
+                                }
+                                queueLoudness(
                                     saveFolder,
                                     recordId,
-                                    {
-                                        processing: { state: 'unprocessed' },
-                                    }
+                                    filename,
+                                    (r) => this.emitter.emit('match', r)
                                 );
-                                if (released)
-                                    this.emitter.emit('match', released);
                             }
-                            queueLoudness(saveFolder, recordId, filename, (r) =>
-                                this.emitter.emit('match', r)
-                            );
+                        } finally {
+                            this.filing.delete(fileKey);
+                            // Held as queued but no cut followed (an error on
+                            // the way): release the raw video rather than leave
+                            // the uploader holding it until a restart.
+                            const releaseIfStuck = () => {
+                                const left = getMatch(saveFolder, recordId);
+                                if (
+                                    left?.processing?.state === 'queued' &&
+                                    !this.cutJobs.has(fileKey) &&
+                                    !this.filing.has(fileKey)
+                                ) {
+                                    const released = updateMatch(
+                                        saveFolder,
+                                        recordId,
+                                        {
+                                            processing: {
+                                                state: 'error',
+                                                error: 'cut not started',
+                                            },
+                                        }
+                                    );
+                                    if (released)
+                                        this.emitter.emit('match', released);
+                                }
+                                return left;
+                            };
+                            // An unreadable manifest (locked for a moment by
+                            // antivirus) reads as no record: look again shortly.
+                            if (mayCut && !releaseIfStuck()) {
+                                setTimeout(releaseIfStuck, 2000);
+                            }
                         }
                     }
                 } catch (err: any) {
@@ -263,8 +325,11 @@ export default class AutoAV {
                     );
                     // The file was never filed, so there's no folder/manifest to
                     // write to. Persist the error record if we have a folder,
-                    // else just surface it live.
-                    if (recordId && recordObj) {
+                    // else just surface it live. Once filed, the record in the
+                    // manifest is right (the error came later, e.g. a listener
+                    // at quit): replacing it with this one, which has no file
+                    // path, would stop the match from ever uploading.
+                    if (recordId && recordObj && !filed) {
                         const errored: MatchRecord = {
                             ...recordObj,
                             status: 'error',
@@ -941,9 +1006,14 @@ export default class AutoAV {
             if (last) base = path.dirname(last);
             else if (this.vmixRecordFolder) base = this.vmixRecordFolder;
         }
+        const folderBefore = this.status.saveFolder;
         this.status.saveFolder = base
             ? path.join(base, eventFolderName(effectiveEvent))
             : null;
+        // A new event folder may hold cuts a previous run never finished.
+        if (this.status.running && this.status.saveFolder !== folderBefore) {
+            this.recoverInterruptedCuts(this.status.saveFolder);
+        }
 
         this.emitter.emit('status', this.getStatus());
     }
@@ -1111,76 +1181,123 @@ export default class AutoAV {
         }
     }
 
-    // No cut runs at startup, so a record still marked queued or processing was
-    // cut off by the app closing (an install mid-cut left Q4 at DCC with no
-    // video in the event folder). Put the original back where the uploader
-    // expects it, drop the partial cut, and cut it again; with auto-cut off,
-    // mark it errored so the raw video is released for upload.
+    // A record still marked queued or processing that this process is not
+    // cutting was cut off by the app closing (an install mid-cut left Q4 at
+    // DCC with no video in the event folder, and the 11:30 build left Q8 on
+    // held as queued). Put the original back where the uploader expects it,
+    // drop the partial cut, and cut it again; with auto-cut off, release the
+    // raw video as an error. Runs on start and whenever the event folder
+    // changes. Never guesses: if it cannot tell which file is the original,
+    // it leaves every file where it is and marks the record errored.
     private recoverInterruptedCuts(folder: string | null) {
-        if (!folder || !fs.existsSync(folder)) return;
-        const originalsDir = path.join(folder, 'Originals');
-        let records: MatchRecord[] = [];
+        if (!folder || !fs.existsSync(folder) || this.recovering) return;
+        this.recovering = true;
         try {
-            records = listMatches(folder);
-        } catch {
+            const originalsDir = path.join(folder, 'Originals');
+            let records: MatchRecord[] = [];
+            try {
+                records = listMatches(folder);
+            } catch {
+                return;
+            }
+            records.forEach((rec) => {
+                const ps = rec.processing?.state;
+                if (ps !== 'queued' && ps !== 'processing') return;
+                if (rec.ftc || !(rec.fileName || rec.filePath)) return;
+                const key = AutoAV.cutJobKey(folder, rec.id);
+                if (this.cutJobs.has(key) || this.filing.has(key)) return;
+                try {
+                    this.recoverOne(folder, originalsDir, rec);
+                } catch (e) {
+                    this.logs?.err.warn(
+                        `Could not recover cut for ${rec.fileName}`,
+                        e
+                    );
+                }
+            });
+        } finally {
+            this.recovering = false;
+        }
+    }
+
+    private recoverOne(folder: string, originalsDir: string, rec: MatchRecord) {
+        const fileName = rec.fileName || path.basename(rec.filePath as string);
+        const main = path.join(folder, fileName);
+        const { name, ext } = path.parse(fileName);
+        // Partial cuts: the current temp spot and the one older builds used.
+        [
+            path.join(originalsDir, `${name}.cutting${ext}`),
+            path.join(folder, `${name}.cutting${ext}`),
+        ].forEach((p) => fs.rmSync(p, { force: true }));
+
+        // Which file in Originals is this match's raw recording: the one the
+        // cut recorded, else the plain name only when no "(n)" copy exists.
+        const stored = rec.processing?.originalPath
+            ? path.join(
+                  originalsDir,
+                  path.basename(rec.processing.originalPath)
+              )
+            : '';
+        const sameName = fs.existsSync(originalsDir)
+            ? fs
+                  .readdirSync(originalsDir)
+                  .filter(
+                      (f) =>
+                          f === `${name}${ext}` ||
+                          (f.startsWith(`${name} (`) && f.endsWith(`)${ext}`))
+                  )
+            : [];
+        let original = '';
+        // A record that says where its original went (this build on) is
+        // only ever matched to that file; the same-name guess is for records
+        // from builds that did not store it.
+        if (stored) original = fs.existsSync(stored) ? stored : '';
+        else if (sameName.length === 1)
+            original = path.join(originalsDir, sameName[0]);
+
+        const markError = (why: string) => {
+            const r = updateMatch(folder, rec.id, {
+                processing: { state: 'error', error: why },
+            });
+            if (r) this.emitter.emit('match', r);
+            this.logRecording(`Cut of ${fileName} not recovered: ${why}`);
+        };
+
+        const haveMain = fs.existsSync(main);
+        if (!haveMain) {
+            if (!original) {
+                markError(
+                    sameName.length > 1
+                        ? 'interrupted cut; several originals, left in Originals for a person to pick'
+                        : 'interrupted cut; no video found'
+                );
+                return;
+            }
+            fs.renameSync(original, main);
+        } else if (stateOf(rec) === 'processing' && original) {
+            // "processing" is written just before the raw moves to Originals,
+            // so the video in place plus its original in Originals means the
+            // cut was put in place and only the done state never got written.
+            // ("original" is the stored path, or the only same-name file.)
+            const done = updateMatch(folder, rec.id, {
+                processing: {
+                    state: 'done',
+                    outputPath: main,
+                    originalPath: original,
+                },
+            });
+            if (done) this.emitter.emit('match', done);
             return;
         }
-        records.forEach((rec) => {
-            const ps = rec.processing?.state;
-            if ((ps !== 'queued' && ps !== 'processing') || !rec.filePath)
-                return;
-            if (rec.ftc) return;
-            try {
-                const { name, ext } = path.parse(rec.filePath);
-                const original = path.join(
-                    originalsDir,
-                    path.basename(rec.filePath)
-                );
-                // Partial cuts: the current temp spot and the one older builds used.
-                [
-                    path.join(originalsDir, `${name}.cutting${ext}`),
-                    path.join(folder, `${name}.cutting${ext}`),
-                ].forEach((p) => fs.rmSync(p, { force: true }));
-                const haveMain = fs.existsSync(rec.filePath);
-                const haveOriginal = fs.existsSync(original);
-                if (haveMain && haveOriginal) {
-                    // The cut was put in place but its state never written.
-                    const done = updateMatch(folder, rec.id, {
-                        processing: { state: 'done', outputPath: rec.filePath },
-                    });
-                    if (done) this.emitter.emit('match', done);
-                    return;
-                }
-                if (!haveMain && haveOriginal) {
-                    fs.renameSync(original, rec.filePath);
-                }
-                if (!fs.existsSync(rec.filePath)) return;
-                this.logRecording(
-                    `Recovering interrupted cut of ${path.basename(
-                        rec.filePath
-                    )}`
-                );
-                if (
-                    this.isFrcOffSeason() &&
-                    getStore().get('autoAv.autoCut', false)
-                ) {
-                    this.queueCut(folder, rec.id, { claimed: true });
-                } else {
-                    const released = updateMatch(folder, rec.id, {
-                        processing: {
-                            state: 'error',
-                            error: 'cut interrupted',
-                        },
-                    });
-                    if (released) this.emitter.emit('match', released);
-                }
-            } catch (e) {
-                this.logs?.err.warn(
-                    `Could not recover cut for ${rec.fileName}`,
-                    e
-                );
-            }
-        });
+        this.logRecording(`Recovering interrupted cut of ${fileName}`);
+        if (this.isFrcOffSeason() && getStore().get('autoAv.autoCut', false)) {
+            this.queueCut(folder, rec.id, { claimed: true });
+        } else {
+            const released = updateMatch(folder, rec.id, {
+                processing: { state: 'error', error: 'cut interrupted' },
+            });
+            if (released) this.emitter.emit('match', released);
+        }
     }
 
     // Cut the dead time out of a recorded match in place: the original video is
@@ -1214,91 +1331,137 @@ export default class AutoAV {
             );
             return;
         }
+        // One cut per match at a time, whoever asks: recovery can run while
+        // this process is still cutting (Restart, the FMS reconnect restart),
+        // and a second cut of the same match would move the first cut's
+        // output over the raw recording.
+        const jobKey = AutoAV.cutJobKey(folder, recordId);
+        if (this.cutJobs.has(jobKey)) return;
         const state = rec.processing?.state;
         if (!opts.claimed && (state === 'queued' || state === 'processing'))
             return;
 
-        const mainPath = rec.filePath;
+        // The video lives in this folder under its file name; the stored
+        // filePath can be stale if the folder was moved.
+        const mainPath = path.join(
+            folder,
+            rec.fileName || path.basename(rec.filePath)
+        );
         const originalsDir = path.join(folder, 'Originals');
-        // A file of the same name already in Originals belongs to another
-        // match (an earlier event or test with the same name): never cut
-        // from it or replace it.
-        let originalPath = path.join(originalsDir, path.basename(mainPath));
-        const { name, ext } = path.parse(mainPath);
-        for (let n = 2; fs.existsSync(originalPath); n += 1) {
-            originalPath = path.join(originalsDir, `${name} (${n})${ext}`);
-        }
-        // ffmpeg writes here, inside Originals/ where the uploader never looks;
-        // the cut replaces mainPath only once complete.
-        const cutPath = path.join(originalsDir, `${name}.cutting${ext}`);
 
-        const queued = updateMatch(folder, recordId, {
-            processing: { state: 'queued' },
-        });
-        if (queued) this.emitter.emit('match', queued);
+        this.cutJobs.add(jobKey);
+        let queuedJob = false;
+        try {
+            const queued = updateMatch(folder, recordId, {
+                processing: { state: 'queued' },
+            });
+            if (queued) this.emitter.emit('match', queued);
 
-        enqueueCut(async () => {
-            let moved = false;
-            try {
-                if (!fs.existsSync(originalsDir)) {
-                    fs.mkdirSync(originalsDir, { recursive: true });
-                }
-                const started = updateMatch(folder, recordId, {
-                    processing: { state: 'processing' },
-                });
-                if (started) this.emitter.emit('match', started);
-                this.logRecording(`Cutting ${path.basename(mainPath)}`);
-
-                // Move the original aside, cut it into a temp file, then put
-                // the cut where the original was.
-                fs.renameSync(mainPath, originalPath);
-                moved = true;
-                await cutMatchVideo(originalPath, cutPath);
-                fs.renameSync(cutPath, mainPath);
-
-                const done = updateMatch(folder, recordId, {
-                    processing: { state: 'done', outputPath: mainPath },
-                });
-                if (done) this.emitter.emit('match', done);
-                queueLoudness(folder, recordId, mainPath, (r) =>
-                    this.emitter.emit('match', r)
-                );
-                this.logRecording(
-                    `Cut ${path.basename(
-                        mainPath
-                    )}; original kept in Originals`,
-                    undefined,
-                    EquipmentLogType.Debug
-                );
-            } catch (err: any) {
-                // Drop a partial cut and put the original back, so the base
-                // folder (which the uploader reads) holds the full recording.
+            queuedJob = true;
+            enqueueCut(async () => {
+                let moved = false;
+                let originalPath = '';
+                let cutPath = '';
                 try {
-                    fs.rmSync(cutPath, { force: true });
-                    if (
-                        moved &&
-                        !fs.existsSync(mainPath) &&
-                        fs.existsSync(originalPath)
-                    ) {
-                        fs.renameSync(originalPath, mainPath);
+                    if (!fs.existsSync(originalsDir)) {
+                        fs.mkdirSync(originalsDir, { recursive: true });
                     }
-                } catch {
-                    // best effort
+                    // Worked out now, when the cut runs: a file of the same name
+                    // already in Originals belongs to another match or an earlier
+                    // cut, so it is never reused or replaced.
+                    const { name, ext } = path.parse(mainPath);
+                    originalPath = path.join(originalsDir, `${name}${ext}`);
+                    for (let n = 2; fs.existsSync(originalPath); n += 1) {
+                        originalPath = path.join(
+                            originalsDir,
+                            `${name} (${n})${ext}`
+                        );
+                    }
+                    // ffmpeg writes inside Originals/, where the uploader never looks.
+                    cutPath = path.join(originalsDir, `${name}.cutting${ext}`);
+                    fs.rmSync(cutPath, { force: true });
+
+                    const started = updateMatch(folder, recordId, {
+                        processing: { state: 'processing', originalPath },
+                    });
+                    if (started) this.emitter.emit('match', started);
+                    this.logRecording(`Cutting ${path.basename(mainPath)}`);
+
+                    // Move the original aside, cut it into a temp file, then put
+                    // the cut where the original was.
+                    fs.renameSync(mainPath, originalPath);
+                    moved = true;
+                    await cutMatchVideo(originalPath, cutPath);
+                    // Never rename onto an existing file.
+                    if (fs.existsSync(mainPath)) {
+                        throw new Error(
+                            `${path.basename(
+                                mainPath
+                            )} reappeared during the cut; not replacing it`
+                        );
+                    }
+                    fs.renameSync(cutPath, mainPath);
+
+                    const done = updateMatch(folder, recordId, {
+                        processing: {
+                            state: 'done',
+                            outputPath: mainPath,
+                            originalPath,
+                        },
+                    });
+                    if (done) this.emitter.emit('match', done);
+                    queueLoudness(folder, recordId, mainPath, (r) =>
+                        this.emitter.emit('match', r)
+                    );
+                    this.logRecording(
+                        `Cut ${path.basename(
+                            mainPath
+                        )}; original kept in Originals`,
+                        undefined,
+                        EquipmentLogType.Debug
+                    );
+                } catch (err: any) {
+                    // Drop a partial cut and put the original back, so the base
+                    // folder (which the uploader reads) holds the full recording.
+                    // Never over an existing file.
+                    try {
+                        if (cutPath) fs.rmSync(cutPath, { force: true });
+                        if (
+                            moved &&
+                            !fs.existsSync(mainPath) &&
+                            fs.existsSync(originalPath)
+                        ) {
+                            fs.renameSync(originalPath, mainPath);
+                        }
+                    } catch {
+                        // best effort
+                    }
+                    const failed = updateMatch(folder, recordId, {
+                        processing: {
+                            state: 'error',
+                            error: String(err?.message ?? err),
+                            ...(originalPath ? { originalPath } : {}),
+                        },
+                    });
+                    if (failed) this.emitter.emit('match', failed);
+                    this.logRecording(
+                        'Failed to cut recording',
+                        err as object,
+                        EquipmentLogType.Warn
+                    );
+                } finally {
+                    this.cutJobs.delete(jobKey);
                 }
-                const failed = updateMatch(folder, recordId, {
-                    processing: {
-                        state: 'error',
-                        error: String(err?.message ?? err),
-                    },
-                });
-                if (failed) this.emitter.emit('match', failed);
-                this.logRecording(
-                    'Failed to cut recording',
-                    err as object,
-                    EquipmentLogType.Warn
-                );
-            }
-        });
+            });
+        } finally {
+            // Nothing was queued (an error before the job existed): never keep
+            // the match marked as ours, or recovery and Cut would skip it.
+            if (!queuedJob) this.cutJobs.delete(jobKey);
+        }
+    }
+
+    private static cutJobKey(folder: string, recordId: string): string {
+        return `${path.resolve(folder)}|${recordId}`;
     }
 
     // Emit the recorded-match list for the folder the app is currently pointed

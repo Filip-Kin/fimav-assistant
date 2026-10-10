@@ -17,6 +17,9 @@ export type MatchRecordStatus = 'recording' | 'recorded' | 'error';
 export interface MatchProcessing {
     state: 'unprocessed' | 'queued' | 'processing' | 'done' | 'error';
     outputPath?: string;
+    // Where the cut moved the raw recording (Originals/, possibly "X (2).mp4"),
+    // so recovery after a restart puts back exactly that file.
+    originalPath?: string;
     error?: string;
 }
 

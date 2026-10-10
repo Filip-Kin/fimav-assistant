@@ -33,6 +33,7 @@ import FtcScorekeeper from './ftc/scorekeeper';
 import getVmixBandwidth, { streamKeyFromUrl } from './vmixBandwidth';
 import { AutoAVStatus } from '../models/AutoAVStatus';
 import { MatchRecord } from '../models/MatchRecord';
+import isReadyForUpload from './recordings/uploadReady';
 import { StaticIpInfo } from '../models/HWCheckResponse';
 import { getCurrentEvent } from './util';
 import startStatusApi from './api/server';
@@ -757,7 +758,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     };
 
     ipcMain.on('bitfocus:getLayout', (event) =>
-        bitfocusReply(event, 'layout', () => readCompanionLayout(companionUrl()))
+        bitfocusReply(event, 'layout', () =>
+            readCompanionLayout(companionUrl())
+        )
     );
 
     ipcMain.on('bitfocus:saveButton', (event, [edit]) =>
@@ -883,14 +886,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     const announcedVideos = new Set<string>();
     AutoAV.Instance.on('match', (rec: MatchRecord) => {
         if (!rec?.filePath || announcedVideos.has(rec.id)) return;
-        const ps = rec.processing?.state;
-        // Final = cut done, never cut (unprocessed / no state), or the cut
-        // failed and the original was put back. Queued/processing = not yet.
-        const final =
-            ps === 'done' ||
-            (rec.status === 'recorded' &&
-                (!ps || ps === 'unprocessed' || ps === 'error'));
-        if (!final) return;
+        if (!isReadyForUpload(rec)) return;
         announcedVideos.add(rec.id);
         YoutubeUploaderAddon.Instance.videoReady(rec.filePath);
     });
@@ -901,7 +897,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         running: YoutubeUploaderAddon.Instance.isRunning(),
         phase: YoutubeUploaderAddon.Instance.getPhase(),
         version: YoutubeUploaderAddon.Instance.getVersion(),
-        eventKey: AutoAV.Instance.uploadEventKey(),
+        eventKey: YoutubeUploaderAddon.Instance.eventKey(),
     });
     // Uploader event stream -> Upload tab (sign-in, queue, uploads).
     YoutubeUploaderAddon.Instance.events.on('message', (m) =>
@@ -913,6 +909,85 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     YoutubeUploaderAddon.Instance.phase.on('phase', () =>
         window?.webContents.send('upload:status', uploadStatus())
     );
+    // The Upload tab names the uploader's key on every request; a switch must
+    // reach it at once, or it keeps asking under the old key and the
+    // uploader rebuilds the old manager next to the new one.
+    YoutubeUploaderAddon.Instance.events.on('key', () =>
+        window?.webContents.send('upload:status', uploadStatus())
+    );
+
+    // The playlist the uploader has for its current key.
+    const readUploaderPlaylist = async (): Promise<{
+        id: string;
+        name: string;
+    }> => {
+        const key = YoutubeUploaderAddon.Instance.eventKey();
+        if (!key || !YoutubeUploaderAddon.Instance.isRunning())
+            return { id: '', name: '' };
+        try {
+            const res = await fetch(
+                `http://127.0.0.1:8807/api/upload/state?event_key=${encodeURIComponent(
+                    key
+                )}`,
+                { signal: AbortSignal.timeout(3000) }
+            );
+            const st = await res.json();
+            return {
+                id: st?.config?.playlist_id ?? '',
+                name: st?.config?.playlist_name ?? '',
+            };
+        } catch {
+            return { id: '', name: '' };
+        }
+    };
+
+    // The playlist chosen in a save whose key switch is still waiting on the
+    // uploader. One slot: a later save replaces it, and a status-driven switch
+    // uses it instead of re-reading (the chosen playlist always wins).
+    let pendingPlaylist: { id: string; name: string } | null = null;
+    const takePending = (fallback: { id: string; name: string }) => {
+        const pl = pendingPlaylist ?? fallback;
+        pendingPlaylist = null;
+        return pl;
+    };
+
+    // Push the stored upload settings to the uploader under the key it is on
+    // (any other key starts a second manager on the same folder). Read when it
+    // runs, so a pending push sends the newest save.
+    const pushUploadConfig = async (playlist: { id: string; name: string }) => {
+        const eventKey = YoutubeUploaderAddon.Instance.eventKey();
+        if (!eventKey) return;
+        const s = store.get('upload');
+        const { currentEvent } = AutoAV.Instance.getStatus();
+        try {
+            await fetch(
+                `http://127.0.0.1:8807/api/upload/config?event_key=${encodeURIComponent(
+                    eventKey
+                )}`,
+                {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    signal: AbortSignal.timeout(5000),
+                    body: JSON.stringify({
+                        event_key: eventKey,
+                        event_name: currentEvent?.name ?? '',
+                        playlist_id: playlist.id,
+                        playlist_name: playlist.name,
+                        title_template: s.titleTemplate,
+                        description_template: s.descriptionTemplate,
+                        thumbnail_path: s.thumbnailPath,
+                        visibility: s.visibility,
+                        tba_auth_id: s.tbaAuthId,
+                        tba_secret: s.tbaSecret,
+                        toa_api_key: s.toaApiKey ?? '',
+                        toa_event_key: s.toaEventKey ?? '',
+                    }),
+                }
+            );
+        } catch (e) {
+            log.warn('Could not push upload config to uploader', e);
+        }
+    };
 
     // The uploader and the custom audience display follow the program and
     // the season: the uploader runs at FTC events and FRC off-season events,
@@ -920,13 +995,14 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // should be doing changes, it is started or stopped. At boot the mode is
     // the stored fallback until FMS or the scorekeeper reports, so that change
     // is what starts them.
-    // The uploader value carries the program and the folder: a change is a
-    // live switch (POST /api/control/event) on the running uploader.
+    // The uploader value carries the program, the folder and the event key: a
+    // change is a live switch (POST /api/control/event) on the running
+    // uploader. A key alone changing (same folder) waits out a running upload.
     const wanted = () => ({
         uploader: AutoAV.Instance.runsUploader()
             ? `${AutoAV.Instance.getStatus().program}|${
                   AutoAV.Instance.getStatus().saveFolder ?? ''
-              }`
+              }|${AutoAV.Instance.uploadEventKey()}`
             : false,
         display: AutoAV.Instance.runsCustomAd(),
     });
@@ -991,7 +1067,20 @@ export default function registerAllEvents(window: BrowserWindow | null) {
                     settle(false);
                 });
         };
-        apply('uploader', YoutubeUploaderAddon.Instance);
+        apply('uploader', {
+            start: () => YoutubeUploaderAddon.Instance.start(),
+            stop: () => YoutubeUploaderAddon.Instance.stop(),
+            // A key-only change keeps the event's playlist: read it under the
+            // old key, re-send it once the uploader is on the new one (the
+            // uploader drops the stored playlist when the key changes).
+            retarget: async () => {
+                const playlist =
+                    pendingPlaylist ?? (await readUploaderPlaylist());
+                return YoutubeUploaderAddon.Instance.retargetForStatus(() => {
+                    pushUploadConfig(takePending(playlist));
+                });
+            },
+        });
         apply('display', AudienceDisplayAddon.Instance);
     });
 
@@ -1000,7 +1089,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // opened the Upload tab (its polling was the first request). Asking every
     // 15 s also covers an uploader restart and a new event.
     setInterval(() => {
-        const eventKey = AutoAV.Instance.uploadEventKey();
+        const eventKey = YoutubeUploaderAddon.Instance.eventKey();
         if (!eventKey || !YoutubeUploaderAddon.Instance.isRunning()) return;
         fetch(
             `http://127.0.0.1:8807/api/upload/state?event_key=${encodeURIComponent(
@@ -1233,7 +1322,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             eventPlaylistName: '',
             tbaEventKeyDefault: AutoAV.Instance.derivedTbaEventKey(),
         };
-        const eventKey = AutoAV.Instance.uploadEventKey();
+        const eventKey = YoutubeUploaderAddon.Instance.eventKey();
         if (!eventKey) return settings;
         try {
             const res = await fetch(
@@ -1257,7 +1346,6 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     });
 
     ipcMain.on('upload:saveSettings', async (event, [settings]) => {
-        const keyBefore = AutoAV.Instance.uploadEventKey();
         // tbaEventKeyDefault is shown in the form, never stored.
         const stored = { ...(settings ?? {}) };
         delete stored.tbaEventKeyDefault;
@@ -1269,43 +1357,29 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             playlistId: '',
             playlistName: '',
         });
-        // A new TBA event key moves the uploader to that key first; the
-        // config below is stored under it. Upload state lives in the event
-        // folder per file, so nothing already uploaded goes up again.
-        const eventKey = AutoAV.Instance.uploadEventKey();
-        if (eventKey !== keyBefore) {
-            await YoutubeUploaderAddon.Instance.retarget();
-        }
-        // Push to the uploader so a save takes effect without a restart. The
-        // uploader keys config by event; use the event AutoAV is filing into.
-        const { currentEvent } = AutoAV.Instance.getStatus();
-        try {
-            await fetch(
-                `http://127.0.0.1:8807/api/upload/config?event_key=${encodeURIComponent(
-                    eventKey
-                )}`,
-                {
-                    method: 'POST',
-                    headers: { 'content-type': 'application/json' },
-                    signal: AbortSignal.timeout(5000),
-                    body: JSON.stringify({
-                        event_key: eventKey,
-                        event_name: currentEvent?.name ?? '',
-                        playlist_id: settings.playlistId,
-                        playlist_name: settings.playlistName,
-                        title_template: settings.titleTemplate,
-                        description_template: settings.descriptionTemplate,
-                        thumbnail_path: settings.thumbnailPath,
-                        visibility: settings.visibility,
-                        tba_auth_id: settings.tbaAuthId,
-                        tba_secret: settings.tbaSecret,
-                        toa_api_key: settings.toaApiKey ?? '',
-                        toa_event_key: settings.toaEventKey ?? '',
-                    }),
-                }
-            );
-        } catch (e) {
-            log.warn('Could not push upload config to uploader', e);
+        // The playlist is the one chosen in this save (it is not stored: see
+        // uploadSettings).
+        const playlist = {
+            id: settings?.playlistId ?? '',
+            name: settings?.playlistName ?? '',
+        };
+        // A key the uploader is not on yet (this save, or one still pending):
+        // switch first, waiting out a running upload rather than killing it,
+        // then store the config under the new key. A later save replaces a
+        // pending one, and pushUploadConfig reads the settings when it runs,
+        // so the newest save wins. Upload state lives in the event folder per
+        // file, so nothing already uploaded goes up again.
+        if (
+            AutoAV.Instance.uploadEventKey() !==
+            YoutubeUploaderAddon.Instance.eventKey()
+        ) {
+            pendingPlaylist = playlist;
+            YoutubeUploaderAddon.Instance.retargetWhenIdle(() => {
+                pushUploadConfig(takePending(playlist));
+            });
+        } else {
+            pendingPlaylist = null;
+            await pushUploadConfig(playlist);
         }
         event.reply('upload:settings', await uploadSettings());
     });

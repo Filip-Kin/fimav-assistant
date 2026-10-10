@@ -127,7 +127,9 @@ export default function startStatusApi(sources: StatusApiSources) {
         upload: async () => {
             const running = YoutubeUploaderAddon.Instance.isRunning();
             const base = `http://127.0.0.1:${YoutubeUploaderAddon.PORT}`;
-            const eventKey = AutoAV.Instance.getStatus().currentEvent?.code;
+            // The key the uploader is on: any other key starts a second
+            // upload manager on the same folder.
+            const eventKey = YoutubeUploaderAddon.Instance.eventKey();
             const [health, state] = running
                 ? await Promise.all([
                       getJson(`${base}/api/health`),

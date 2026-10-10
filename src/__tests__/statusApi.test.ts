@@ -50,6 +50,7 @@ jest.mock('../main/addons/upload-helper', () => ({
             isRunning: () => true,
             getPhase: () => 'running',
             getVersion: () => '0.1.11',
+            eventKey: () => 'TEST',
         },
     },
 }));
