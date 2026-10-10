@@ -30,9 +30,7 @@ export default function GlobalSettings() {
     const [detected, setDetected] =
         useState<AutoAVStatus['programDetected']>(null);
     const [frcAd, setFrcAd] = useState<'fms' | 'customAd'>('fms');
-    const [season, setSeason] = useState<'in-season' | 'off-season'>(
-        'in-season'
-    );
+    const [offSeason, setOffSeason] = useState(false);
     const [address, setAddress] = useState('');
     const [ftcStatus, setFtcStatus] = useState<FtcScorekeeperStatus | null>(
         null
@@ -57,11 +55,9 @@ export default function GlobalSettings() {
                 (s: {
                     program: ProgramSetting;
                     frcAudienceDisplay: 'fms' | 'customAd';
-                    season: 'in-season' | 'off-season';
                 }) => {
                     setProgram(s.program);
                     setFrcAd(s.frcAudienceDisplay);
-                    setSeason(s.season);
                 }
             ),
             ipcRenderer.on('ftc:settings', (s: FtcSettings) => {
@@ -72,9 +68,10 @@ export default function GlobalSettings() {
                 // Several found by the automatic scan: offer them.
                 if (s.found?.length > 1) setFound((prev) => prev ?? s.found);
             }),
-            ipcRenderer.on('autoav:status', (s: AutoAVStatus) =>
-                setDetected(s.programDetected)
-            ),
+            ipcRenderer.on('autoav:status', (s: AutoAVStatus) => {
+                setDetected(s.programDetected);
+                setOffSeason(s.season === 'off-season');
+            }),
         ];
         return () => offs.forEach((off) => off());
     }, []);
@@ -100,7 +97,6 @@ export default function GlobalSettings() {
         send('app:saveSettings', {
             program,
             frcAudienceDisplay: frcAd,
-            season,
         });
         if (program !== 'frc') {
             send('ftc:saveSettings', { address });
@@ -139,17 +135,7 @@ export default function GlobalSettings() {
                         ]}
                     />
                 </Form.Item>
-                <Form.Item label="Season">
-                    <Select
-                        value={season}
-                        onChange={setSeason}
-                        options={[
-                            { value: 'in-season', label: 'In-season' },
-                            { value: 'off-season', label: 'Off-season' },
-                        ]}
-                    />
-                </Form.Item>
-                {effective !== 'ftc' && season === 'off-season' && (
+                {effective !== 'ftc' && offSeason && (
                     <Form.Item label="FRC audience display">
                         <Select
                             value={frcAd}

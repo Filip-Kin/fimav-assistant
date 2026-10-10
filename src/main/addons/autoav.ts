@@ -823,11 +823,14 @@ export default class AutoAV {
     }
 
     // Off-season turns on the off-season-only features: the YouTube uploader
-    // and Upload tab, the custom audience display and dead-time cutting. Set
-    // in Settings, on its own: file naming does not decide it.
-    // eslint-disable-next-line class-methods-use-this
+    // and Upload tab, the custom audience display and dead-time cutting.
+    // Detected, never set: an unofficial event is off-season, an official one
+    // in-season. With no event, January to April is in-season and the rest of
+    // the year off-season. File naming is separate and does not decide it.
     public isOffSeason(): boolean {
-        return getStore().get('season', 'in-season') === 'off-season';
+        const official = this.event()?.isOfficial;
+        if (typeof official === 'boolean') return !official;
+        return new Date().getMonth() > 3;
     }
 
     // Build and broadcast the current status snapshot

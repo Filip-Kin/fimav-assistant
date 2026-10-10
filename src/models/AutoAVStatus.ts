@@ -36,7 +36,8 @@ export interface AutoAVStatus {
     // Effective file naming mode for this event. Also the season switch: the
     // How match files are named; nothing else.
     fileNameMode: FileNameMode;
-    // In-season or off-season (Settings): the off-season-only features
+    // In-season or off-season, detected (official event = in-season, no event
+    // = in-season January to April): gates the off-season-only features
     // (YouTube uploader, Upload tab, custom display, dead-time cutting).
     season: 'in-season' | 'off-season';
     // True when the event itself sets the mode (official = in-season,
