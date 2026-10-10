@@ -1196,8 +1196,18 @@ export default class AutoAV {
 
     // Emit the recorded-match list for the folder the app is currently pointed
     // at, so the tab's history reflects the current event folder.
+    // The recorded matches in the event folder, plus the match being recorded
+    // now: its record only reaches the folder's manifest when the recording
+    // stops, so a list read from disk alone drops it mid-match.
+    public matches(): MatchRecord[] {
+        const list = listMatches(this.status.saveFolder);
+        const live = this.weAreRecording ? this.currentRecordObj : null;
+        if (live && !list.some((r) => r.id === live.id)) list.unshift(live);
+        return list;
+    }
+
     public emitMatches(): void {
-        this.emitter.emit('matches', listMatches(this.status.saveFolder));
+        this.emitter.emit('matches', this.matches());
     }
 
     public static get Instance(): AutoAV {

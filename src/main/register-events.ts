@@ -32,7 +32,6 @@ import FtcScorekeeper from './ftc/scorekeeper';
 import getVmixBandwidth, { streamKeyFromUrl } from './vmixBandwidth';
 import { AutoAVStatus } from '../models/AutoAVStatus';
 import { MatchRecord } from '../models/MatchRecord';
-import { listMatches } from './recordings/matchStore';
 import { StaticIpInfo } from '../models/HWCheckResponse';
 import { getCurrentEvent } from './util';
 import startStatusApi from './api/server';
@@ -670,7 +669,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // The Auto AV tab requests the full current state on mount
     ipcMain.on('autoav:getState', (event) => {
         event.reply('autoav:status', lastAutoAvStatus);
-        event.reply('autoav:matches', listMatches(lastAutoAvStatus.saveFolder));
+        event.reply('autoav:matches', AutoAV.Instance.matches());
     });
 
     // Manually cut the dead time out of a recorded match (the Cut button).
