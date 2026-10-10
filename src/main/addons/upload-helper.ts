@@ -276,6 +276,12 @@ export default class YoutubeUploaderAddon {
             const up = await this.waitForServer();
             if (up && this.process === child && !child.killed) {
                 this.running = true;
+                // A fresh uploader has no manager yet; the first request makes
+                // one for this key, in this folder.
+                this.appliedKey = '';
+                this.setAppliedKey(AutoAV.Instance.uploadEventKey());
+                this.appliedDir = videoDir;
+                this.appliedProgram = AutoAV.Instance.isFtc() ? 'ftc' : 'frc';
                 this.logs.out.log(
                     `YouTube uploader is serving on port ${YoutubeUploaderAddon.PORT} (v${this.currentVersion})`
                 );
@@ -297,6 +303,7 @@ export default class YoutubeUploaderAddon {
     // checkpoints the WAL), then fall back to the kill sweep on timeout. Exit
     // handlers are identity-guarded, so the fallback kill is harmless.
     public stop(): Promise<boolean> {
+        this.cancelRetries();
         return this.queue.run(async () => {
             const ok = await this.doStop();
             this.phase.set('stopped');
@@ -343,26 +350,130 @@ export default class YoutubeUploaderAddon {
             throw new Error(out?.error ?? `HTTP ${rsp.status}`);
     }
 
+    // The event key the running uploader is on. Every request to the uploader
+    // names it, and the uploader starts a separate scan-and-upload manager
+    // for any key it has not seen, so all callers must send this one: the
+    // key last accepted, not a newly typed one the uploader has not switched
+    // to yet (two managers on one folder upload every match twice).
+    private appliedKey = '';
+
+    // The folder the running uploader was last pointed at, so a status change
+    // that only changes the key can switch it without a restart.
+    private appliedDir = '';
+
+    private setAppliedKey(key: string) {
+        if (!key || key === this.appliedKey) return;
+        this.appliedKey = key;
+        // The Upload tab sends this key on every request; tell it at once.
+        this.events.emit('key', key);
+    }
+
+    public eventKey(): string {
+        // Latched the first time a key exists while the uploader runs: from
+        // then on only an accepted switch moves it.
+        if (!this.appliedKey && this.running) {
+            this.setAppliedKey(AutoAV.Instance.uploadEventKey());
+        }
+        return this.appliedKey || AutoAV.Instance.uploadEventKey();
+    }
+
+    // The program the running uploader was last pointed at.
+    private appliedProgram = '';
+
+    private retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Bumped by every new switch request and by stop(): a retry chain from an
+    // older request (or from before a stop) ends instead of switching later
+    // with stale settings.
+    private retryGen = 0;
+
+    private cancelRetries() {
+        this.retryGen += 1;
+        if (this.retryTimer) clearTimeout(this.retryTimer);
+        this.retryTimer = null;
+    }
+
+    // Switch to the current key without restarting: while an upload is
+    // running the uploader refuses the switch, so try again every 20 s until
+    // it takes (a restart would kill that upload and leave a Studio draft),
+    // then run onApplied. A newer request replaces an older pending one; a
+    // stopped uploader ends the chain (a new start picks up the key itself).
+    public retargetWhenIdle(onApplied: () => void) {
+        this.cancelRetries();
+        const gen = this.retryGen;
+        const attempt = () => {
+            this.retarget({ restartIfRefused: false })
+                .then((ok) => {
+                    if (gen !== this.retryGen) return ok;
+                    if (ok) {
+                        onApplied();
+                    } else if (this.phase.get() === 'running') {
+                        this.retryTimer = setTimeout(attempt, 20000);
+                    }
+                    return ok;
+                })
+                .catch((e) => this.logs.err.warn('Uploader switch failed', e));
+        };
+        attempt();
+    }
+
+    // For the status listener: a change of event key alone (same folder and
+    // program, uploader running) waits out a running upload; a new folder or
+    // program is a full retarget as before.
+    public retargetForStatus(onKeyApplied: () => void): Promise<boolean> {
+        const program = AutoAV.Instance.isFtc() ? 'ftc' : 'frc';
+        if (
+            this.phase.get() === 'running' &&
+            this.appliedDir &&
+            this.videoDir() === this.appliedDir &&
+            program === this.appliedProgram
+        ) {
+            this.retargetWhenIdle(onKeyApplied);
+            return Promise.resolve(true);
+        }
+        return this.retarget();
+    }
+
     // Point a running uploader at the current event folder, event and
     // program without restarting it. One not running is started; a refused
-    // switch (409: an upload in the old folder is still running) restarts.
-    public async retarget(): Promise<boolean> {
+    // switch (409: an upload in the old folder is still running) restarts,
+    // unless restartIfRefused is false.
+    public async retarget(
+        opts: { restartIfRefused?: boolean } = {}
+    ): Promise<boolean> {
+        const restartIfRefused = opts.restartIfRefused ?? true;
         const videoDir = this.videoDir();
         if (this.phase.get() === 'running' && videoDir) {
             const ftc = AutoAV.Instance.isFtc();
             const { address } = FtcScorekeeper.Instance.getStatus();
+            const key = AutoAV.Instance.uploadEventKey();
             try {
                 await YoutubeUploaderAddon.control('event', {
                     videoDir,
-                    eventKey: AutoAV.Instance.uploadEventKey() || undefined,
+                    eventKey: key || undefined,
                     program: ftc ? 'ftc' : 'frc',
                     ftcUrl: ftc && address ? `http://${address}` : undefined,
                 });
-                this.logs.out.log(`YouTube uploader now watching ${videoDir}`);
+                this.setAppliedKey(key);
+                this.appliedDir = videoDir;
+                this.appliedProgram = AutoAV.Instance.isFtc() ? 'ftc' : 'frc';
+                this.logs.out.log(
+                    `YouTube uploader now watching ${videoDir} (${this.eventKey()})`
+                );
                 return true;
             } catch (e) {
+                if (!restartIfRefused) {
+                    this.logs.out.log(
+                        `Uploader busy, switch later: ${(e as Error).message}`
+                    );
+                    return false;
+                }
                 this.logs.err.warn('Live switch refused, restarting', e);
             }
+        } else if (!restartIfRefused) {
+            // Not running: nothing to switch. Never start it from here (a
+            // saved key in-season would start an uploader nobody asked for).
+            return false;
         }
         return this.start();
     }
