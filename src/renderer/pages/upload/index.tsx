@@ -75,6 +75,9 @@ export interface Playlist {
 }
 
 export interface UploadSettings {
+    tbaEventKey: string;
+    // Year + FMS event code, used when tbaEventKey is empty; not stored.
+    tbaEventKeyDefault?: string;
     tbaAuthId: string;
     tbaSecret: string;
     toaApiKey: string;
@@ -356,6 +359,7 @@ export function UploadSettingsDialog({
     const [loading, setLoading] = useState(true);
     const [thumbnail, setThumbnail] = useState('');
     const [eventPlaylistName, setEventPlaylistName] = useState('');
+    const [tbaEventKeyDefault, setTbaEventKeyDefault] = useState('');
     const [creating, setCreating] = useState(false);
 
     useEffect(() => {
@@ -368,6 +372,7 @@ export function UploadSettingsDialog({
                 form.setFieldsValue(s);
                 setThumbnail(s.thumbnailPath ?? '');
                 setEventPlaylistName(s.eventPlaylistName ?? '');
+                setTbaEventKeyDefault(s.tbaEventKeyDefault ?? '');
                 setLoading(false);
             }
         );
@@ -538,6 +543,15 @@ export function UploadSettingsDialog({
                     {/* Match video links go to TBA at FRC events and to The
                         Orange Alliance at FTC events. Hidden fields keep
                         their values. */}
+                    <Col span={24}>
+                        <Form.Item
+                            label="TBA event key"
+                            name="tbaEventKey"
+                            hidden={ftc}
+                        >
+                            <Input placeholder={tbaEventKeyDefault} />
+                        </Form.Item>
+                    </Col>
                     <Col span={12}>
                         <Form.Item
                             label="TBA auth ID"

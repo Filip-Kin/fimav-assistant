@@ -898,7 +898,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         running: YoutubeUploaderAddon.Instance.isRunning(),
         phase: YoutubeUploaderAddon.Instance.getPhase(),
         version: YoutubeUploaderAddon.Instance.getVersion(),
-        eventKey: AutoAV.Instance.getStatus().currentEvent?.code ?? '',
+        eventKey: AutoAV.Instance.uploadEventKey(),
     });
     // Uploader event stream -> Upload tab (sign-in, queue, uploads).
     YoutubeUploaderAddon.Instance.events.on('message', (m) =>
@@ -997,7 +997,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     // opened the Upload tab (its polling was the first request). Asking every
     // 15 s also covers an uploader restart and a new event.
     setInterval(() => {
-        const eventKey = AutoAV.Instance.getStatus().currentEvent?.code ?? '';
+        const eventKey = AutoAV.Instance.uploadEventKey();
         if (!eventKey || !YoutubeUploaderAddon.Instance.isRunning()) return;
         fetch(
             `http://127.0.0.1:8807/api/upload/state?event_key=${encodeURIComponent(
@@ -1228,8 +1228,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             playlistId: '',
             playlistName: '',
             eventPlaylistName: '',
+            tbaEventKeyDefault: AutoAV.Instance.derivedTbaEventKey(),
         };
-        const eventKey = AutoAV.Instance.getStatus().currentEvent?.code ?? '';
+        const eventKey = AutoAV.Instance.uploadEventKey();
         if (!eventKey) return settings;
         try {
             const res = await fetch(
@@ -1253,15 +1254,28 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     });
 
     ipcMain.on('upload:saveSettings', async (event, [settings]) => {
+        const keyBefore = AutoAV.Instance.uploadEventKey();
+        // tbaEventKeyDefault is shown in the form, never stored.
+        const stored = { ...(settings ?? {}) };
+        delete stored.tbaEventKeyDefault;
         store.set('upload', {
-            ...settings,
+            ...stored,
+            tbaEventKey: String(stored.tbaEventKey ?? '')
+                .trim()
+                .toLowerCase(),
             playlistId: '',
             playlistName: '',
         });
+        // A new TBA event key moves the uploader to that key first; the
+        // config below is stored under it. Upload state lives in the event
+        // folder per file, so nothing already uploaded goes up again.
+        const eventKey = AutoAV.Instance.uploadEventKey();
+        if (eventKey !== keyBefore) {
+            await YoutubeUploaderAddon.Instance.retarget();
+        }
         // Push to the uploader so a save takes effect without a restart. The
         // uploader keys config by event; use the event AutoAV is filing into.
         const { currentEvent } = AutoAV.Instance.getStatus();
-        const eventKey = currentEvent?.code ?? '';
         try {
             await fetch(
                 `http://127.0.0.1:8807/api/upload/config?event_key=${encodeURIComponent(

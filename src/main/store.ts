@@ -75,6 +75,9 @@ export type AppConfig = {
     // pushed to the youtube-tba-upload process via POST /api/upload/config.
     // Field shapes mirror the uploader's eventConfig (INTEGRATION.md §4).
     upload: {
+        // TBA event key videos are filed and submitted under (e.g. 2026midet).
+        // Empty = season year + the FMS event code.
+        tbaEventKey: string;
         // TBA event trusted-API credentials
         tbaAuthId: string;
         tbaSecret: string;
@@ -240,6 +243,7 @@ export function createStore(): Store<AppConfig> {
             upload: {
                 type: 'object',
                 properties: {
+                    tbaEventKey: { type: 'string', default: '' },
                     tbaAuthId: { type: 'string', default: '' },
                     tbaSecret: { type: 'string', default: '' },
                     toaApiKey: { type: 'string', default: '' },
