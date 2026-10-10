@@ -196,6 +196,14 @@ export default class AutoAV {
                     if (recordId && recordObj) {
                         const saveFolder = path.dirname(filename);
                         this.status.saveFolder = saveFolder;
+                        // With auto-cut on, the file is not final yet: say so
+                        // in the record before anyone hears about it, so the
+                        // uploader holds it ("cut queued") and nobody announces
+                        // it as ready. Uploading the raw file while the cut
+                        // moves it away broke every first upload attempt.
+                        const mayCut =
+                            this.isFrcOffSeason() &&
+                            getStore().get('autoAv.autoCut', false);
                         const record: MatchRecord = {
                             ...recordObj,
                             fileName: path.basename(filename),
@@ -203,6 +211,9 @@ export default class AutoAV {
                             saveFolder,
                             endedAt: Date.now(),
                             status: 'recorded',
+                            ...(mayCut
+                                ? { processing: { state: 'queued' as const } }
+                                : {}),
                         };
                         upsertMatch(saveFolder, record);
                         this.emitter.emit('match', record);
@@ -220,14 +231,18 @@ export default class AutoAV {
                         // Auto-cut the dead time in place (original moved to
                         // Originals/), if enabled. Never cut a match with a card:
                         // the card explanation lives in the dead time we'd remove.
-                        if (
-                            this.isFrcOffSeason() &&
-                            getStore().get('autoAv.autoCut', false) &&
-                            hasCard !== true
-                        ) {
+                        if (mayCut && hasCard !== true) {
                             // Loudness is measured once the cut is made.
                             this.queueCut(saveFolder, recordId);
                         } else {
+                            if (mayCut) {
+                                // A carded match is never cut: the raw file is
+                                // final after all, so release it.
+                                const released = updateMatch(saveFolder, recordId, {
+                                    processing: { state: 'unprocessed' },
+                                });
+                                if (released) this.emitter.emit('match', released);
+                            }
                             queueLoudness(saveFolder, recordId, filename, (r) =>
                                 this.emitter.emit('match', r)
                             );
@@ -425,6 +440,9 @@ export default class AutoAV {
 
         this.status.running = true;
         this.emitStatus();
+
+        // A cut that was running when the app last closed never finished.
+        this.recoverInterruptedCuts(this.status.saveFolder);
 
         // Begin polling vMix reachability for the status tab
         this.startVmixPoll();
@@ -1086,6 +1104,61 @@ export default class AutoAV {
         }
     }
 
+    // No cut runs at startup, so a record still marked queued or processing was
+    // cut off by the app closing (an install mid-cut left Q4 at DCC with no
+    // video in the event folder). Put the original back where the uploader
+    // expects it, drop the partial cut, and cut it again; with auto-cut off,
+    // mark it errored so the raw video is released for upload.
+    private recoverInterruptedCuts(folder: string | null) {
+        if (!folder || !fs.existsSync(folder)) return;
+        const originalsDir = path.join(folder, 'Originals');
+        let records: MatchRecord[] = [];
+        try {
+            records = listMatches(folder);
+        } catch {
+            return;
+        }
+        records.forEach((rec) => {
+            const ps = rec.processing?.state;
+            if ((ps !== 'queued' && ps !== 'processing') || !rec.filePath) return;
+            if (rec.ftc) return;
+            try {
+                const { name, ext } = path.parse(rec.filePath);
+                const original = path.join(originalsDir, path.basename(rec.filePath));
+                // Partial cuts: the current temp spot and the one older builds used.
+                [
+                    path.join(originalsDir, `${name}.cutting${ext}`),
+                    path.join(folder, `${name}.cutting${ext}`),
+                ].forEach((p) => fs.rmSync(p, { force: true }));
+                const haveMain = fs.existsSync(rec.filePath);
+                const haveOriginal = fs.existsSync(original);
+                if (haveMain && haveOriginal) {
+                    // The cut was put in place but its state never written.
+                    const done = updateMatch(folder, rec.id, {
+                        processing: { state: 'done', outputPath: rec.filePath },
+                    });
+                    if (done) this.emitter.emit('match', done);
+                    return;
+                }
+                if (!haveMain && haveOriginal) {
+                    fs.renameSync(original, rec.filePath);
+                }
+                if (!fs.existsSync(rec.filePath)) return;
+                this.logRecording(`Recovering interrupted cut of ${path.basename(rec.filePath)}`);
+                if (this.isFrcOffSeason() && getStore().get('autoAv.autoCut', false)) {
+                    this.queueCut(folder, rec.id);
+                } else {
+                    const released = updateMatch(folder, rec.id, {
+                        processing: { state: 'error', error: 'cut interrupted' },
+                    });
+                    if (released) this.emitter.emit('match', released);
+                }
+            } catch (e) {
+                this.logs?.err.warn(`Could not recover cut for ${rec.fileName}`, e);
+            }
+        });
+    }
+
     // Cut the dead time out of a recorded match in place: the original video is
     // moved into an "Originals" subfolder and the trimmed, upload-ready cut takes
     // its spot in the base event folder (so the base folder holds every match's
@@ -1123,8 +1196,9 @@ export default class AutoAV {
         for (let n = 2; fs.existsSync(originalPath); n += 1) {
             originalPath = path.join(originalsDir, `${name} (${n})${ext}`);
         }
-        // ffmpeg writes here; the cut replaces mainPath only once complete.
-        const cutPath = path.join(folder, `${name}.cutting${ext}`);
+        // ffmpeg writes here, inside Originals/ where the uploader never looks;
+        // the cut replaces mainPath only once complete.
+        const cutPath = path.join(originalsDir, `${name}.cutting${ext}`);
 
         const queued = updateMatch(folder, recordId, {
             processing: { state: 'queued' },
