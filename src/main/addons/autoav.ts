@@ -763,6 +763,28 @@ export default class AutoAV {
         }
     }
 
+    // TBA key from FMS: season year + FMS event code (2026 + MIDET =
+    // 2026midet), or '' before FMS has reported an event.
+    // eslint-disable-next-line class-methods-use-this
+    public derivedTbaEventKey(): string {
+        const m = /^frc:(.+)$/.exec(getStore().get('autoAv.lastEventKey', ''));
+        return m ? `${new Date().getFullYear()}${m[1].toLowerCase()}` : '';
+    }
+
+    // The event key the YouTube uploader files videos under and submits to
+    // TBA with. FTC keeps the event code it always used. FRC: the Upload
+    // tab's TBA event key when set, else year + FMS code. Never the display
+    // event's code: on every new FMS event the name override is written into
+    // that code too, so it carries "Detroit City Championship", which TBA
+    // rejects as an unknown event.
+    public uploadEventKey(): string {
+        if (this.isFtc()) return this.status.currentEvent?.code ?? '';
+        const typed = String(getStore().get('upload.tbaEventKey', '') ?? '')
+            .trim()
+            .toLowerCase();
+        return typed || this.derivedTbaEventKey();
+    }
+
     // Set the event name
     public setEvent(event: Event | null) {
         this.currentEvent = event;

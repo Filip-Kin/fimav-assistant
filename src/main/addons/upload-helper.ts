@@ -354,9 +354,7 @@ export default class YoutubeUploaderAddon {
             try {
                 await YoutubeUploaderAddon.control('event', {
                     videoDir,
-                    eventKey:
-                        AutoAV.Instance.getStatus().currentEvent?.code ||
-                        undefined,
+                    eventKey: AutoAV.Instance.uploadEventKey() || undefined,
                     program: ftc ? 'ftc' : 'frc',
                     ftcUrl: ftc && address ? `http://${address}` : undefined,
                 });
