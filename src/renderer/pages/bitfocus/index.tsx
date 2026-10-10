@@ -522,20 +522,23 @@ function SettingsDialog({
     fms,
     customAd,
     ftc,
+    companionPort,
     onSaveFms,
     onSaveCustomAd,
     onClose,
 }: {
     open: boolean;
-    source: TriggerSource;
+    source: TriggerSource | null;
     fms: FmsAutomationConfig | null;
     customAd: CustomAdState | null;
     ftc: FtcSettings | null;
+    companionPort: number;
     onSaveFms: (_c: FmsAutomationConfig) => void;
     onSaveCustomAd: (_c: CustomAdConfig) => void;
     onClose: () => void;
 }) {
     const [automations, setAutomations] = useState(false);
+    const [port, setPort] = useState(companionPort);
 
     let enabled = ftc?.automations ?? true;
     if (source === 'fms') enabled = fms?.BitfocusIntegrationEnabled ?? false;
@@ -548,6 +551,10 @@ function SettingsDialog({
         if (open) setAutomations(enabled);
     }, [open, enabled]);
 
+    useEffect(() => {
+        if (open) setPort(companionPort);
+    }, [open, companionPort]);
+
     return (
         <Modal
             title="Bitfocus settings"
@@ -555,9 +562,12 @@ function SettingsDialog({
             onCancel={onClose}
             okText="Save"
             onOk={() => {
+                if (port !== companionPort) {
+                    send('app:saveSettings', { companionPort: port });
+                }
                 if (source === 'ftc') {
                     send('ftc:saveSettings', { automations });
-                } else if (loaded && automations !== enabled) {
+                } else if (source && loaded && automations !== enabled) {
                     if (source === 'fms' && fms) {
                         onSaveFms({
                             ...fms,
@@ -575,24 +585,35 @@ function SettingsDialog({
             destroyOnClose
         >
             <Form layout="vertical">
-                <Form.Item
-                    label={
-                        {
-                            fms: 'FMS automations',
-                            customAd: 'Custom AD automations',
-                            ftc: 'FTC automations',
-                        }[source]
-                    }
-                >
-                    {loaded ? (
-                        <Switch
-                            checked={automations}
-                            onChange={setAutomations}
-                        />
-                    ) : (
-                        <Text type="secondary">Not reachable</Text>
-                    )}
+                <Form.Item label="Companion port">
+                    <InputNumber
+                        min={1}
+                        max={65535}
+                        precision={0}
+                        value={port}
+                        onChange={(v) => v != null && setPort(v)}
+                    />
                 </Form.Item>
+                {source && (
+                    <Form.Item
+                        label={
+                            {
+                                fms: 'FMS automations',
+                                customAd: 'Custom AD automations',
+                                ftc: 'FTC automations',
+                            }[source]
+                        }
+                    >
+                        {loaded ? (
+                            <Switch
+                                checked={automations}
+                                onChange={setAutomations}
+                            />
+                        ) : (
+                            <Text type="secondary">Not reachable</Text>
+                        )}
+                    </Form.Item>
+                )}
             </Form>
         </Modal>
     );
@@ -970,18 +991,17 @@ export default function Bitfocus() {
                 }}
                 onClose={() => setCell(null)}
             />
-            {triggerSource && (
-                <SettingsDialog
-                    open={settingsOpen}
-                    source={triggerSource}
-                    fms={fms}
-                    customAd={customAd}
-                    ftc={ftc}
-                    onSaveFms={saveFms}
-                    onSaveCustomAd={saveCustomAd}
-                    onClose={() => setSettingsOpen(false)}
-                />
-            )}
+            <SettingsDialog
+                open={settingsOpen}
+                source={triggerSource}
+                fms={fms}
+                customAd={customAd}
+                ftc={ftc}
+                companionPort={companionPort}
+                onSaveFms={saveFms}
+                onSaveCustomAd={saveCustomAd}
+                onClose={() => setSettingsOpen(false)}
+            />
         </>
     );
 }
