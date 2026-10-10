@@ -902,9 +902,12 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     AutoAV.Instance.on('match', (rec: MatchRecord) => {
         if (!rec?.filePath || announcedVideos.has(rec.id)) return;
         const ps = rec.processing?.state;
+        // Final = cut done, never cut (unprocessed / no state), or the cut
+        // failed and the original was put back. Queued/processing = not yet.
         const final =
             ps === 'done' ||
-            (rec.status === 'recorded' && (!ps || ps === 'unprocessed'));
+            (rec.status === 'recorded' &&
+                (!ps || ps === 'unprocessed' || ps === 'error'));
         if (!final) return;
         announcedVideos.add(rec.id);
         YoutubeUploaderAddon.Instance.videoReady(rec.filePath);
