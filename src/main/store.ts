@@ -53,10 +53,6 @@ export type AppConfig = {
     // decides whether the custom display runs, which display the vMix input
     // shows and whose Bitfocus triggers the tab edits.
     frcAudienceDisplay: 'fms' | 'customAd';
-    // In-season or off-season event: turns the off-season features on (the
-    // uploader and Upload tab, the custom audience display, dead-time
-    // cutting). Its own setting; file naming is separate (autoAv.fileNameMode).
-    season: 'in-season' | 'off-season';
     // Port Bitfocus Companion's web server listens on, on this machine
     // (FIM's carts use 8888; some AV machines run it elsewhere).
     companionPort: number;
@@ -214,7 +210,6 @@ export function createStore(): Store<AppConfig> {
             },
             program: { type: 'string', default: 'auto' },
             frcAudienceDisplay: { type: 'string', default: 'fms' },
-            season: { type: 'string', default: 'in-season' },
             companionPort: { type: 'number', default: 8888 },
             checks: {
                 type: 'object',

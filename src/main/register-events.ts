@@ -1013,7 +1013,6 @@ export default function registerAllEvents(window: BrowserWindow | null) {
     const appSettings = () => ({
         program: store.get('program', 'auto'),
         frcAudienceDisplay: store.get('frcAudienceDisplay', 'fms'),
-        season: store.get('season', 'in-season'),
         companionPort: store.get('companionPort', 8888),
     });
 
@@ -1047,9 +1046,6 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         }
         if (['fms', 'customAd'].includes(s?.frcAudienceDisplay)) {
             store.set('frcAudienceDisplay', s.frcAudienceDisplay);
-        }
-        if (['in-season', 'off-season'].includes(s?.season)) {
-            store.set('season', s.season);
         }
         const port = Number(s?.companionPort);
         if (
