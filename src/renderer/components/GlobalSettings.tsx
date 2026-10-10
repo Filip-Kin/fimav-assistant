@@ -34,7 +34,7 @@ export default function GlobalSettings() {
     const [season, setSeason] = useState<'in-season' | 'off-season'>(
         'in-season'
     );
-    const [companionPort, setCompanionPort] = useState(8000);
+    const [companionPort, setCompanionPort] = useState(8888);
     const [address, setAddress] = useState('');
     const [ftcStatus, setFtcStatus] = useState<FtcScorekeeperStatus | null>(
         null
