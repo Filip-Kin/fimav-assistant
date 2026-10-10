@@ -58,7 +58,7 @@ export type AppConfig = {
     // cutting). Its own setting; file naming is separate (autoAv.fileNameMode).
     season: 'in-season' | 'off-season';
     // Port Bitfocus Companion's web server listens on, on this machine
-    // (Companion's default is 8000; some AV machines run it elsewhere).
+    // (FIM's carts use 8888; some AV machines run it elsewhere).
     companionPort: number;
     // Stream checks: check id -> epoch ms until which "Ignore" holds (6 h).
     checks: { ignoredUntil: Record<string, number> };
@@ -215,7 +215,7 @@ export function createStore(): Store<AppConfig> {
             program: { type: 'string', default: 'auto' },
             frcAudienceDisplay: { type: 'string', default: 'fms' },
             season: { type: 'string', default: 'in-season' },
-            companionPort: { type: 'number', default: 8000 },
+            companionPort: { type: 'number', default: 8888 },
             checks: {
                 type: 'object',
                 properties: {

@@ -27,9 +27,9 @@ import { getStore } from './store';
 const FMS_URL = 'http://10.0.100.5';
 
 // Companion runs on the AV machine itself, for FIM-AV and for the FMS audience
-// display alike, on the port set in Settings (Companion's default 8000).
+// display alike, on the port set in Settings (FIM's default 8888).
 export function companionUrl(): string {
-    return `http://127.0.0.1:${getStore().get('companionPort', 8000)}`;
+    return `http://127.0.0.1:${getStore().get('companionPort', 8888)}`;
 }
 
 // The custom audience display is run by AudienceDisplayAddon on this machine.

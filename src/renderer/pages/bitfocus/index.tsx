@@ -630,6 +630,7 @@ export default function Bitfocus() {
     const [program, setProgram] = useState<Program | null>(null);
     const [offSeason, setOffSeason] = useState(false);
     const [frcAd, setFrcAd] = useState<'fms' | 'customAd'>('fms');
+    const [companionPort, setCompanionPort] = useState(8888);
     const [ftcStatus, setFtcStatus] = useState<FtcScorekeeperStatus | null>(
         null
     );
@@ -719,10 +720,17 @@ export default function Bitfocus() {
                 setFrcAd(st.frcAudienceDisplay);
             }
         );
+        const offSettings = ipcRenderer.on(
+            'app:settings',
+            (st: { companionPort: number }) =>
+                setCompanionPort(st.companionPort)
+        );
         send('autoav:getState');
+        send('app:getSettings');
         loadAll();
         return () => {
             offAutoav();
+            offSettings();
             offResult();
             offFtc();
             offFtcStatus();
@@ -871,7 +879,11 @@ export default function Bitfocus() {
         events.forEach((e) => {
             buttons[String(e)] = loc;
         });
-        sinks[0] = { ...first, address: 'http://127.0.0.1:8000', buttons };
+        sinks[0] = {
+            ...first,
+            address: `http://127.0.0.1:${companionPort}`,
+            buttons,
+        };
         saveCustomAd({ ...customAd.config, sinks });
     };
 

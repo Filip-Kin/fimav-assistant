@@ -1032,7 +1032,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         program: store.get('program', 'auto'),
         frcAudienceDisplay: store.get('frcAudienceDisplay', 'fms'),
         season: store.get('season', 'in-season'),
-        companionPort: store.get('companionPort', 8000),
+        companionPort: store.get('companionPort', 8888),
     });
 
     // The custom display presses Companion buttons through its own "Local"
@@ -1074,7 +1074,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
             Number.isInteger(port) &&
             port > 0 &&
             port < 65536 &&
-            port !== store.get('companionPort', 8000)
+            port !== store.get('companionPort', 8888)
         ) {
             const oldUrl = companionUrl();
             store.set('companionPort', port);

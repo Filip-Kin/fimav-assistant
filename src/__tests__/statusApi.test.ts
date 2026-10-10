@@ -64,7 +64,7 @@ jest.mock('../main/addons/audience-display', () => ({
     },
 }));
 jest.mock('../main/bitfocus', () => ({
-    companionUrl: () => 'http://127.0.0.1:8000',
+    companionUrl: () => 'http://127.0.0.1:8888',
     CUSTOM_AD_URL: 'http://127.0.0.1:3001',
     readCustomAd: jest.fn(),
     readFmsAutomation: jest.fn(),
@@ -103,7 +103,7 @@ global.fetch = jest.fn(async (url: any) => {
                 c: { status: 'queued' },
             },
         });
-    if (u.startsWith('http://127.0.0.1:8000')) return reply('ok');
+    if (u.startsWith('http://127.0.0.1:8888')) return reply('ok');
     return realFetch(url);
 }) as any;
 jest.mock('../main/addons/live-captions', () => ({
