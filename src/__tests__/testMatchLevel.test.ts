@@ -41,7 +41,10 @@ const fmsAnswers = (item1: string, item2: number, item3: number) =>
     });
 
 const av = () => AutoAV.Instance as any;
-const flush = () => new Promise((r) => setTimeout(r, 0));
+const flush = () =>
+    new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+    });
 
 describe('test match level', () => {
     beforeEach(() => {
