@@ -21,11 +21,14 @@ type MatchState =
     | 'WaitingForMatchPreview'
     | 'WaitingForMatchPreviewTO';
 
+// FMS sends "None" for a test match (GetCurrentMatchAndPlayNumber, and the
+// status message before quals); "Match Test" is kept from the older code.
 export type TournamentLevel =
     | 'Practice'
     | 'Qualification'
     | 'Playoff'
-    | 'Match Test';
+    | 'Match Test'
+    | 'None';
 
 // P1: Match State (String), P2: Match Number (Number), P3: Play Number (Number), P4: Level (String)
 type FMSMatchStatus = {

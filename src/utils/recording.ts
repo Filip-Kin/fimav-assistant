@@ -46,6 +46,7 @@ const fileNameBuilders: Record<
                 match = `zz_PR${matchStatus.MatchNumber}`;
                 break;
             case 'Match Test':
+            case 'None':
                 match = `zz_TM${matchStatus.MatchNumber}`;
                 break;
             default:
@@ -67,7 +68,13 @@ const fileNameBuilders: Record<
             matchStatus.PlayNumber > 1
                 ? ` (Play #${matchStatus.PlayNumber})`
                 : '';
-        return `${eventName} - ${matchStatus.Level} Match ${matchStatus.MatchNumber}${playString}.mp4`;
+        // A test match is "Test Match N", which the uploader reads as a test
+        // and never uploads.
+        const level =
+            matchStatus.Level === 'None' || matchStatus.Level === 'Match Test'
+                ? 'Test'
+                : matchStatus.Level;
+        return `${eventName} - ${level} Match ${matchStatus.MatchNumber}${playString}.mp4`;
     },
 };
 

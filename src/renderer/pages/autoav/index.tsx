@@ -35,6 +35,7 @@ const LEVEL_SHORT: Record<string, string> = {
     Playoff: 'Playoff',
     Practice: 'Practice',
     'Match Test': 'Test',
+    None: 'Test',
 };
 
 function levelShort(level: string): string {

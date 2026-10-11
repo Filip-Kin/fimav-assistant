@@ -10,7 +10,7 @@ import {
     EquipmentLogDetails,
     EquipmentLogType,
 } from '../../models/EquipmentLog';
-import FMSMatchStatus from '../../models/FMSMatchState';
+import FMSMatchStatus, { TournamentLevel } from '../../models/FMSMatchState';
 import FtcScorekeeper from '../ftc/scorekeeper';
 import FtcRecorder from '../ftc/recorder';
 import { FtcScorekeeperStatus, FtcUpdate } from '../../models/Ftc';
@@ -61,6 +61,16 @@ export default class AutoAV {
 
     // Last match state received
     private lastState: FMSMatchStatus | null = null;
+
+    // The loaded match as FMS's GetCurrentMatchAndPlayNumber names it, and the
+    // match+play a fetch is in flight for. See withLoadedLevel.
+    private loadedMatch: {
+        number: number;
+        play: number;
+        level: TournamentLevel;
+    } | null = null;
+
+    private loadedMatchFetch: string | null = null;
 
     // SignalR Hub Connection
     private hubConnection: HubConnection | null = null;
@@ -434,6 +444,79 @@ export default class AutoAV {
         record: (rec) => this.emitter.emit('match', rec),
     });
 
+    // FMS's MatchStatusInfoChanged carries the event's active tournament level,
+    // not the loaded match's: during quals a test match (always number 999)
+    // arrives as Qualification 999. Goonettes and DCC 2026-10-10 recorded test
+    // matches as "Qualification Match 999" and uploaded them as quals.
+    // GetCurrentMatchAndPlayNumber names the loaded match (level "None" for a
+    // test match). Its answer is cached per match+play and applied to every
+    // status for that match; the status's own level is the fallback until the
+    // answer arrives or when FMS does not give one. Prestart comes well before
+    // MatchAuto, so the level is corrected before a recording starts.
+    private withLoadedLevel(info: FMSMatchStatus): FMSMatchStatus {
+        if (this.isFtc()) return info;
+        const lm = this.loadedMatch;
+        if (
+            lm &&
+            lm.number === info.MatchNumber &&
+            lm.play === info.PlayNumber
+        ) {
+            return lm.level === info.Level
+                ? info
+                : { ...info, Level: lm.level };
+        }
+        this.refreshLoadedMatch(info.MatchNumber, info.PlayNumber);
+        return info;
+    }
+
+    private refreshLoadedMatch(num: number, play: number) {
+        const key = `${num}-${play}`;
+        if (this.loadedMatchFetch === key) return;
+        this.loadedMatchFetch = key;
+        this.fetchLoadedMatch(num, play, key).catch((e) => {
+            this.logFMS(
+                'GetCurrentMatchAndPlayNumber failed; using the status level',
+                e,
+                EquipmentLogType.Debug
+            );
+        });
+    }
+
+    private async fetchLoadedMatch(
+        num: number,
+        play: number,
+        key: string
+    ): Promise<void> {
+        try {
+            await this.applyLoadedMatch(num, play);
+        } finally {
+            if (this.loadedMatchFetch === key) this.loadedMatchFetch = null;
+        }
+    }
+
+    private async applyLoadedMatch(num: number, play: number): Promise<void> {
+        const r = await nodeFetch(
+            'http://10.0.100.5/api/v1.0/audience/get/GetCurrentMatchAndPlayNumber'
+        );
+        if (r.status !== 200) return;
+        const d = await r.json();
+        if (!d || typeof d.item1 !== 'string') return;
+        // FMS has moved on to another match: the next status asks again.
+        if (d.item2 !== num || d.item3 !== play) return;
+        const level = d.item1 as TournamentLevel;
+        this.loadedMatch = { number: num, play, level };
+        const st = this.lastState;
+        if (
+            st &&
+            st.MatchNumber === num &&
+            st.PlayNumber === play &&
+            st.Level !== level
+        ) {
+            this.lastState = { ...st, Level: level };
+            this.emitter.emit('play');
+        }
+    }
+
     // A qualification or playoff match being played right now, FRC or FTC,
     // for the stream checks; null between matches and for practice/test.
     public matchInPlay(): { label: string; level: string } | null {
@@ -554,15 +637,20 @@ export default class AutoAV {
         // Register listener for the "MatchStatusInfoChanged" event (match starts, ends, changes modes, etc)
         this.hubConnection.on(
             'MatchStatusInfoChanged',
-            (info: FMSMatchStatus) => {
+            (raw: FMSMatchStatus) => {
+                const info = this.withLoadedLevel(raw);
                 // Log the change
                 this.logFMS(
                     `Match Status Changed: ${
                         this.lastState ? this.lastState.MatchState : 'Unknown'
                     } -> ${info.MatchState} for ${info.Level} Match ${
                         info.MatchNumber
-                    } (Play #${info.PlayNumber})`,
-                    info,
+                    } (Play #${info.PlayNumber})${
+                        raw.Level !== info.Level
+                            ? ` (FMS said ${raw.Level})`
+                            : ''
+                    }`,
+                    raw,
                     EquipmentLogType.Debug
                 );
 
