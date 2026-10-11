@@ -738,14 +738,25 @@ function errText(e: unknown): string {
 const pollStatus = () =>
     window.electron?.ipcRenderer.sendMessage('upload:getStatus', []);
 
+// Event order, so later matches sort above earlier ones.
+const LEVEL_ORDER = ['practice', 'qualification', 'playoff', 'final'];
+
+// Newest first: the match just played is at the top. Level, then match
+// number, then play; a file the uploader could not place goes to the bottom.
 function sortRows(videos: Record<string, UploadVideo>): UploadRow[] {
+    const key = (r: UploadRow): [number, number, number] => {
+        const lvl = LEVEL_ORDER.indexOf(
+            (r.meta?.match_level ?? '').toLowerCase()
+        );
+        return [lvl, r.meta?.match_number ?? -1, r.meta?.play ?? 0];
+    };
     return Object.entries(videos)
         .map(([filename, v]) => ({ filename, ...v }))
-        .sort(
-            (a, b) =>
-                (a.meta?.match_number ?? Number.MAX_SAFE_INTEGER) -
-                (b.meta?.match_number ?? Number.MAX_SAFE_INTEGER)
-        );
+        .sort((a, b) => {
+            const ka = key(a);
+            const kb = key(b);
+            return kb[0] - ka[0] || kb[1] - ka[1] || kb[2] - ka[2];
+        });
 }
 
 export default function UploadPage() {
