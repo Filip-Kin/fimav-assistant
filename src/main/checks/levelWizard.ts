@@ -8,7 +8,6 @@ import { listMatches } from '../recordings/matchStore';
 import {
     dbToLevel,
     FADER_STEPS,
-    gainToLevel,
     LEVEL_STEPS,
     levelToDb,
     METER_BUS,
@@ -35,6 +34,13 @@ import {
     StreamPlan,
 } from './levels';
 import LiveLoudness, { LiveBlock } from './liveLoudness';
+import {
+    GainControl,
+    gainDbToLevel,
+    gainLevelToDb,
+    gainStepDb,
+    MIC_GAIN_DB,
+} from '../../utils/xairLaw';
 import { MatchRecord } from '../../models/MatchRecord';
 import { MIN_TALK_SECONDS } from './talking';
 import {
@@ -50,14 +56,24 @@ import {
 // Steps, one source at a time:
 //  1. Red mic (X-Air ch 1): preamp +20 dB, fader 0 dB, Master (LR) down to
 //     -50 dB; the on-screen fader is Master, raised by ear in the room.
-//  2. Blue mic (ch 2): preamp +20 dB, fader 0 dB; the on-screen fader is
-//     ch 2's fader, by ear.
-//  3. Match sounds: a match is run; the on-screen fader is the match-sound
-//     source's fader (the aux return "vMix PC": vMix's Master comes into
-//     the X-Air there, see readMixer() in engine.ts).
-//  4. DJ: the DJ channels' faders, by ear. DJ music is copyrighted and
-//     never goes to the stream: the DJ Bus 1 sends are turned off when the
-//     step opens and again on Apply, and the stream plan leaves DJ out.
+//  2. Blue mic (ch 2): preamp +20 dB, fader 0 dB; the on-screen control is
+//     ch 2's preamp gain, by ear, the fader staying at 0 dB.
+//  3. Match sounds: a match is run; the on-screen control is the
+//     match-sound source's fader (the aux return "vMix PC": vMix's Master
+//     comes into the X-Air there, see readMixer() in engine.ts). Filip:
+//     nothing on the vMix side that feeds it is ever changed, and the aux
+//     return is not balanced by gain, so this fader may end away from 0 dB.
+//  4. DJ: the DJ channels' faders go to 0 dB with their preamp gain taking
+//     the difference (the room stays as it was), then the on-screen control
+//     is the DJ preamp gain, by ear. DJ music is copyrighted and never goes
+//     to the stream: the DJ Bus 1 sends are turned off when the step opens
+//     and again on Apply, and the stream plan leaves DJ out.
+// Zero is balanced: at the end every fader but match sounds' is at 0 dB and
+// the balance is in the input gains. A source with no gain control (input
+// not a preamp) falls back to its fader and shows "No gain".
+// Input meters are after the gain, so every level the wizard measures is
+// taken back to the source's reference gain (the talking gate is meant at
+// +20 dB on a mic) and forward again to the gain it has now.
 //  5. Stream: the Bus 1 sends and master from the stored levels
 //     (levels.ts), vMix Bus A to 0 dB, one Apply.
 //  6. Check: the real stream loudness while someone talks, and the residual
@@ -73,8 +89,8 @@ const STEP_LABEL: Record<SourceId | 'dj', string> = {
     dj: 'DJ',
 };
 
-// The mic preamp gain and fader the mic steps start from, and Master's.
-const MIC_GAIN_DB = 20;
+// The fader every source but match sounds ends at: zero is balanced, the
+// balance lives in the input gain. (Mic gain starts at MIC_GAIN_DB.)
 const MIC_FADER_DB = 0;
 const MASTER_START_DB = -50;
 
@@ -165,12 +181,22 @@ export const POST_TAP = 4;
 // Two mixer values are the same parameter step (the X-Air sends float32).
 const sameValue = (a: number, b: number) => Math.abs(a - b) < 1e-5;
 
-const FADER_TARGET = {
-    red: 'Master',
-    blue: 'Blue mic',
-    match: 'Match sounds',
-    dj: 'DJ',
-} as const;
+// What the on-screen control moves in a step: a fader (fader law) or an
+// input gain (linear dB on its steps), on one or more addresses.
+interface Control {
+    label: string;
+    kind: 'fader' | 'gain';
+    addrs: string[];
+    gain?: GainControl;
+}
+
+const controlToLevel = (c: Control, db: number) =>
+    c.kind === 'gain' && c.gain
+        ? gainDbToLevel(db, c.gain)
+        : dbToLevel(db, FADER_STEPS);
+
+const controlToDb = (c: Control, f: number) =>
+    c.kind === 'gain' && c.gain ? gainLevelToDb(f, c.gain) : levelToDb(f);
 
 export default class LevelWizard extends EventEmitter {
     private static instance: LevelWizard;
@@ -245,11 +271,6 @@ export default class LevelWizard extends EventEmitter {
 
     // Sources whose Bus 1 send tap Apply switched to POST.
     private madePost: SourceId[] = [];
-
-    private noPreamp = new Set<Kind>();
-
-    // Each mic's preamp gain address (/headamp/NN/gain, NN its input).
-    private heads = new Map<'red' | 'blue', string>();
 
     private busy = false;
 
@@ -368,8 +389,6 @@ export default class LevelWizard extends EventEmitter {
         this.appliedAt = null;
         this.djSendOff = false;
         this.madePost = [];
-        this.noPreamp.clear();
-        this.heads.clear();
         this.matchSeen = false;
         this.error = null;
         this.original.clear();
@@ -381,6 +400,7 @@ export default class LevelWizard extends EventEmitter {
     // Read every parameter the wizard may write.
     private async readOriginal(host: string, m: MixerState) {
         const pad = sendPad();
+        const withGain = [...m.mics.slice(0, 2), ...m.dj].filter((s) => s.gain);
         const addrs = [
             LR_FADER,
             busFaderAddr(),
@@ -389,33 +409,17 @@ export default class LevelWizard extends EventEmitter {
                 `${s.path}/mix/${pad}/level`,
             ]),
             ...m.dj.map((s) => `${s.path}/mix/${pad}/grpon`),
-            ...m.mics.slice(0, 2).map((s) => `${s.path}/config/insrc`),
             ...[...m.mics.slice(0, 2), ...m.game].map(
                 (s) => `${s.path}/mix/${pad}/tap`
             ),
+            ...withGain.map((s) => s.gain!.address),
         ];
         m.dj.forEach((s) => this.ints.add(`${s.path}/mix/${pad}/grpon`));
         [...m.mics.slice(0, 2), ...m.game].forEach((s) =>
             this.ints.add(`${s.path}/mix/${pad}/tap`)
         );
         const got = await queryXair(host, addrs);
-        // The mic preamps: the channel's input source (0..15 = In01..In16).
-        m.mics.slice(0, 2).forEach((s, i) => {
-            const kind = i === 0 ? 'red' : 'blue';
-            const src = got.get(`${s.path}/config/insrc`);
-            const n = Number(src);
-            if (src === undefined || !(n >= 0 && n < 16))
-                this.noPreamp.add(kind);
-            else this.heads.set(kind, `/headamp/${pad2(n + 1)}/gain`);
-        });
-        const heads = [...this.heads.values()];
-        const gains = heads.length ? await queryXair(host, heads) : new Map();
-        heads.forEach((h) => {
-            if (!gains.has(h))
-                this.heads.forEach((v, k) => v === h && this.heads.delete(k));
-        });
-        [...got, ...gains].forEach(([a, v]) => {
-            if (a.endsWith('/config/insrc')) return;
+        got.forEach((v, a) => {
             this.original.set(a, Number(v));
             this.values.set(a, Number(v));
         });
@@ -423,8 +427,37 @@ export default class LevelWizard extends EventEmitter {
         this.busAOriginal = this.busAVolume;
     }
 
-    private headampOf(kind: 'red' | 'blue'): string | null {
-        return this.heads.get(kind) ?? null;
+    // A source's gain setting now (dB), or undefined when it has none or
+    // the mixer did not answer for it.
+    private gainNow(s: MixerSource): number | undefined {
+        if (!s.gain) return undefined;
+        const f = this.values.get(s.gain.address);
+        return f === undefined ? undefined : gainLevelToDb(f, s.gain);
+    }
+
+    // The source's gain control, when it has one the wizard can set.
+    private gainOf(s: MixerSource | undefined): GainControl | undefined {
+        return s && this.gainNow(s) !== undefined ? s.gain : undefined;
+    }
+
+    // An input meter reading taken back to the source's reference gain.
+    private atRef(s: MixerSource, meterDb: number): number {
+        const g = this.gainNow(s);
+        return g === undefined || !s.gain
+            ? meterDb
+            : meterDb - (g - s.gain.refDb);
+    }
+
+    // A level at the reference gain brought to the gain the source has now.
+    private atGainNow(s: MixerSource, refDb: number): number {
+        const g = this.gainNow(s);
+        return g === undefined || !s.gain ? refDb : refDb + (g - s.gain.refDb);
+    }
+
+    // A step's level at reference gain: the loudest of its sources.
+    private kindRef(kind: Kind, levels: number[]): number {
+        const xs = sources(kind).map((s) => this.atRef(s, inputOf(s, levels)));
+        return xs.length ? Math.max(...xs) : -Infinity;
     }
 
     private async readBusA() {
@@ -471,9 +504,12 @@ export default class LevelWizard extends EventEmitter {
         const writes: XairWrite[] = [];
         if (step === 'red' || step === 'blue') {
             const s = sources(step)[0];
-            const head = this.headampOf(step);
-            if (head)
-                writes.push({ address: head, value: gainToLevel(MIC_GAIN_DB) });
+            const g = this.gainOf(s);
+            if (g)
+                writes.push({
+                    address: g.address,
+                    value: gainDbToLevel(MIC_GAIN_DB, g),
+                });
             if (s)
                 writes.push({
                     address: `${s.path}/mix/fader`,
@@ -485,7 +521,7 @@ export default class LevelWizard extends EventEmitter {
                     value: dbToLevel(MASTER_START_DB, FADER_STEPS),
                 });
         }
-        if (step === 'dj') writes.push(...this.djOffWrites());
+        if (step === 'dj') writes.push(...this.djOffWrites(), ...this.djZero());
         if (writes.length)
             await this.write(
                 STEP_LABEL[step as Kind] ?? step,
@@ -511,26 +547,79 @@ export default class LevelWizard extends EventEmitter {
         return out;
     }
 
-    // The X-Air addresses the on-screen fader moves in this step.
-    private faderAddrs(): string[] {
+    // DJ faders to 0 dB, the preamp gain taking the difference so the room
+    // stays as loud as it was (clamped to the gain's range; a fader that was
+    // off starts the gain at its lowest). A DJ channel without a gain the
+    // wizard can set keeps its fader.
+    private djZero(): XairWrite[] {
+        const out: XairWrite[] = [];
+        sources('dj').forEach((s) => {
+            const g = this.gainOf(s);
+            const fa = `${s.path}/mix/fader`;
+            const f = this.values.get(fa);
+            if (!g || f === undefined) return;
+            const faderDb = levelToDb(f);
+            const gainDb = this.gainNow(s)!;
+            const want = Number.isFinite(faderDb)
+                ? gainDb + faderDb - MIC_FADER_DB
+                : g.minDb;
+            out.push({ address: g.address, value: gainDbToLevel(want, g) });
+            out.push({
+                address: fa,
+                value: dbToLevel(MIC_FADER_DB, FADER_STEPS),
+            });
+        });
+        return out;
+    }
+
+    // What the on-screen control moves in this step.
+    private control(): Control | null {
+        const fader = (label: string, ss: MixerSource[]): Control | null =>
+            ss.length
+                ? {
+                      label,
+                      kind: 'fader',
+                      addrs: ss.map((s) => `${s.path}/mix/fader`),
+                  }
+                : null;
+        const gain = (label: string, ss: MixerSource[]): Control | null => {
+            const gs = ss.map((s) => this.gainOf(s));
+            if (!ss.length || gs.some((g) => !g)) return null;
+            return {
+                label,
+                kind: 'gain',
+                addrs: gs.map((g) => g!.address),
+                gain: gs[0],
+            };
+        };
         switch (this.step) {
             case 'red':
-                return [LR_FADER];
+                return { label: 'Master', kind: 'fader', addrs: [LR_FADER] };
             case 'blue':
-                return sources('blue').map((s) => `${s.path}/mix/fader`);
+                return (
+                    gain('Blue mic gain', sources('blue')) ??
+                    fader('Blue mic', sources('blue'))
+                );
             case 'match': {
                 const s = this.matchSource();
-                return s ? [`${s.path}/mix/fader`] : [];
+                return s ? fader('Match sounds', [s]) : null;
             }
             case 'dj':
-                return sources('dj').map((s) => `${s.path}/mix/fader`);
+                return (
+                    gain('DJ gain', sources('dj')) ?? fader('DJ', sources('dj'))
+                );
             default:
-                return [];
+                return null;
         }
     }
 
-    // The on-screen fader moved (dB). Writes go out at most every 40 ms;
-    // the first move of a step is one undo entry for the whole drag.
+    private faderAddrs(): string[] {
+        return this.control()?.addrs ?? [];
+    }
+
+    // The on-screen control moved (dB, fader or gain). Writes go out at most
+    // every 40 ms; the first move of a step is one undo entry for the whole
+    // drag.
     public fader(db: number) {
         const addrs = this.faderAddrs();
         const host = mixerHost();
@@ -539,7 +628,7 @@ export default class LevelWizard extends EventEmitter {
             return;
         if (!this.dragEntry) {
             this.dragEntry = {
-                label: `${STEP_LABEL[this.step as Kind]} fader`,
+                label: this.control()?.label ?? 'Fader',
                 writes: addrs.map((a) => ({
                     address: a,
                     value: this.values.get(a) ?? 0,
@@ -559,10 +648,11 @@ export default class LevelWizard extends EventEmitter {
         const db = this.dragPending;
         this.dragPending = null;
         const host = mixerHost();
-        if (db === null || !host) return;
-        const value = dbToLevel(db, FADER_STEPS);
-        // The operator's own fader (the only live write of Master).
-        const writes = this.faderAddrs().map((a) => ({ address: a, value }));
+        const c = this.control();
+        if (db === null || !host || !c) return;
+        const value = controlToLevel(c, db);
+        // The operator's own control (the only live write of Master).
+        const writes = c.addrs.map((a) => ({ address: a, value }));
         writes.forEach((w) => {
             this.values.set(w.address, w.value);
             this.written.set(w.address, w.value);
@@ -708,8 +798,9 @@ export default class LevelWizard extends EventEmitter {
         this.levelsAt = at;
         if (!this.open) return;
         const kinds: Kind[] = ['red', 'blue', 'match', 'dj'];
+        // Sounding: over the gate at the source's reference gain.
         const active = new Map(
-            kinds.map((k) => [k, kindInput(k, levels) >= GATE_DB])
+            kinds.map((k) => [k, this.kindRef(k, levels) >= GATE_DB])
         );
         if (active.get('red') || active.get('blue')) this.lastMicAt = at;
         const cur = this.step as Kind;
@@ -717,7 +808,7 @@ export default class LevelWizard extends EventEmitter {
         sources(cur).forEach((s) => {
             const key = s.path;
             if (!this.meters.has(key)) this.meters.set(key, new SourceMeter());
-            this.meters.get(key)!.feed(at, inputOf(s, levels));
+            this.meters.get(key)!.feed(at, this.atRef(s, inputOf(s, levels)));
         });
         const alone =
             active.get(cur) && kinds.every((k) => k === cur || !active.get(k));
@@ -775,13 +866,14 @@ export default class LevelWizard extends EventEmitter {
     private measuredOf(kind: SourceId): Measured | null {
         const s = kind === 'match' ? this.matchSource() : sources(kind)[0];
         const meter = s ? this.meters.get(s.path) : undefined;
-        const input = meter?.inputDb ?? null;
-        if (!meter || input === null || meter.seconds < 1) return null;
+        const ref = meter?.inputDb ?? null;
+        if (!s || !meter || ref === null || meter.seconds < 1) return null;
         const lufs = this.streams.get(kind)?.lufs ?? null;
+        // Measured at reference gain; on the mixer at the gain it has now.
         return {
             id: kind,
-            inputDb: input,
-            peakDb: meter.peakDb,
+            inputDb: this.atGainNow(s, ref),
+            peakDb: this.atGainNow(s, meter.peakDb),
             streamLufs: lufs,
             meterBusDb:
                 lufs !== null ? powerMean(this.meterBus.get(kind) ?? []) : null,
@@ -973,14 +1065,18 @@ export default class LevelWizard extends EventEmitter {
     private wizardState(l: number[]): WizardState {
         const kind = this.step as Kind;
         const isSource = ['red', 'blue', 'match', 'dj'].includes(kind);
-        const addrs = this.faderAddrs();
-        const fader = addrs.length ? this.values.get(addrs[0]) : undefined;
+        const c = this.control();
+        const cv = c ? this.values.get(c.addrs[0]) : undefined;
         const busDb = levelToDb(this.values.get(busFaderAddr()) ?? 0);
         const rows = (['red', 'blue', 'match', 'dj'] as Kind[]).map((k) => {
             const meas = k === 'dj' ? null : this.measuredOf(k);
             const djMeter = sources('dj')
-                .map((s) => this.meters.get(s.path)?.inputDb ?? null)
+                .map((s) => {
+                    const r = this.meters.get(s.path)?.inputDb ?? null;
+                    return r === null ? null : this.atGainNow(s, r);
+                })
                 .filter((x): x is number => x !== null);
+            const src = k === 'match' ? this.matchSource() : sources(k)[0];
             let input = meas?.inputDb ?? null;
             if (k === 'dj')
                 input = djMeter.length ? Math.max(...djMeter) : null;
@@ -993,6 +1089,7 @@ export default class LevelWizard extends EventEmitter {
                 label: STEP_LABEL[k],
                 status: this.stepStatusOf(k),
                 input: finite(input),
+                gain: src ? finite(this.gainNow(src)) : null,
                 // On Bus 1 out: as planned when there is a plan, else now.
                 bus:
                     input !== null && mix
@@ -1019,10 +1116,22 @@ export default class LevelWizard extends EventEmitter {
             step: this.step,
             steps: LEVEL_STEPS_ORDER,
             input: isSource ? finite(kindInput(kind, l)) : null,
-            fader: fader !== undefined ? finite(levelToDb(fader)) : null,
-            faderTarget: isSource ? FADER_TARGET[kind] : null,
+            control:
+                c && cv !== undefined
+                    ? {
+                          label: c.label,
+                          kind: c.kind,
+                          db: controlToDb(c, cv),
+                          minDb: c.gain?.minDb ?? null,
+                          maxDb: c.gain?.maxDb ?? null,
+                          stepDb: c.gain ? gainStepDb(c.gain) : null,
+                      }
+                    : null,
             matchRunning: this.matchRunning,
-            noPreamp: [...this.noPreamp] as ('red' | 'blue')[],
+            // Mics and DJ with no gain the wizard can set.
+            noGain: (['red', 'blue', 'dj'] as const).filter((k) =>
+                sources(k).some((s) => !this.gainOf(s))
+            ),
             djSendOff: this.djSendOff,
             toPost: this.open ? this.notPost().map((t) => t.id) : [],
             madePost: this.madePost,

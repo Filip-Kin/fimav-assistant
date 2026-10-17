@@ -1009,6 +1009,39 @@ describe('stream checks', () => {
         expect(talkLog.talk).toEqual([[t, t + 1000]]);
     });
 
+    it('the talking gate is at the reference mic gain (+20 dB)', async () => {
+        // Ch 1 on In01, its preamp at +44 dB.
+        mixer.set('/ch/01/config/insrc', 0);
+        mixer.set('/ch/01/preamp/rtnsw', 0);
+        mixer.set('/headamp/01/gain', (44 + 12) / 72);
+        checks.dirty.mixer = true;
+        await tick(1);
+        const t = Date.now();
+        checks.meters.lastAt = t;
+        // -38 dBFS after +44 dB of gain is -62 at +20: not talking.
+        talkLog.clear();
+        checks.meters.latest = [-38, -90, -90, -90];
+        checks.noteTalking();
+        expect(talkLog.talk).toEqual([]);
+        // At 0 dB of gain, -50 dBFS is -30 at +20: talking.
+        mixer.set('/headamp/01/gain', 12 / 72);
+        checks.dirty.mixer = true;
+        await tick(1);
+        talkLog.clear();
+        checks.meters.latest = [-50, -90, -90, -90];
+        checks.noteTalking();
+        expect(talkLog.talk).toEqual([[t, t + 1000]]);
+        // A mic fed from a USB return: its trim (0 dB reference).
+        mixer.set('/ch/01/preamp/rtnsw', 1);
+        mixer.set('/ch/01/preamp/rtntrim', 0.5);
+        checks.dirty.mixer = true;
+        await tick(1);
+        talkLog.clear();
+        checks.meters.latest = [-45, -90, -90, -90];
+        checks.noteTalking();
+        expect(talkLog.talk).toEqual([]);
+    });
+
     // Quiet because nobody talks is never "too quiet"; quiet while someone
     // talks is, with the boost to make, whatever the faders say.
     describe('quiet stream: nobody talking vs turned down', () => {

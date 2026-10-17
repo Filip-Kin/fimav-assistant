@@ -49,3 +49,65 @@ export function dbToLevel(db: number, steps: number): number {
     else f = (d + 30) / 40;
     return Math.round(f * (steps - 1)) / (steps - 1);
 }
+
+// An input gain the wizard can set: a channel's mic preamp
+// (/headamp/NN/gain, NN the channel's input) or, for a channel fed from a
+// USB return, its return trim. `refDb` is the gain the talking gate
+// (-40 dBFS on the input meter) is meant at: a level read at another gain
+// is taken back to it, so turning a mic up does not make quieter talking
+// count, nor turning it down hide talking.
+export interface GainControl {
+    address: string;
+    minDb: number;
+    maxDb: number;
+    steps: number;
+    refDb: number;
+}
+
+// The mic preamp gain the wizard starts each mic at, and the reference.
+export const MIC_GAIN_DB = 20;
+
+export const preampGain = (input: number): GainControl => ({
+    address: `/headamp/${String(input).padStart(2, '0')}/gain`,
+    minDb: GAIN_MIN_DB,
+    maxDb: GAIN_MAX_DB,
+    steps: GAIN_STEPS,
+    refDb: MIC_GAIN_DB,
+});
+
+// Return trim (/ch/NN/preamp/rtntrim): -18..+18 dB, 145 steps.
+export const returnTrim = (path: string): GainControl => ({
+    address: `${path}/preamp/rtntrim`,
+    minDb: -18,
+    maxDb: 18,
+    steps: 145,
+    refDb: 0,
+});
+
+// A channel's gain control from its input source (config/insrc: 0..15 =
+// In01..In16) and whether it uses its USB return (preamp/rtnsw), or null
+// (aux or off input: no preamp).
+export function channelGain(
+    path: string,
+    insrc: number | undefined,
+    rtnsw: number | undefined
+): GainControl | null {
+    if (rtnsw === 1) return returnTrim(path);
+    if (insrc !== undefined && insrc >= 0 && insrc < 16)
+        return preampGain(insrc + 1);
+    return null;
+}
+
+// A linear gain in dB to the X-Air float and back, on its steps.
+export function gainDbToLevel(db: number, c: GainControl): number {
+    const d = Math.min(c.maxDb, Math.max(c.minDb, db));
+    const f = (d - c.minDb) / (c.maxDb - c.minDb);
+    return Math.round(f * (c.steps - 1)) / (c.steps - 1);
+}
+
+export const gainLevelToDb = (f: number, c: GainControl) =>
+    c.minDb + f * (c.maxDb - c.minDb);
+
+// The size of one step of a gain control, dB.
+export const gainStepDb = (c: GainControl) =>
+    (c.maxDb - c.minDb) / (c.steps - 1);

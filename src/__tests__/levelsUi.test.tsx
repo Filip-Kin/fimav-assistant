@@ -45,10 +45,16 @@ const wizard = (over: Partial<WizardState> = {}): WizardState => ({
     step: 'red',
     steps: ['red', 'blue', 'match', 'dj', 'stream', 'check'],
     input: -22,
-    fader: -50,
-    faderTarget: 'Master',
+    control: {
+        label: 'Master',
+        kind: 'fader',
+        db: -50,
+        minDb: null,
+        maxDb: null,
+        stepDb: null,
+    },
     matchRunning: null,
-    noPreamp: [],
+    noGain: [],
     djSendOff: false,
     djOnStream: false,
     toPost: [],
@@ -63,6 +69,7 @@ const wizard = (over: Partial<WizardState> = {}): WizardState => ({
         }[id],
         status: 'listening',
         input: -21,
+        gain: 20,
         bus: -20,
         stream: -14,
         sendLimited: null,
@@ -130,11 +137,25 @@ describe('vMix / X-Air audio section', () => {
         render(<AudioSection />);
         push({
             ...base,
-            wizard: wizard({ step: 'dj', faderTarget: 'DJ', djSendOff: true }),
+            wizard: wizard({
+                step: 'dj',
+                control: {
+                    label: 'DJ gain',
+                    kind: 'gain',
+                    db: 8,
+                    minDb: -12,
+                    maxDb: 60,
+                    stepDb: 0.5,
+                },
+                djSendOff: true,
+            }),
         });
         expect(screen.getByText('Laptop volume 100%')).toBeInTheDocument();
         expect(screen.getByText('DI box level 50%')).toBeInTheDocument();
         expect(screen.getByText('DJ Bus 1 send off')).toBeInTheDocument();
+        expect(screen.getByText('DJ gain')).toBeInTheDocument();
+        expect(screen.getByText('Fader 0 dB')).toBeInTheDocument();
+        expect(screen.getByText('8.0 dB')).toBeInTheDocument();
     });
 
     it('stream step: table without DJ, plan, Bus A, Apply', () => {

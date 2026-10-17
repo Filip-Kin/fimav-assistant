@@ -25,10 +25,13 @@ export interface LevelRow {
     id: LevelSourceId;
     label: string;
     status: LevelStepStatus;
-    // Energy mean of the input meter while it sounded (dBFS, pre-fader),
+    // Energy mean of the input meter while it sounded, at the gain it has
+    // now (dBFS, pre-fader),
     // and the level on Bus 1 out (as planned once there is a plan). No
     // Master value: the venue input decides how loud the room is, not LR.
     input: number | null;
+    // Input gain now (preamp or trim), dB; null with none.
+    gain: number | null;
     bus: number | null;
     // Predicted stream loudness after the plan (LUFS; meter dBFS when the
     // plan is an estimate).
@@ -39,13 +42,22 @@ export interface LevelRow {
 export interface WizardState {
     step: LevelStep;
     steps: LevelStep[];
-    // The step source's input meter now (dBFS).
+    // The step source's input meter now (dBFS, after its gain).
     input: number | null;
-    // The on-screen fader (dB) and what it moves.
-    fader: number | null;
-    faderTarget: 'Master' | 'Blue mic' | 'Match sounds' | 'DJ' | null;
+    // The on-screen control: what it moves ("Master", "Blue mic gain",
+    // "Match sounds", "DJ gain"), a fader (fader law, off to +10 dB) or an
+    // input gain (linear dB, its range and step), and its value.
+    control: {
+        label: string;
+        kind: 'fader' | 'gain';
+        db: number;
+        minDb: number | null;
+        maxDb: number | null;
+        stepDb: number | null;
+    } | null;
     matchRunning: string | null;
-    noPreamp: ('red' | 'blue')[];
+    // Mics and DJ with no gain the wizard can set (balanced on the fader).
+    noGain: ('red' | 'blue' | 'dj')[];
     // The DJ step turned a DJ Bus 1 send off.
     djSendOff: boolean;
     // Mic / match-sound Bus 1 sends not post-fader (Apply switches them),

@@ -5,6 +5,11 @@ import {
     LEVEL_STEPS,
     levelToDb,
     levelToGain,
+    channelGain,
+    gainDbToLevel,
+    gainLevelToDb,
+    gainStepDb,
+    preampGain,
 } from '../utils/xairLaw';
 import {
     busLevel,
@@ -72,6 +77,32 @@ describe('X-Air fader law', () => {
         expect(levelToGain(gainToLevel(20))).toBeCloseTo(20, 6);
         expect(gainToLevel(-30)).toBe(0);
         expect(gainToLevel(99)).toBe(1);
+    });
+});
+
+describe('input gain controls', () => {
+    it("a channel's gain: its preamp, or its USB return trim, or none", () => {
+        expect(channelGain('/ch/02', 1, 0)?.address).toBe('/headamp/02/gain');
+        expect(channelGain('/ch/05', 11, 0)?.address).toBe('/headamp/12/gain');
+        expect(channelGain('/ch/03', 2, 1)).toMatchObject({
+            address: '/ch/03/preamp/rtntrim',
+            minDb: -18,
+            maxDb: 18,
+            refDb: 0,
+        });
+        // Aux L/R or off as the input: no preamp.
+        expect(channelGain('/ch/01', 16, 0)).toBeNull();
+        expect(channelGain('/ch/01', 18, 0)).toBeNull();
+    });
+
+    it('preamp gain: -12..+60 dB in 0.5 dB steps, reference +20', () => {
+        const g = preampGain(1);
+        expect(gainStepDb(g)).toBe(0.5);
+        expect(g.refDb).toBe(20);
+        expect(gainLevelToDb(gainDbToLevel(31.5, g), g)).toBeCloseTo(31.5, 9);
+        expect(gainLevelToDb(gainDbToLevel(31.3, g), g)).toBeCloseTo(31.5, 9);
+        expect(gainDbToLevel(80, g)).toBe(1);
+        expect(gainDbToLevel(-30, g)).toBe(0);
     });
 });
 

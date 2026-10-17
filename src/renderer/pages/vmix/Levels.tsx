@@ -93,48 +93,65 @@ const STEP_TITLE: Record<LevelStep, string> = {
     check: 'Check',
 };
 
-// The step's on-screen fader: the X-Air fader law over the whole range,
-// off (-inf) to +10 dB, so it moves like the console's own and is fine at
-// the bottom (a mic-level venue input can need Master very low). The
-// buttons move 0.5 dB; the arrow keys one fader step.
+// The step's on-screen control. A fader runs on the X-Air fader law over
+// the whole range, off (-inf) to +10 dB, so it moves like the console's own
+// and is fine at the bottom (a mic-level venue input can need Master very
+// low). A gain runs linear over its range on its own steps (0.5 dB for a
+// mic preamp). The buttons move 0.5 dB; the arrow keys one step.
 const FINE_DB = 0.5;
 
+type Ctl = NonNullable<WizardState['control']>;
+
+const isGain = (c: Ctl | null) =>
+    c?.kind === 'gain' && c.minDb !== null && c.maxDb !== null;
+
+// Slider position for a dB value, and back.
+const toPos = (c: Ctl | null, db: number) => {
+    if (!c) return 0;
+    if (isGain(c)) return Math.min(c.maxDb!, Math.max(c.minDb!, db));
+    return dbToLevel(db, FADER_STEPS);
+};
+const fromPos = (c: Ctl | null, p: number) =>
+    c && isGain(c) ? p : levelToDb(p);
+
 function Fader({ w }: { w: WizardState }) {
+    const c = w.control;
     const [drag, setDrag] = useState<number | null>(null);
-    const pos =
-        drag ?? (w.fader === null ? 0 : dbToLevel(w.fader, FADER_STEPS));
+    const pos = drag ?? (c === null ? 0 : toPos(c, c.db));
+    const db = fromPos(c, pos);
+    const gain = isGain(c);
     const nudge = (by: number) => {
-        const db = levelToDb(pos);
+        let next: number;
+        if (gain) next = toPos(c, db + by);
         // From off, the first step up is the fader's lowest step.
-        const next = Number.isFinite(db)
-            ? dbToLevel(db + by, FADER_STEPS)
-            : (by > 0 ? 1 : 0) / (FADER_STEPS - 1);
-        sendFader(levelToDb(next));
+        else if (Number.isFinite(db)) next = dbToLevel(db + by, FADER_STEPS);
+        else next = (by > 0 ? 1 : 0) / (FADER_STEPS - 1);
+        sendFader(fromPos(c, next));
         send('levels:faderDone');
     };
     return (
         <div className="levels-fader">
-            <Text strong>{w.faderTarget}</Text>
+            <Text strong>{c?.label}</Text>
             <Button
                 size="small"
-                disabled={w.fader === null || w.busy}
+                disabled={c === null || w.busy}
                 onClick={() => nudge(FINE_DB)}
             >
                 +{FINE_DB} dB
             </Button>
             <Slider
                 vertical
-                min={0}
-                max={1}
-                step={1 / (FADER_STEPS - 1)}
+                min={gain ? c!.minDb! : 0}
+                max={gain ? c!.maxDb! : 1}
+                step={gain ? c!.stepDb ?? FINE_DB : 1 / (FADER_STEPS - 1)}
                 value={pos}
-                disabled={w.fader === null}
+                disabled={c === null}
                 tooltip={{
-                    formatter: (v) => `${fmtDb(levelToDb(v ?? 0))} dB`,
+                    formatter: (v) => `${fmtDb(fromPos(c, v ?? 0))} dB`,
                 }}
                 onChange={(v: number) => {
                     setDrag(v);
-                    sendFader(levelToDb(v));
+                    sendFader(fromPos(c, v));
                 }}
                 onChangeComplete={() => {
                     setDrag(null);
@@ -143,17 +160,13 @@ function Fader({ w }: { w: WizardState }) {
             />
             <Button
                 size="small"
-                disabled={w.fader === null || w.busy}
+                disabled={c === null || w.busy}
                 onClick={() => nudge(-FINE_DB)}
             >
                 {MINUS}
                 {FINE_DB} dB
             </Button>
-            <Text>
-                {Number.isFinite(levelToDb(pos))
-                    ? `${fmtDb(levelToDb(pos))} dB`
-                    : 'Off'}
-            </Text>
+            <Text>{Number.isFinite(db) ? `${fmtDb(db)} dB` : 'Off'}</Text>
         </div>
     );
 }
@@ -191,16 +204,16 @@ function SourceStep({ w }: { w: WizardState }) {
                     {w.step === 'match' && w.matchRunning && (
                         <Tag>{w.matchRunning}</Tag>
                     )}
-                    {(w.step === 'red' || w.step === 'blue') && (
-                        <>
-                            {w.noPreamp.includes(w.step) ? (
-                                <Tag color="warning">No preamp</Tag>
-                            ) : (
-                                <Tag>Gain +20 dB</Tag>
-                            )}
+                    {(w.step === 'red' || w.step === 'blue') &&
+                        !w.noGain.includes(w.step) && <Tag>Gain +20 dB</Tag>}
+                    {(w.step === 'red' ||
+                        w.step === 'blue' ||
+                        w.step === 'dj') &&
+                        (w.noGain.includes(w.step) ? (
+                            <Tag color="warning">No gain</Tag>
+                        ) : (
                             <Tag>Fader 0 dB</Tag>
-                        </>
-                    )}
+                        ))}
                     {w.step === 'red' && <Tag>Master {MINUS}50 dB</Tag>}
                     {w.step === 'dj' && w.djSendOff && (
                         <Tag color="warning">DJ Bus 1 send off</Tag>
@@ -236,6 +249,11 @@ function StreamStep({ w }: { w: WizardState }) {
                     {
                         title: 'Input dBFS',
                         dataIndex: 'input',
+                        render: cell,
+                    },
+                    {
+                        title: 'Gain dB',
+                        dataIndex: 'gain',
                         render: cell,
                     },
                     {

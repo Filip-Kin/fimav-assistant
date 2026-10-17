@@ -1,6 +1,13 @@
 import { EventEmitter } from 'events';
 import LevelWizard from '../main/checks/levelWizard';
-import { dbToLevel, FADER_STEPS, levelToDb } from '../utils/xairLaw';
+import {
+    dbToLevel,
+    FADER_STEPS,
+    gainDbToLevel,
+    gainLevelToDb,
+    levelToDb,
+    preampGain,
+} from '../utils/xairLaw';
 import { LevelState } from '../models/Levels';
 
 // The wizard against a fake X-Air (a parameter map), fake meters and a fake
@@ -21,8 +28,20 @@ const checks = Object.assign(new EventEmitter(), {
         streamBusFaderDb: levelToDb(mixer.get('/bus/1/mix/fader') ?? 0),
         lrFaderDb: 0,
         mics: [
-            { name: 'Wireless RED', path: '/ch/01', meter: 0, streamTap: 3 },
-            { name: 'Wireless Blu', path: '/ch/02', meter: 1, streamTap: 3 },
+            {
+                name: 'Wireless RED',
+                path: '/ch/01',
+                meter: 0,
+                streamTap: 3,
+                gain: preampGain(1),
+            },
+            {
+                name: 'Wireless Blu',
+                path: '/ch/02',
+                meter: 1,
+                streamTap: 3,
+                gain: preampGain(2),
+            },
         ],
         game: [
             {
@@ -34,8 +53,20 @@ const checks = Object.assign(new EventEmitter(), {
             },
         ],
         dj: [
-            { name: 'DJ L', path: '/ch/03', meter: 2, streamTap: 3 },
-            { name: 'DJ R', path: '/ch/04', meter: 3, streamTap: 3 },
+            {
+                name: 'DJ L',
+                path: '/ch/03',
+                meter: 2,
+                streamTap: 3,
+                gain: preampGain(3),
+            },
+            {
+                name: 'DJ R',
+                path: '/ch/04',
+                meter: 3,
+                streamTap: 3,
+                gain: preampGain(4),
+            },
         ],
     }),
     wantMeters: jest.fn(),
@@ -159,7 +190,9 @@ function fimScene() {
         ['/ch/02/mix/01/tap', 5],
         ['/rtn/aux/mix/01/tap', 4],
         // DJ sent to the stream: the wizard must take it off.
-        ['/ch/03/mix/fader', f(0)],
+        ['/ch/03/mix/fader', f(-6)],
+        ['/headamp/03/gain', 0.5],
+        ['/headamp/04/gain', 0.5],
         ['/ch/03/mix/01/level', f(-6)],
         ['/ch/03/mix/01/grpon', 0],
         ['/ch/04/mix/fader', f(0)],
@@ -205,8 +238,9 @@ describe('level wizard', () => {
         expect(levelToDb(mixer.get('/lr/mix/fader')!)).toBeCloseTo(-50, 1);
         const w = state().wizard!;
         expect(w.step).toBe('red');
-        expect(w.faderTarget).toBe('Master');
-        expect(w.fader).toBeCloseTo(-50, 1);
+        expect(w.control!.label).toBe('Master');
+        expect(w.control!.kind).toBe('fader');
+        expect(w.control!.db).toBeCloseTo(-50, 1);
         // Talking: listening, then done after 5 s.
         sound([0], -20, 2);
         expect(state().wizard!.rows[0].status).toBe('listening');
@@ -221,7 +255,7 @@ describe('level wizard', () => {
         expect(state().wizard!.rows[0].status).toBe('no signal');
     });
 
-    it('the on-screen fader moves Master in the red step, ch 2 in the blue', async () => {
+    it('the on-screen control: Master in the red step, ch 2 gain in the blue', async () => {
         jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
         try {
             await LevelWizard.Instance.start();
@@ -230,15 +264,16 @@ describe('level wizard', () => {
             await LevelWizard.Instance.faderDone();
             expect(levelToDb(mixer.get('/lr/mix/fader')!)).toBeCloseTo(-20, 1);
             await LevelWizard.Instance.go('blue');
-            expect(state().wizard!.faderTarget).toBe('Blue mic');
+            expect(state().wizard!.control!.label).toBe('Blue mic gain');
             expect(mixer.get('/headamp/02/gain')).toBe(64 / 144);
-            LevelWizard.Instance.fader(-4);
+            LevelWizard.Instance.fader(31.5);
             jest.advanceTimersByTime(50);
             await LevelWizard.Instance.faderDone();
-            expect(levelToDb(mixer.get('/ch/02/mix/fader')!)).toBeCloseTo(
-                -4,
-                1
-            );
+            // Gain moves in 0.5 dB steps; the fader stays at 0 dB.
+            expect(
+                gainLevelToDb(mixer.get('/headamp/02/gain')!, preampGain(2))
+            ).toBeCloseTo(31.5, 5);
+            expect(levelToDb(mixer.get('/ch/02/mix/fader')!)).toBeCloseTo(0, 1);
             // Master stays where the red step left it.
             expect(levelToDb(mixer.get('/lr/mix/fader')!)).toBeCloseTo(-20, 1);
         } finally {
@@ -569,6 +604,126 @@ describe('level wizard', () => {
             // ...the operator's Master and ch 2 stay.
             expect(mixer.get('/lr/mix/fader')).toBe(f(-30));
             expect(mixer.get('/ch/02/mix/fader')).toBe(f(-12));
+        });
+    });
+
+    // Zero is balanced: faders at 0 dB, the balance in the input gain.
+    describe('balance in the gain', () => {
+        const gainOf = (n: number) =>
+            gainLevelToDb(mixer.get(`/headamp/0${n}/gain`)!, preampGain(n));
+        const desk = (address: string, value: number) => {
+            mixer.set(address, value);
+            checks.emit('mixer-param', address, value);
+        };
+
+        it('DJ: faders to 0 dB, the gain takes the difference, control is the gain', async () => {
+            await LevelWizard.Instance.start();
+            await LevelWizard.Instance.go('dj');
+            // ch 3 was at -6 dB with gain +24: now 0 dB and +18 (room unchanged).
+            expect(levelToDb(mixer.get('/ch/03/mix/fader')!)).toBeCloseTo(0, 1);
+            expect(gainOf(3)).toBeCloseTo(18, 5);
+            expect(levelToDb(mixer.get('/ch/04/mix/fader')!)).toBeCloseTo(0, 1);
+            expect(gainOf(4)).toBeCloseTo(24, 5);
+            const c = state().wizard!.control!;
+            expect(c).toMatchObject({
+                label: 'DJ gain',
+                kind: 'gain',
+                minDb: -12,
+                maxDb: 60,
+                stepDb: 0.5,
+            });
+            jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+            try {
+                LevelWizard.Instance.fader(10);
+                jest.advanceTimersByTime(50);
+                await LevelWizard.Instance.faderDone();
+            } finally {
+                jest.useRealTimers();
+            }
+            // Both DJ channels, faders untouched.
+            expect(gainOf(3)).toBeCloseTo(10, 5);
+            expect(gainOf(4)).toBeCloseTo(10, 5);
+            expect(levelToDb(mixer.get('/ch/03/mix/fader')!)).toBeCloseTo(0, 1);
+            // DJ stream send still off.
+            expect(mixer.get('/ch/03/mix/01/level')).toBe(0);
+        });
+
+        it('match sounds: no gain on the aux return, the control is its fader', async () => {
+            await LevelWizard.Instance.start();
+            await LevelWizard.Instance.go('match');
+            expect(state().wizard!.control).toMatchObject({
+                label: 'Match sounds',
+                kind: 'fader',
+            });
+        });
+
+        it('a mic with no preamp is balanced on its fader and shows it', async () => {
+            const ms = checks.mixerState;
+            checks.mixerState = () => {
+                const m = ms();
+                m.mics[1] = { ...m.mics[1], gain: undefined as any };
+                return m;
+            };
+            try {
+                await LevelWizard.Instance.start();
+                await LevelWizard.Instance.go('blue');
+                expect(state().wizard!.noGain).toEqual(['blue']);
+                expect(state().wizard!.control).toMatchObject({
+                    label: 'Blue mic',
+                    kind: 'fader',
+                });
+            } finally {
+                checks.mixerState = ms;
+            }
+        });
+
+        it('the gate is at the reference gain: turning a mic up does not make quiet talking count', async () => {
+            await LevelWizard.Instance.start();
+            await LevelWizard.Instance.go('blue');
+            // Gain up to +44: a -42 dBFS meter is -66 at +20, room noise.
+            desk('/headamp/02/gain', gainDbToLevel(44, preampGain(2)));
+            sound([1], -42, 9);
+            expect(state().wizard!.rows[1].status).toBe('no signal');
+            expect(state().wizard!.rows[1].input).toBeNull();
+            // Gain down to 0: a -45 dBFS meter is -25 at +20, talking.
+            desk('/headamp/02/gain', gainDbToLevel(0, preampGain(2)));
+            sound([1], -45, 6);
+            expect(state().wizard!.rows[1].status).toBe('done');
+            // Shown at the gain it has now.
+            expect(state().wizard!.rows[1].input).toBeCloseTo(-46.2, 0);
+        });
+
+        it('the stream plan follows the gain', async () => {
+            await LevelWizard.Instance.start();
+            sound([0], -20, 6);
+            await LevelWizard.Instance.go('blue');
+            sound([1], -20, 6);
+            await LevelWizard.Instance.go('stream');
+            const before = state().wizard!.rows[1];
+            // The operator turns blue's gain up 6 dB on the desk.
+            desk('/headamp/02/gain', gainDbToLevel(26, preampGain(2)));
+            const after = state().wizard!.rows[1];
+            expect(after.input! - before.input!).toBeCloseTo(6, 5);
+            expect(after.gain).toBeCloseTo(26, 5);
+            // Re-planned: blue's send down 6 dB, still equal on Bus 1.
+            expect(after.bus).toBeCloseTo(state().wizard!.rows[0].bus!, 0);
+        });
+
+        it('Undo and Cancel put gains back, but not one moved on the desk', async () => {
+            await LevelWizard.Instance.start();
+            await LevelWizard.Instance.go('blue');
+            await LevelWizard.Instance.go('dj');
+            desk('/headamp/04/gain', gainDbToLevel(30, preampGain(4)));
+            await LevelWizard.Instance.close(true);
+            expect(mixer.get('/headamp/01/gain')).toBe(0.5);
+            expect(mixer.get('/headamp/02/gain')).toBe(0.5);
+            expect(mixer.get('/headamp/03/gain')).toBe(0.5);
+            expect(levelToDb(mixer.get('/ch/03/mix/fader')!)).toBeCloseTo(
+                -6,
+                1
+            );
+            // The operator's DJ R gain stays.
+            expect(gainOf(4)).toBeCloseTo(30, 5);
         });
     });
 });

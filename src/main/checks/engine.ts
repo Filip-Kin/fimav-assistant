@@ -10,6 +10,7 @@ import getVmixBandwidth, { streamKeyFromUrl } from '../vmixBandwidth';
 import { listMatches } from '../recordings/matchStore';
 import { getStore } from '../store';
 import { levelToDb, queryXair, XairMeters } from './xair';
+import { channelGain, GainControl, gainLevelToDb } from '../../utils/xairLaw';
 import XairWatch from './xairWatch';
 import { MIN_TALK_SECONDS, TALK_DB, talkLog } from './talking';
 import { LUFS_TARGET, levelChange } from './loudness';
@@ -287,7 +288,18 @@ export interface MixerSource {
     // Tap of the stream bus send: 0 IN, 1 PREEQ, 2 POSTEQ, 3 PRE, 4 POST,
     // 5 GRP. POST and GRP follow the channel fader.
     streamTap?: number;
+    // Its input gain (mic preamp or USB return trim) and setting, dB.
+    gain?: GainControl;
+    gainDb?: number;
 }
+
+// A source's input meter taken back to its reference gain (MIC_GAIN_DB for
+// a mic preamp): the level the talking gate is meant at, whatever the gain
+// is turned to. Unknown gain: the meter as it is.
+export const atRefGain = (s: MixerSource, levelDb: number) =>
+    s.gain && s.gainDb !== undefined
+        ? levelDb - (s.gainDb - s.gain.refDb)
+        : levelDb;
 
 export interface MixerState {
     at: number;
@@ -361,12 +373,17 @@ async function readMixer(host: string): Promise<MixerState> {
 
     const sources = [...dj, ...game, ...mics];
     const sendPad = pad2(streamBus);
+    const isCh = (s: MixerSource) => s.path.startsWith('/ch/');
     const mixAddrs = sources.flatMap((s) => [
         `${s.path}/mix/on`,
         `${s.path}/mix/fader`,
         `${s.path}/mix/lr`,
         `${s.path}/mix/${sendPad}/level`,
         `${s.path}/mix/${sendPad}/tap`,
+        // A channel's input, for its preamp gain.
+        ...(isCh(s)
+            ? [`${s.path}/config/insrc`, `${s.path}/preamp/rtnsw`]
+            : []),
     ]);
     const busFader = `/bus/${streamBus}/mix/fader`;
     const mix = await queryXair(host, [...mixAddrs, busFader]);
@@ -379,6 +396,28 @@ async function readMixer(host: string): Promise<MixerState> {
         if (send !== undefined) s.streamSendDb = levelToDb(Number(send));
         const tap = v(`${sendPad}/tap`);
         if (tap !== undefined) s.streamTap = Number(tap);
+        if (isCh(s)) {
+            const num = (a: string) =>
+                mix.has(a) ? Number(mix.get(a)) : undefined;
+            s.gain =
+                channelGain(
+                    s.path,
+                    num(`${s.path}/config/insrc`),
+                    num(`${s.path}/preamp/rtnsw`)
+                ) ?? undefined;
+        }
+    });
+    // The gains themselves (the aux return has none).
+    const withGain = sources.filter((s) => s.gain);
+    const gains = withGain.length
+        ? await queryXair(
+              host,
+              withGain.map((s) => s.gain!.address)
+          )
+        : new Map();
+    withGain.forEach((s) => {
+        const g = gains.get(s.gain!.address);
+        if (g !== undefined) s.gainDb = gainLevelToDb(Number(g), s.gain!);
     });
     const fdr = (a: string) =>
         mix.has(a) ? levelToDb(Number(mix.get(a))) : undefined;
@@ -1822,7 +1861,9 @@ export default class Checks extends EventEmitter {
     }
 
     // Whether someone is talking: a mic (the channels readMixer() takes as
-    // mics) over TALK_DB on its input meter. /meters/1 channel meters are
+    // mics) over TALK_DB on its input meter, taken back to the reference
+    // preamp gain (+20 dB): the meter is after the preamp, so a mic turned
+    // up or down would otherwise move the gate. /meters/1 channel meters are
     // pre-fader, so this is the voice at the mic, whatever its fader, mute,
     // send or the bus masters are set to. Someone talking into a mic that is
     // turned down, muted or off the stream bus is talking: the stream being
@@ -1833,7 +1874,7 @@ export default class Checks extends EventEmitter {
         if (!m || !levels.length) return;
         const live = m.mics.some((s) => {
             const raw = levels[s.meter];
-            return raw !== undefined && raw >= TALK_DB;
+            return raw !== undefined && atRefGain(s, raw) >= TALK_DB;
         });
         talkLog.note(this.meters.lastAt, live);
     }
