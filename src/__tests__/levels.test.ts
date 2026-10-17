@@ -224,6 +224,17 @@ const mix = (
     ...over,
 });
 
+describe('a post-fader send', () => {
+    it('follows the channel fader on Bus 1 dB for dB', () => {
+        const at = (faderDb: number) =>
+            busLevel(-20, mix('red', { tap: 4, faderDb, sendDb: -3 }));
+        expect(at(-6) - at(0)).toBe(-6);
+        expect(at(4) - at(0)).toBe(4);
+        // A pre-fader one does not.
+        expect(busLevel(-20, mix('red', { tap: 3, faderDb: -6 }))).toBe(-20);
+    });
+});
+
 describe('stream mix plan', () => {
     it('makes every source equal on Bus 1, then the stream -14 LUFS', () => {
         const p = planStreamMix(

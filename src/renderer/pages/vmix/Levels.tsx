@@ -77,6 +77,13 @@ const STATUS: Record<LevelStepStatus, { text: string; color: string }> = {
     'match running': { text: 'Match running', color: 'processing' },
 };
 
+const LABEL: Record<string, string> = {
+    red: 'Red mic',
+    blue: 'Blue mic',
+    match: 'Match sounds',
+    dj: 'DJ',
+};
+
 const STEP_TITLE: Record<LevelStep, string> = {
     red: 'Red mic',
     blue: 'Blue mic',
@@ -275,6 +282,14 @@ function StreamStep({ w }: { w: WizardState }) {
             <Space wrap>
                 <BusA w={w} />
                 <Tag>DJ off stream</Tag>
+                {w.toPost.map((id) => (
+                    <Tag color="warning" key={id}>
+                        {LABEL[id]} send to post-fader
+                    </Tag>
+                ))}
+                {w.madePost.map((id) => (
+                    <Tag key={id}>{LABEL[id]} send post-fader</Tag>
+                ))}
             </Space>
             <Button
                 type="primary"
@@ -314,6 +329,9 @@ function CheckStep({ w }: { w: WizardState }) {
                 )}
                 <BusA w={w} />
                 <Tag>Talking {v.seconds.toFixed(1)} s</Tag>
+                {w.madePost.map((id) => (
+                    <Tag key={id}>{LABEL[id]} send post-fader</Tag>
+                ))}
             </Space>
             {v.lufs !== null ? (
                 <Space wrap>

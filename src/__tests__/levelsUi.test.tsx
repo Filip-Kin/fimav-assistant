@@ -51,6 +51,8 @@ const wizard = (over: Partial<WizardState> = {}): WizardState => ({
     noPreamp: [],
     djSendOff: false,
     djOnStream: false,
+    toPost: [],
+    madePost: [],
     rows: (['red', 'blue', 'match', 'dj'] as const).map((id) => ({
         id,
         label: {

@@ -154,6 +154,10 @@ function fimScene() {
         ['/headamp/02/gain', 0.5],
         ['/rtn/aux/mix/fader', f(0)],
         ['/rtn/aux/mix/01/level', f(0)],
+        // Bus 1 send taps: red PRE, blue GRP, match sounds POST.
+        ['/ch/01/mix/01/tap', 3],
+        ['/ch/02/mix/01/tap', 5],
+        ['/rtn/aux/mix/01/tap', 4],
         // DJ sent to the stream: the wizard must take it off.
         ['/ch/03/mix/fader', f(0)],
         ['/ch/03/mix/01/level', f(-6)],
@@ -333,7 +337,7 @@ describe('level wizard', () => {
             writes.length = 0;
             await LevelWizard.Instance.apply();
             // Someone talks on the stream at -30 LUFS: Stream level.
-            const {live} = LevelWizard.Instance as any;
+            const { live } = LevelWizard.Instance as any;
             for (let k = 0; k < 40; k += 1) {
                 sound([0], -20, 0.1);
                 live.onBlock({ at: now, m: -30, peak: -25 });
@@ -349,7 +353,7 @@ describe('level wizard', () => {
             await LevelWizard.Instance.go('stream');
             await LevelWizard.Instance.apply();
             const bus = levelToDb(mixer.get('/bus/1/mix/fader')!);
-            const {live} = LevelWizard.Instance as any;
+            const { live } = LevelWizard.Instance as any;
             for (let k = 0; k < 40; k += 1) {
                 sound([0], -20, 0.1);
                 live.onBlock({ at: now, m: -40, peak: -40 });
@@ -412,7 +416,7 @@ describe('level wizard', () => {
         await LevelWizard.Instance.start();
         await LevelWizard.Instance.go('check');
         mixer.set('/ch/01/mix/fader', 0);
-        const {live} = LevelWizard.Instance as any;
+        const { live } = LevelWizard.Instance as any;
         // Nobody talking: stream blocks do not count.
         for (let k = 0; k < 40; k += 1) {
             sound([], -90, 0.1);
@@ -427,5 +431,67 @@ describe('level wizard', () => {
         }
         expect(state().wizard!.verify.lufs).toBeCloseTo(-50, 5);
         expect(state().wizard!.verify.residual).toBe(36);
+    });
+
+    describe('mic and match-sound sends are post-fader', () => {
+        const measureAll = async () => {
+            await LevelWizard.Instance.start();
+            sound([0], -20, 6);
+            await LevelWizard.Instance.go('blue');
+            sound([1], -26, 6);
+            await LevelWizard.Instance.go('match');
+            sound([16, 17], -14, 4);
+            await LevelWizard.Instance.go('dj');
+            sound([2, 3], -12, 6);
+            await LevelWizard.Instance.go('stream');
+        };
+
+        it('Apply switches PRE and GRP to POST, shows it, Undo puts them back', async () => {
+            await measureAll();
+            expect(state().wizard!.toPost).toEqual(['red', 'blue']);
+            await LevelWizard.Instance.apply();
+            expect(mixer.get('/ch/01/mix/01/tap')).toBe(4);
+            expect(mixer.get('/ch/02/mix/01/tap')).toBe(4);
+            expect(mixer.get('/rtn/aux/mix/01/tap')).toBe(4);
+            expect(state().wizard!.madePost).toEqual(['red', 'blue']);
+            expect(state().wizard!.toPost).toEqual([]);
+            // DJ sends stay off.
+            expect(mixer.get('/ch/03/mix/01/level')).toBe(0);
+            await LevelWizard.Instance.undoLast();
+            expect(mixer.get('/ch/01/mix/01/tap')).toBe(3);
+            expect(mixer.get('/ch/02/mix/01/tap')).toBe(5);
+            expect(mixer.get('/ch/03/mix/01/level')).toBe(0);
+        });
+
+        it('Cancel puts the old taps back too', async () => {
+            await measureAll();
+            await LevelWizard.Instance.apply();
+            await LevelWizard.Instance.close(true);
+            expect(mixer.get('/ch/01/mix/01/tap')).toBe(3);
+            expect(mixer.get('/ch/02/mix/01/tap')).toBe(5);
+            expect(mixer.get('/ch/03/mix/01/level')).toBe(0);
+        });
+
+        it('after Apply, a mic fader moved X dB moves it on Bus 1 by X dB, Master by nothing', async () => {
+            await measureAll();
+            await LevelWizard.Instance.apply();
+            const lr = mixer.get('/lr/mix/fader');
+            const before = state().wizard!.rows.find((r) => r.id === 'red')!
+                .bus!;
+            const fader = levelToDb(mixer.get('/ch/01/mix/fader')!);
+            // The operator rides ch 1 down 6 dB for a quieter announcer.
+            const moved = f(fader - 6);
+            mixer.set('/ch/01/mix/fader', moved);
+            (LevelWizard.Instance as any).values.set('/ch/01/mix/fader', moved);
+            const after = state().wizard!.rows.find((r) => r.id === 'red')!
+                .bus!;
+            expect(after - before).toBeCloseTo(levelToDb(moved) - fader, 5);
+            expect(after - before).toBeCloseTo(-6, 0);
+            // Blue and match sounds on Bus 1 do not move; Master is untouched.
+            expect(mixer.get('/lr/mix/fader')).toBe(lr);
+            expect(
+                writes.filter((x) => x.address === '/lr/mix/fader').length
+            ).toBe(1);
+        });
     });
 });

@@ -48,6 +48,10 @@ export interface WizardState {
     noPreamp: ('red' | 'blue')[];
     // The DJ step turned a DJ Bus 1 send off.
     djSendOff: boolean;
+    // Mic / match-sound Bus 1 sends not post-fader (Apply switches them),
+    // and the ones Apply switched.
+    toPost: LevelSourceId[];
+    madePost: LevelSourceId[];
     // The stream was loud while DJ played alone.
     djOnStream: boolean;
     rows: LevelRow[];

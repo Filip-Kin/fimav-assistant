@@ -159,6 +159,9 @@ export const LR_FADER = '/lr/mix/fader';
 
 export type LrWrite = 'preset' | 'operator' | 'restore';
 
+// Bus send tap: POST (4), after the channel fader.
+export const POST_TAP = 4;
+
 const FADER_TARGET = {
     red: 'Master',
     blue: 'Blue mic',
@@ -236,6 +239,9 @@ export default class LevelWizard extends EventEmitter {
     private matchesAt = 0;
 
     private djSendOff = false;
+
+    // Sources whose Bus 1 send tap Apply switched to POST.
+    private madePost: SourceId[] = [];
 
     private noPreamp = new Set<Kind>();
 
@@ -331,6 +337,7 @@ export default class LevelWizard extends EventEmitter {
         this.plan = null;
         this.appliedAt = null;
         this.djSendOff = false;
+        this.madePost = [];
         this.noPreamp.clear();
         this.heads.clear();
         this.matchSeen = false;
@@ -352,8 +359,14 @@ export default class LevelWizard extends EventEmitter {
             ]),
             ...m.dj.map((s) => `${s.path}/mix/${pad}/grpon`),
             ...m.mics.slice(0, 2).map((s) => `${s.path}/config/insrc`),
+            ...[...m.mics.slice(0, 2), ...m.game].map(
+                (s) => `${s.path}/mix/${pad}/tap`
+            ),
         ];
         m.dj.forEach((s) => this.ints.add(`${s.path}/mix/${pad}/grpon`));
+        [...m.mics.slice(0, 2), ...m.game].forEach((s) =>
+            this.ints.add(`${s.path}/mix/${pad}/tap`)
+        );
         const got = await queryXair(host, addrs);
         // The mic preamps: the channel's input source (0..15 = In01..In16).
         m.mics.slice(0, 2).forEach((s, i) => {
@@ -710,11 +723,12 @@ export default class LevelWizard extends EventEmitter {
         const pad = sendPad();
         const fader = this.values.get(`${s.path}/mix/fader`);
         const send = this.values.get(`${s.path}/mix/${pad}/level`);
+        const tap = this.values.get(`${s.path}/mix/${pad}/tap`);
         return {
             id: kind,
             faderDb: levelToDb(fader ?? 0),
             sendDb: levelToDb(send ?? 0),
-            tap: s.streamTap,
+            tap: tap ?? s.streamTap,
             usable: s.on !== false && send !== undefined && fader !== undefined,
         };
     }
@@ -735,6 +749,24 @@ export default class LevelWizard extends EventEmitter {
         };
     }
 
+    // The mic and match-sound Bus 1 sends whose tap is not POST: Apply
+    // switches them, so the stream follows a channel fader the operator
+    // rides for the room (a new announcer on a mic). Never DJ.
+    private notPost(): { id: SourceId; address: string }[] {
+        const pad = sendPad();
+        const out: { id: SourceId; address: string }[] = [];
+        (['red', 'blue', 'match'] as SourceId[]).forEach((k) => {
+            const s = k === 'match' ? this.matchSource() : sources(k)[0];
+            if (!s) return;
+            const address = `${s.path}/mix/${pad}/tap`;
+            const tap = this.values.get(address) ?? s.streamTap;
+            if (tap !== undefined && tap !== POST_TAP)
+                out.push({ id: k, address });
+        });
+        return out;
+    }
+
+    // The plan is for the sends as Apply leaves them: post-fader.
     private makePlan() {
         const ids: SourceId[] = ['red', 'blue', 'match'];
         const measured = ids
@@ -742,7 +774,8 @@ export default class LevelWizard extends EventEmitter {
             .filter((x): x is Measured => !!x);
         const mixes = ids
             .map((k) => this.mixOf(k))
-            .filter((x): x is SourceMix => !!x);
+            .filter((x): x is SourceMix => !!x)
+            .map((x) => ({ ...x, tap: POST_TAP }));
         const bus = levelToDb(this.values.get(busFaderAddr()) ?? 0);
         this.plan = planStreamMix(measured, mixes, bus);
     }
@@ -755,7 +788,12 @@ export default class LevelWizard extends EventEmitter {
             const p = this.plan;
             if (!p) throw new Error('Nothing measured');
             const pad = sendPad();
-            const writes: XairWrite[] = [];
+            const toPost = this.notPost();
+            const writes: XairWrite[] = toPost.map((t) => ({
+                address: t.address,
+                value: POST_TAP,
+                int: true,
+            }));
             p.sends.forEach((sp) => {
                 const s =
                     sp.id === 'match' ? this.matchSource() : sources(sp.id)[0];
@@ -776,6 +814,7 @@ export default class LevelWizard extends EventEmitter {
                 this.busAVolume !== 100 ? 100 : undefined
             );
             this.appliedAt = Date.now();
+            this.madePost = toPost.map((t) => t.id);
             await this.enter('check');
         });
     }
@@ -921,7 +960,13 @@ export default class LevelWizard extends EventEmitter {
                         ? finite(
                               busLevel(
                                   input,
-                                  send ? { ...mix, sendDb: send.toDb } : mix
+                                  send
+                                      ? {
+                                            ...mix,
+                                            sendDb: send.toDb,
+                                            tap: POST_TAP,
+                                        }
+                                      : mix
                               ) + (this.plan ? this.plan.bus.toDb : busDb)
                           )
                         : null,
@@ -940,6 +985,8 @@ export default class LevelWizard extends EventEmitter {
             matchRunning: this.matchRunning,
             noPreamp: [...this.noPreamp] as ('red' | 'blue')[],
             djSendOff: this.djSendOff,
+            toPost: this.open ? this.notPost().map((t) => t.id) : [],
+            madePost: this.madePost,
             djOnStream: dj !== null && dj > DJ_LEAK_LUFS,
             rows,
             plan: this.plan

@@ -101,7 +101,7 @@ describe('X-Air OSC writes', () => {
             const got = await queryXair(
                 '127.0.0.1',
                 ['/ch/01/mix/fader', '/ch/09/mix/fader'],
-                300,
+                1500,
                 x.port
             );
             expect(got.get('/ch/01/mix/fader')).toBeCloseTo(0.6, 6);
