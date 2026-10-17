@@ -33,7 +33,7 @@ const tabs: TabDef[] = [
     },
     {
         key: '/vmix',
-        label: 'vMix',
+        label: 'vMix / X-Air',
         icon: <VideoCameraOutlined />,
         isActive: (p) => p.startsWith('/vmix'),
     },

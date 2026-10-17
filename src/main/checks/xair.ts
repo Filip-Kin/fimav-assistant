@@ -1,16 +1,20 @@
 import dgram from 'dgram';
 
-// Read-only OSC queries to a Behringer X-Air mixer (XR12/16/18) on UDP 10024.
-// Sending an address with no arguments asks the mixer for its value; it
-// answers on the same socket with the address and one argument. Addresses
-// are the ones the Bitfocus X-Air module uses:
+// OSC to a Behringer X-Air mixer (XR12/16/18) on UDP 10024. Sending an
+// address with no arguments asks the mixer for its value; it answers on the
+// same socket with the address and one argument. Addresses are Behringer's
+// X-Air Parameters.txt (XR18 firmware 1.14):
 //   /ch/NN/config/name       channel name (s)
 //   /ch/NN/mix/on            1 = unmuted (i)
-//   /ch/NN/mix/fader         0..1, 0.75 = 0 dB (f)
+//   /ch/NN/mix/fader         0..1, 0.75 = 0 dB (f, 1024 steps)
 //   /ch/NN/mix/lr            1 = assigned to the main mix (i)
-//   /ch/NN/mix/BB/level      send level to bus BB, 0..1 (f)
+//   /ch/NN/mix/BB/level      send level to bus BB, 0..1 (f, 161 steps)
+//   /ch/NN/mix/BB/tap        send tap: IN, PREEQ, POSTEQ, PRE, POST, GRP (i)
 //   /rtn/aux/...             the same for the aux/USB return (17+18)
-// Nothing here ever writes to the mixer.
+//   /bus/N/mix/fader         bus master fader (f, 1024 steps)
+//   /lr/mix/fader            main LR fader (f, 1024 steps)
+// The checks only read. The level wizard (levelWizard.ts) is the one writer:
+// faders and sends, through setXair(), each write read back.
 
 export const XAIR_PORT = 10024;
 
@@ -65,7 +69,8 @@ export function decodeReply(
 export function queryXair(
     host: string,
     addresses: string[],
-    timeoutMs = 800
+    timeoutMs = 800,
+    port = XAIR_PORT
 ): Promise<Map<string, OscValue>> {
     // A channel can match two roles (e.g. named "vMix" and "DJ"); ask once.
     const wanted = [...new Set(addresses)];
@@ -95,26 +100,36 @@ export function queryXair(
         socket.on('error', finish);
         socket.bind(0, () => {
             wanted.forEach((a) =>
-                socket.send(encodeQuery(a), XAIR_PORT, host, () => undefined)
+                socket.send(encodeQuery(a), port, host, () => undefined)
             );
         });
     });
 }
 
-// X-Air fader and send levels (0..1) to dB, the X32/X-Air fader law.
-export function levelToDb(f: number): number {
-    if (f <= 0) return -Infinity;
-    if (f >= 0.5) return f * 40 - 30;
-    if (f >= 0.25) return f * 80 - 50;
-    if (f >= 0.0625) return f * 160 - 70;
-    return f * 480 - 90;
-}
+// The fader law and the preamp gain law: utils/xairLaw.ts (shared with
+// the UI's on-screen fader).
+export {
+    dbToLevel,
+    FADER_STEPS,
+    GAIN_MAX_DB,
+    GAIN_MIN_DB,
+    GAIN_STEPS,
+    gainToLevel,
+    LEVEL_STEPS,
+    levelToDb,
+    levelToGain,
+    MAX_DB,
+} from '../../utils/xairLaw';
 
-// An OSC message with string/int arguments.
-function encodeMessage(address: string, args: (string | number)[]): Buffer {
-    const tags = `,${args
-        .map((a) => (typeof a === 'string' ? 's' : 'i'))
-        .join('')}`;
+type OscArg = string | number | { float: number };
+
+// An OSC message with string, int ({float} for float) arguments.
+function encodeMessage(address: string, args: OscArg[]): Buffer {
+    const tag = (a: OscArg) => {
+        if (typeof a === 'string') return 's';
+        return typeof a === 'number' ? 'i' : 'f';
+    };
+    const tags = `,${args.map(tag).join('')}`;
     const parts = [
         pad4(Buffer.from(address, 'ascii')),
         pad4(Buffer.from(tags, 'ascii')),
@@ -123,16 +138,93 @@ function encodeMessage(address: string, args: (string | number)[]): Buffer {
         if (typeof a === 'string') parts.push(pad4(Buffer.from(a, 'ascii')));
         else {
             const b = Buffer.alloc(4);
-            b.writeInt32BE(a);
+            if (typeof a === 'number') b.writeInt32BE(a);
+            else b.writeFloatBE(a.float);
             parts.push(b);
         }
     });
     return Buffer.concat(parts);
 }
 
-// Live input meters (/meters/1): 16 channels, then aux return L/R and the
-// four FX returns L/R, and more, in dBFS (int16 / 256). The subscription
-// lapses after 10 s, so it is renewed every 9 s while running.
+// An OSC message setting one float parameter.
+export const encodeSetFloat = (address: string, value: number) =>
+    encodeMessage(address, [{ float: value }]);
+
+// One parameter to set: a float (faders, sends, gains) unless `int` (on/off
+// switches such as grpon).
+export interface XairWrite {
+    address: string;
+    value: number;
+    int?: boolean;
+}
+
+const encodeWrite = (w: XairWrite) =>
+    w.int
+        ? encodeMessage(w.address, [Math.round(w.value)])
+        : encodeSetFloat(w.address, w.value);
+
+// Send parameter sets without waiting for anything (an on-screen fader
+// being dragged).
+export function writeXair(
+    host: string,
+    writes: XairWrite[],
+    port = XAIR_PORT
+): Promise<void> {
+    return new Promise<void>((resolve) => {
+        const socket = dgram.createSocket('udp4');
+        let left = writes.length;
+        const done = () => {
+            try {
+                socket.close();
+            } catch {
+                // already closed
+            }
+            resolve();
+        };
+        if (!left) {
+            done();
+            return;
+        }
+        socket.on('error', done);
+        socket.bind(0, () =>
+            writes.forEach((w) =>
+                socket.send(encodeWrite(w), port, host, () => {
+                    left -= 1;
+                    if (left === 0) done();
+                })
+            )
+        );
+    });
+}
+
+// Set parameters, then read them back. Resolves with what the mixer holds
+// afterwards; a value missing from the result did not answer. The X-Air
+// does not acknowledge a set, so the read-back is the only proof it took.
+export async function setXair(
+    host: string,
+    writes: XairWrite[],
+    port = XAIR_PORT
+): Promise<Map<string, OscValue>> {
+    await writeXair(host, writes, port);
+    return queryXair(
+        host,
+        writes.map((w) => w.address),
+        800,
+        port
+    );
+}
+
+// Live meters (/meters/1), in dBFS (int16 / 256). Per Parameters.txt:
+// 16x ch pre(-fader), aux pre L/R, fx1..4 pre L/R, bus1..6 pre, fxsend1..4
+// pre, main post L/R, mon L/R (40 values). The subscription lapses after
+// 10 s, so it is renewed every 9 s while running.
+export const METER_AUX_L = 16;
+export const METER_AUX_R = 17;
+// Bus N's meter (pre its master fader) is METER_BUS + N - 1.
+export const METER_BUS = 26;
+export const METER_LR_L = 36;
+export const METER_LR_R = 37;
+
 export class XairMeters {
     private socket: dgram.Socket | null = null;
 

@@ -12,6 +12,7 @@ import { getStore } from '../store';
 import { levelToDb, queryXair, XairMeters } from './xair';
 import XairWatch from './xairWatch';
 import { MIN_TALK_SECONDS, TALK_DB, talkLog } from './talking';
+import { LUFS_TARGET, levelChange } from './loudness';
 import VmixEvents from './vmixEvents';
 import {
     readStreamSettings,
@@ -64,9 +65,8 @@ const IGNORE_MS = 6 * 60 * 60 * 1000;
 // outside that the warning gives the change to make, in dB.
 // Peaks over -1 dBTP are "Peaking", and a boost is never more than the
 // headroom left under -1 dBTP, so the advice never makes the stream peak.
-const LUFS_TARGET = -14;
+// (LUFS_TARGET, TRUE_PEAK_MAX and the change maths: loudness.ts.)
 const LUFS_TOLERANCE = 5;
-const TRUE_PEAK_MAX = -1;
 
 // A send or fader at or under this is treated as off.
 const OFF_DB = -40;
@@ -272,23 +272,31 @@ const meterDb = (v: unknown) => {
     return n > 0 ? 20 * Math.log10(n) : -Infinity;
 };
 
-interface MixerSource {
+export interface MixerSource {
     name: string;
     // OSC prefix: /ch/NN or /rtn/aux
     path: string;
     // Meter index in /meters/1 (left side for stereo)
     meter: number;
+    // Stereo source: the meter after `meter` is its right side.
+    stereo?: boolean;
     on?: boolean;
     faderDb?: number;
     lr?: boolean;
     streamSendDb?: number;
+    // Tap of the stream bus send: 0 IN, 1 PREEQ, 2 POSTEQ, 3 PRE, 4 POST,
+    // 5 GRP. POST and GRP follow the channel fader.
+    streamTap?: number;
 }
 
-interface MixerState {
+export interface MixerState {
     at: number;
     reachable: boolean;
     streamBus: number;
     streamBusName: string;
+    // Stream bus master fader and main LR fader, dB.
+    streamBusFaderDb?: number;
+    lrFaderDb?: number;
     dj: MixerSource[];
     game: MixerSource[];
     mics: MixerSource[];
@@ -341,6 +349,7 @@ async function readMixer(host: string): Promise<MixerState> {
         name: name('/rtn/aux/config/name') || 'Aux (17+18)',
         path: '/rtn/aux',
         meter: 16,
+        stereo: true,
     };
     const dj = channels.filter(
         (c) => /\bdj\b/i.test(c.name) && !/stream/i.test(c.name)
@@ -357,8 +366,10 @@ async function readMixer(host: string): Promise<MixerState> {
         `${s.path}/mix/fader`,
         `${s.path}/mix/lr`,
         `${s.path}/mix/${sendPad}/level`,
+        `${s.path}/mix/${sendPad}/tap`,
     ]);
-    const mix = await queryXair(host, mixAddrs);
+    const busFader = `/bus/${streamBus}/mix/fader`;
+    const mix = await queryXair(host, [...mixAddrs, busFader, '/lr/mix/fader']);
     sources.forEach((s) => {
         const v = (k: string) => mix.get(`${s.path}/mix/${k}`);
         if (v('on') !== undefined) s.on = Number(v('on')) === 1;
@@ -366,10 +377,16 @@ async function readMixer(host: string): Promise<MixerState> {
         if (v('lr') !== undefined) s.lr = Number(v('lr')) === 1;
         const send = v(`${sendPad}/level`);
         if (send !== undefined) s.streamSendDb = levelToDb(Number(send));
+        const tap = v(`${sendPad}/tap`);
+        if (tap !== undefined) s.streamTap = Number(tap);
     });
+    const fdr = (a: string) =>
+        mix.has(a) ? levelToDb(Number(mix.get(a))) : undefined;
     return {
         at: Date.now(),
         reachable: true,
+        streamBusFaderDb: fdr(busFader),
+        lrFaderDb: fdr('/lr/mix/fader'),
         streamBus,
         streamBusName:
             name(`/bus/${streamBus}/config/name`) || `Bus ${streamBus}`,
@@ -410,16 +427,12 @@ export function loudnessVerdict(
         .join(', ');
     // Change that brings talking to -14 LUFS (positive is up).
     const toTarget = lufs !== null ? LUFS_TARGET - lufs : null;
+    const change = levelChange(lufs, peak);
 
-    if (peak !== null && peak > TRUE_PEAK_MAX) {
-        // The cut that brings the peak to -1 dBTP, or the loudness cut if
-        // that is bigger. Rounded up, so the peak ends at or under -1.
-        const cut = Math.max(peak - TRUE_PEAK_MAX, -(toTarget ?? 0));
+    if (change.peaking) {
         return {
             state: 'warning',
-            detail: `Peaking, Stream audio ${dbChange(
-                -Math.ceil(cut * 10) / 10
-            )} (${level})`,
+            detail: `Peaking, Stream audio ${dbChange(change.db!)} (${level})`,
         };
     }
     // No verdict on loudness without enough talking to judge.
@@ -430,9 +443,7 @@ export function loudnessVerdict(
         return { state: 'warning', detail: 'No stream audio, mics live' };
 
     if (toTarget > LUFS_TOLERANCE) {
-        // Never more than the headroom under -1 dBTP; rounded down.
-        const headroom = peak !== null ? TRUE_PEAK_MAX - peak : Infinity;
-        const boost = Math.floor(Math.min(toTarget, headroom) * 10) / 10;
+        const boost = change.db!;
         return {
             state: 'warning',
             detail:
@@ -444,9 +455,7 @@ export function loudnessVerdict(
     if (-toTarget > LUFS_TOLERANCE)
         return {
             state: 'warning',
-            detail: `Too loud, Stream audio ${dbChange(
-                Math.round(toTarget * 10) / 10
-            )} (${level})`,
+            detail: `Too loud, Stream audio ${dbChange(change.db!)} (${level})`,
         };
     return { state: 'ok', detail: level };
 }
@@ -510,6 +519,10 @@ export default class Checks extends EventEmitter {
     private mixer: MixerState | null = null;
 
     private meters = new XairMeters();
+
+    // Callers that want the X-Air meters running outside a match or a
+    // recording (the vMix / X-Air tab's audio section, the level wizard).
+    private meterDemand = new Set<string>();
 
     // The match in play at the last tick, to catch starts and ends.
     private lastMatch: string | null = null;
@@ -611,6 +624,7 @@ export default class Checks extends EventEmitter {
         this.vmixEvents.start(VmixService.Instance.Host());
         this.mixerWatch.onChange = changed('mixer');
         this.meters.onData = () => {
+            this.emit('meters', this.meters.latest, this.meters.lastAt);
             // Talking on the mics: every meter packet (about 50 ms).
             this.noteTalking();
             // Mic/match-sound balance: a sample per meter packet, at most
@@ -764,6 +778,31 @@ export default class Checks extends EventEmitter {
         };
     }
 
+    // The X-Air as last read, and its host; null before the first read.
+    public mixerState(): MixerState | null {
+        return this.mixer;
+    }
+
+    // vMix's API state as last read (null when it did not answer).
+    public vmixState(): any {
+        return this.vmix;
+    }
+
+    // Keep the X-Air meters running for `who` (on) or stop asking (off).
+    // Meter packets are the 'meters' event: (levels: number[], at: number).
+    public wantMeters(who: string, on: boolean) {
+        if (on) this.meterDemand.add(who);
+        else this.meterDemand.delete(who);
+        this.kick?.();
+    }
+
+    // Read the X-Air and vMix again now (after the level wizard wrote).
+    public async refresh(): Promise<void> {
+        this.dirty.mixer = true;
+        this.dirty.vmix = true;
+        await this.runTick();
+    }
+
     public list(): CheckResult[] {
         return DEFS.map((d) => this.results.get(d.id)!).filter(Boolean);
     }
@@ -881,7 +920,9 @@ export default class Checks extends EventEmitter {
         if (
             host &&
             this.mixer?.reachable &&
-            (label || (!!this.vmix && truthy(this.vmix.recording)))
+            (label ||
+                (!!this.vmix && truthy(this.vmix.recording)) ||
+                this.meterDemand.size > 0)
         )
             this.meters.start(host);
         else this.meters.stop();

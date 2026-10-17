@@ -13,6 +13,8 @@ import { EquipmentLogCategory, EquipmentLogType } from '../models/EquipmentLog';
 import VmixService from '../services/VmixService';
 import HWCheck, { enableDhcp } from './events/HWCheck';
 import Checks from './checks/engine';
+import LevelWizard from './checks/levelWizard';
+import { LEVEL_STEPS_ORDER } from '../models/Levels';
 import Alerts from './events/Alerts';
 import {
     dismissAlert,
@@ -1228,6 +1230,44 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         if (typeof id === 'string') Checks.Instance.unignore(id);
     });
     Checks.Instance.start();
+
+    // #endregion
+
+    // #region vMix / X-Air tab: audio meters and level wizard
+
+    LevelWizard.Instance.on('state', (st) => {
+        window?.webContents.send('levels:state', st);
+    });
+    ipcMain.on('levels:watch', (_event, [on]) => {
+        LevelWizard.Instance.watch(!!on);
+    });
+    ipcMain.on('levels:start', () => {
+        LevelWizard.Instance.start().catch((e) =>
+            window?.webContents.send('levels:error', (e as Error).message)
+        );
+    });
+    ipcMain.on('levels:go', (_event, [step]) => {
+        if (LEVEL_STEPS_ORDER.includes(step)) LevelWizard.Instance.go(step);
+    });
+    ipcMain.on('levels:fader', (_event, [db]) => {
+        if (typeof db === 'number') LevelWizard.Instance.fader(db);
+    });
+    ipcMain.on('levels:faderDone', () => {
+        LevelWizard.Instance.faderDone();
+    });
+    ipcMain.on('levels:apply', () => {
+        LevelWizard.Instance.apply();
+    });
+    ipcMain.on('levels:streamLevel', () => {
+        LevelWizard.Instance.streamLevel();
+    });
+    ipcMain.on('levels:undo', () => {
+        LevelWizard.Instance.undoLast();
+    });
+    // Cancel puts back everything the wizard changed; Done keeps it.
+    ipcMain.on('levels:close', (_event, [restore]) => {
+        LevelWizard.Instance.close(!!restore);
+    });
 
     // #endregion
 

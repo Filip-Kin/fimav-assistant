@@ -23,6 +23,7 @@ import {
     VideoCameraOutlined,
 } from '@ant-design/icons';
 import AddonControlRow from '../../components/AddonControlRow';
+import AudioSection from './Levels';
 import { useOneShot } from '../../hooks/ipc_busy';
 import { AutoAVStatus, Program } from '../../../models/AutoAVStatus';
 import './index.css';
@@ -539,6 +540,11 @@ export default function VmixPage() {
                         );
                     })()}
                 </Card>
+
+                <Title level={5} style={{ margin: '16px 0 8px' }}>
+                    Audio
+                </Title>
+                <AudioSection />
 
                 <Title level={5} style={{ margin: '16px 0 8px' }}>
                     vMix inputs

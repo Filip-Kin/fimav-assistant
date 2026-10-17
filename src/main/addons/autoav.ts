@@ -527,17 +527,22 @@ export default class AutoAV {
 
     // A qualification or playoff match being played right now, FRC or FTC,
     // for the stream checks; null between matches and for practice/test.
-    public matchInPlay(): { label: string; level: string } | null {
+    // `anyLevel` also counts practice and test matches (the level wizard
+    // listens to the match sounds of whatever match is run).
+    public matchInPlay(
+        anyLevel = false
+    ): { label: string; level: string } | null {
+        const counted = (level: string) =>
+            anyLevel || ['Qualification', 'Playoff'].includes(level);
         if (this.isFtc()) {
             const m = this.ftcRecorder.inPlay();
-            if (!m || !['Qualification', 'Playoff'].includes(m.level))
-                return null;
+            if (!m || !counted(m.level)) return null;
             return { label: m.shortName, level: m.level };
         }
         const st = this.lastState;
         if (
             !st ||
-            !['Qualification', 'Playoff'].includes(st.Level) ||
+            !counted(st.Level) ||
             ![
                 'GameSpecificData',
                 'MatchAuto',
@@ -546,6 +551,8 @@ export default class AutoAV {
             ].includes(st.MatchState)
         )
             return null;
+        if (!['Qualification', 'Playoff'].includes(st.Level))
+            return { label: `${st.Level} ${st.MatchNumber}`, level: st.Level };
         const prefix = st.Level === 'Qualification' ? 'Q' : 'P';
         return { label: `${prefix}${st.MatchNumber}`, level: st.Level };
     }

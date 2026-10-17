@@ -40,6 +40,23 @@ const REL_GATE = 10;
 
 const num = (s: string) => (s === '-inf' ? -Infinity : parseFloat(s));
 
+// One ebur128 per-100 ms line: the block's end time, its momentary
+// loudness and (with peak=true) the highest per-channel true peak in the
+// frame (FTPK). Null for any other line.
+export function parseEbur128Line(
+    line: string
+): (LoudnessBlock & { peak: number | null }) | null {
+    const m = /\bt:\s*([\d.]+)\s.*?\bM:\s*(-?[\d.]+|-inf)/.exec(line);
+    if (!m) return null;
+    const p = /\bFTPK:\s*((?:(?:-?[\d.]+|-inf)\s+)+)dBFS/.exec(line);
+    const peaks = p ? p[1].trim().split(/\s+/).map(num) : [];
+    return {
+        t: parseFloat(m[1]),
+        m: num(m[2]),
+        peak: peaks.length ? Math.max(...peaks) : null,
+    };
+}
+
 // The ebur128 output of one ffmpeg run: per-block momentary loudness and
 // the summary.
 export function parseEbur128(stderr: string): {
@@ -52,15 +69,45 @@ export function parseEbur128(stderr: string): {
     const i = /I:\s+(-?[\d.]+|-inf)\s+LUFS/.exec(summary);
     if (!i) return null;
     const p = /Peak:\s+(-?[\d.]+|-inf)\s+dBFS/.exec(summary);
-    const blocks: LoudnessBlock[] = [];
-    const frame = /\bt:\s*([\d.]+)\s.*?\bM:\s*(-?[\d.]+|-inf)/g;
     const head = at >= 0 ? stderr.slice(0, at) : stderr;
-    let m = frame.exec(head);
-    while (m) {
-        blocks.push({ t: parseFloat(m[1]), m: num(m[2]) });
-        m = frame.exec(head);
-    }
+    const blocks: LoudnessBlock[] = [];
+    head.split(/\r?\n/).forEach((line) => {
+        const b = parseEbur128Line(line);
+        if (b) blocks.push({ t: b.t, m: b.m });
+    });
     return { lufs: num(i[1]), truePeak: p ? num(p[1]) : null, blocks };
+}
+
+// YouTube's reference loudness, and the highest true peak allowed.
+export const LUFS_TARGET = -14;
+export const TRUE_PEAK_MAX = -1;
+
+// The change to the stream level (dB, positive is up) that brings `lufs` to
+// LUFS_TARGET without the true peak going over TRUE_PEAK_MAX:
+//  - peaking: the cut that brings the peak to -1 dBTP, or the loudness cut
+//    if that is bigger; rounded up so the peak ends at or under -1
+//  - too quiet: the boost, never more than the headroom under -1 dBTP;
+//    rounded down
+//  - too loud: the cut, to 0.1 dB
+// db is null with no loudness (and no peaking).
+export function levelChange(
+    lufs: number | null,
+    peak: number | null
+): { db: number | null; peaking: boolean } {
+    const toTarget = lufs !== null ? LUFS_TARGET - lufs : null;
+    if (peak !== null && peak > TRUE_PEAK_MAX) {
+        const cut = Math.max(peak - TRUE_PEAK_MAX, -(toTarget ?? 0));
+        return { db: -Math.ceil(cut * 10) / 10, peaking: true };
+    }
+    if (toTarget === null) return { db: null, peaking: false };
+    if (toTarget > 0) {
+        const headroom = peak !== null ? TRUE_PEAK_MAX - peak : Infinity;
+        return {
+            db: Math.floor(Math.min(toTarget, headroom) * 10) / 10,
+            peaking: false,
+        };
+    }
+    return { db: Math.round(toTarget * 10) / 10, peaking: false };
 }
 
 // BS.1770 gated loudness of a set of 400 ms block loudnesses, or null when

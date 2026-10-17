@@ -77,3 +77,61 @@
     background: rgba(255, 77, 79, 0.1);
     border-radius: 6px;
 }
+
+.levels-meter {
+    display: grid;
+    grid-template-columns: 96px 1fr 96px;
+    align-items: center;
+    gap: 10px;
+}
+
+.levels-meter-track {
+    height: 10px;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+}
+
+.levels-meter-fill {
+    height: 100%;
+    transition: width 80ms linear;
+}
+
+.levels-meter-value {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.levels-loudness {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.levels-step {
+    display: grid;
+    grid-template-columns: 160px 1fr 110px;
+    gap: 16px;
+    align-items: start;
+}
+
+.levels-step-side {
+    display: flex;
+    justify-content: center;
+}
+
+.levels-step-main {
+    width: 100%;
+}
+
+.levels-fader {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    height: 240px;
+}
+
+.levels-fader .ant-slider-vertical {
+    flex: 1;
+}
