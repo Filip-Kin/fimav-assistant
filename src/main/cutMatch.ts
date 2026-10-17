@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import log from 'electron-log';
 
@@ -15,19 +15,44 @@ export function ffmpegPath(): string {
     return 'ffmpeg';
 }
 
+// Every ffmpeg this process started that has not exited yet.
+const running = new Set<ChildProcess>();
+
 export function run(
     bin: string,
     args: string[]
 ): Promise<{ code: number | null; stderr: string }> {
     return new Promise((resolve, reject) => {
         const child = spawn(bin, args, { windowsHide: true });
+        running.add(child);
         let stderr = '';
         child.stderr.on('data', (d) => {
             stderr += d.toString();
         });
-        child.on('error', reject);
-        child.on('close', (code) => resolve({ code, stderr }));
+        child.on('error', (err) => {
+            running.delete(child);
+            reject(err);
+        });
+        child.on('close', (code) => {
+            running.delete(child);
+            resolve({ code, stderr });
+        });
     });
+}
+
+// Kill every ffmpeg still running, for a quit. A child outlives the app on
+// Windows: at BGRC 2026 a restart mid-cut left Q11's ffmpeg writing its
+// .cutting file, the new instance's recovery could not delete it (EBUSY), and
+// the match sat in "processing" with no video in the event folder.
+export function killRunningFfmpeg(): void {
+    running.forEach((child) => {
+        try {
+            child.kill();
+        } catch {
+            // already gone
+        }
+    });
+    running.clear();
 }
 
 // Read a file's duration (seconds) by parsing ffmpeg's own banner, so we don't

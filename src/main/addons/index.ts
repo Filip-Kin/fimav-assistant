@@ -9,6 +9,7 @@ import YoutubeUploaderAddon from './upload-helper';
 import AudienceDisplayAddon from './audience-display';
 import FtcScorekeeper from '../ftc/scorekeeper';
 import { logsPath } from '../util';
+import { killRunningFfmpeg } from '../cutMatch';
 import HWPing from './hw-ping';
 
 export default class Addons {
@@ -33,6 +34,9 @@ export default class Addons {
     // so a quit can wait for the uploader to close its browser and exit.
     public async stop(): Promise<void> {
         this.AutoAV.stop();
+        // Only here, on quit: AutoAV.stop() also runs for an FMS reconnect,
+        // where a running cut must carry on.
+        killRunningFfmpeg();
         this.HWPing.stop();
         FtcScorekeeper.Instance.stop();
         await Promise.all([

@@ -135,6 +135,13 @@ export default class AutoAV {
     // Recovery runs once per folder this process points at (and again on start).
     private recovering = false;
 
+    // Failed recoveries per cut job key; see recoverInterruptedCuts.
+    private recoveryFailures = new Map<string, number>();
+
+    private static RECOVERY_TRIES = 5;
+
+    private static RECOVERY_RETRY_MS = 30_000;
+
     // Periodic vMix reachability poll
     private vmixPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -1319,6 +1326,7 @@ export default class AutoAV {
     private recoverInterruptedCuts(folder: string | null) {
         if (!folder || !fs.existsSync(folder) || this.recovering) return;
         this.recovering = true;
+        let retry = false;
         try {
             const originalsDir = path.join(folder, 'Originals');
             let records: MatchRecord[] = [];
@@ -1335,15 +1343,43 @@ export default class AutoAV {
                 if (this.cutJobs.has(key) || this.filing.has(key)) return;
                 try {
                     this.recoverOne(folder, originalsDir, rec);
+                    this.recoveryFailures.delete(key);
                 } catch (e) {
                     this.logs?.err.warn(
                         `Could not recover cut for ${rec.fileName}`,
                         e
                     );
+                    // Recovery only runs on start and on a folder change, so a
+                    // failure here (a partial cut still held open: EBUSY) would
+                    // leave the match in "processing" for good. Try again, and
+                    // after the last try mark it errored so Cut and the
+                    // uploader are not blocked by it.
+                    const failures = (this.recoveryFailures.get(key) ?? 0) + 1;
+                    this.recoveryFailures.set(key, failures);
+                    if (failures < AutoAV.RECOVERY_TRIES) {
+                        retry = true;
+                    } else {
+                        this.recoveryFailures.delete(key);
+                        const r = updateMatch(folder, rec.id, {
+                            processing: {
+                                state: 'error',
+                                error: `cut not recovered: ${String(
+                                    (e as Error)?.message ?? e
+                                )}`,
+                            },
+                        });
+                        if (r) this.emitter.emit('match', r);
+                    }
                 }
             });
         } finally {
             this.recovering = false;
+        }
+        if (retry) {
+            setTimeout(
+                () => this.recoverInterruptedCuts(folder),
+                AutoAV.RECOVERY_RETRY_MS
+            );
         }
     }
 
