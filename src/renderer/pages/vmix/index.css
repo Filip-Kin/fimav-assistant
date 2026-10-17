@@ -129,7 +129,7 @@
     flex-direction: column;
     align-items: center;
     gap: 6px;
-    height: 240px;
+    height: 380px;
 }
 
 .levels-fader .ant-slider-vertical {

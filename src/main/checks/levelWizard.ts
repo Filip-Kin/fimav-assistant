@@ -151,6 +151,14 @@ const neverDjOnStream = (ws: XairWrite[]): XairWrite[] => {
     return ws.filter((w) => !dj.has(w.address) || w.value === 0);
 };
 
+// Master (the LR fader) is the operator's. The wizard writes it only for the
+// red mic step's -50 dB start, from the on-screen fader the operator moves,
+// and when Undo or Cancel put back a value it had. Every other write path
+// goes through send() without `lr`, which refuses it.
+export const LR_FADER = '/lr/mix/fader';
+
+export type LrWrite = 'preset' | 'operator' | 'restore';
+
 const FADER_TARGET = {
     red: 'Master',
     blue: 'Blue mic',
@@ -336,7 +344,7 @@ export default class LevelWizard extends EventEmitter {
     private async readOriginal(host: string, m: MixerState) {
         const pad = sendPad();
         const addrs = [
-            '/lr/mix/fader',
+            LR_FADER,
             busFaderAddr(),
             ...[...m.mics.slice(0, 2), ...m.game, ...m.dj].flatMap((s) => [
                 `${s.path}/mix/fader`,
@@ -429,13 +437,18 @@ export default class LevelWizard extends EventEmitter {
                 });
             if (step === 'red')
                 writes.push({
-                    address: '/lr/mix/fader',
+                    address: LR_FADER,
                     value: dbToLevel(MASTER_START_DB, FADER_STEPS),
                 });
         }
         if (step === 'dj') writes.push(...this.djOffWrites());
         if (writes.length)
-            await this.write(STEP_LABEL[step as Kind] ?? step, writes);
+            await this.write(
+                STEP_LABEL[step as Kind] ?? step,
+                writes,
+                undefined,
+                step === 'red' ? 'preset' : undefined
+            );
         if (step === 'dj' && writes.length) this.djSendOff = true;
     }
 
@@ -458,7 +471,7 @@ export default class LevelWizard extends EventEmitter {
     private faderAddrs(): string[] {
         switch (this.step) {
             case 'red':
-                return ['/lr/mix/fader'];
+                return [LR_FADER];
             case 'blue':
                 return sources('blue').map((s) => `${s.path}/mix/fader`);
             case 'match': {
@@ -477,7 +490,9 @@ export default class LevelWizard extends EventEmitter {
     public fader(db: number) {
         const addrs = this.faderAddrs();
         const host = mixerHost();
-        if (!addrs.length || !host || !Number.isFinite(db)) return;
+        // -Infinity is the fader at the bottom (off).
+        if (!addrs.length || !host || Number.isNaN(db) || db === Infinity)
+            return;
         if (!this.dragEntry) {
             this.dragEntry = {
                 label: `${STEP_LABEL[this.step as Kind]} fader`,
@@ -502,6 +517,7 @@ export default class LevelWizard extends EventEmitter {
         const host = mixerHost();
         if (db === null || !host) return;
         const value = dbToLevel(db, FADER_STEPS);
+        // The operator's own fader (the only live write of Master).
         const writes = this.faderAddrs().map((a) => ({ address: a, value }));
         writes.forEach((w) => this.values.set(w.address, w.value));
         writeXair(host, writes).catch(() => undefined);
@@ -530,7 +546,8 @@ export default class LevelWizard extends EventEmitter {
     private async write(
         label: string,
         writes: XairWrite[],
-        busAVolume?: number
+        busAVolume?: number,
+        lr?: LrWrite
     ) {
         const host = mixerHost();
         if (!host) throw new Error('X-Air not answering');
@@ -545,12 +562,19 @@ export default class LevelWizard extends EventEmitter {
         if (busAVolume !== undefined && this.busAVolume !== null)
             entry.busAVolume = this.busAVolume;
         this.undo.push(entry);
+        // Refused before anything is written or kept for undo.
+        if (!lr && writes.some((w) => w.address === LR_FADER)) {
+            this.undo.pop();
+            throw new Error('Master is not automatic');
+        }
         log.info(`levels: ${label}`, writes);
-        await this.send(host, writes);
+        await this.send(host, writes, lr);
         if (busAVolume !== undefined) await this.setBusA(busAVolume);
     }
 
-    private async send(host: string, writes: XairWrite[]) {
+    private async send(host: string, writes: XairWrite[], lr?: LrWrite) {
+        if (!lr && writes.some((w) => w.address === LR_FADER))
+            throw new Error('Master is not automatic');
         if (!writes.length) return;
         const got = await setXair(host, writes);
         writes.forEach((w) => {
@@ -577,7 +601,7 @@ export default class LevelWizard extends EventEmitter {
             const host = mixerHost();
             if (!host) throw new Error('X-Air not answering');
             log.info(`levels: undo ${e.label}`);
-            await this.send(host, neverDjOnStream(e.writes));
+            await this.send(host, neverDjOnStream(e.writes), 'restore');
             if (e.busAVolume !== undefined) await this.setBusA(e.busAVolume);
             if (this.step === 'stream') this.makePlan();
         });
@@ -599,7 +623,7 @@ export default class LevelWizard extends EventEmitter {
                 int: this.ints.has(a),
             }));
         log.info('levels: cancel, restore', writes);
-        await this.send(host, neverDjOnStream(writes));
+        await this.send(host, neverDjOnStream(writes), 'restore');
         if (
             this.undo.some((e) => e.busAVolume !== undefined) &&
             this.busAOriginal !== null
@@ -873,7 +897,6 @@ export default class LevelWizard extends EventEmitter {
         const isSource = ['red', 'blue', 'match', 'dj'].includes(kind);
         const addrs = this.faderAddrs();
         const fader = addrs.length ? this.values.get(addrs[0]) : undefined;
-        const lrDb = levelToDb(this.values.get('/lr/mix/fader') ?? 0);
         const busDb = levelToDb(this.values.get(busFaderAddr()) ?? 0);
         const rows = (['red', 'blue', 'match', 'dj'] as Kind[]).map((k) => {
             const meas = k === 'dj' ? null : this.measuredOf(k);
@@ -883,10 +906,6 @@ export default class LevelWizard extends EventEmitter {
             let input = meas?.inputDb ?? null;
             if (k === 'dj')
                 input = djMeter.length ? Math.max(...djMeter) : null;
-            const s = k === 'match' ? this.matchSource() : sources(k)[0];
-            const fdr = s
-                ? levelToDb(this.values.get(`${s.path}/mix/fader`) ?? 0)
-                : null;
             const mix = k === 'dj' ? null : this.mixOf(k);
             const planned =
                 this.plan?.predicted.find((x) => x.id === k)?.lufs ?? null;
@@ -896,10 +915,6 @@ export default class LevelWizard extends EventEmitter {
                 label: STEP_LABEL[k],
                 status: this.stepStatusOf(k),
                 input: finite(input),
-                master:
-                    input !== null && fdr !== null
-                        ? finite(input + fdr + lrDb)
-                        : null,
                 // On Bus 1 out: as planned when there is a plan, else now.
                 bus:
                     input !== null && mix

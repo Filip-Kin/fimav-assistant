@@ -29,6 +29,10 @@ const { Text } = Typography;
 const send = (channel: string, ...args: unknown[]) =>
     window.electron?.ipcRenderer.sendMessage(channel, args);
 
+// The fader in dB for the main process; off (-inf) goes as null.
+const sendFader = (db: number) =>
+    send('levels:fader', Number.isFinite(db) ? db : null);
+
 const MINUS = '−';
 
 // "-18.2" with a real minus; "-" for nothing.
@@ -82,15 +86,35 @@ const STEP_TITLE: Record<LevelStep, string> = {
     check: 'Check',
 };
 
-// The step's on-screen fader: the X-Air fader law, so it moves like the
-// console's own; dB shown.
+// The step's on-screen fader: the X-Air fader law over the whole range,
+// off (-inf) to +10 dB, so it moves like the console's own and is fine at
+// the bottom (a mic-level venue input can need Master very low). The
+// buttons move 0.5 dB; the arrow keys one fader step.
+const FINE_DB = 0.5;
+
 function Fader({ w }: { w: WizardState }) {
     const [drag, setDrag] = useState<number | null>(null);
     const pos =
         drag ?? (w.fader === null ? 0 : dbToLevel(w.fader, FADER_STEPS));
+    const nudge = (by: number) => {
+        const db = levelToDb(pos);
+        // From off, the first step up is the fader's lowest step.
+        const next = Number.isFinite(db)
+            ? dbToLevel(db + by, FADER_STEPS)
+            : (by > 0 ? 1 : 0) / (FADER_STEPS - 1);
+        sendFader(levelToDb(next));
+        send('levels:faderDone');
+    };
     return (
         <div className="levels-fader">
             <Text strong>{w.faderTarget}</Text>
+            <Button
+                size="small"
+                disabled={w.fader === null || w.busy}
+                onClick={() => nudge(FINE_DB)}
+            >
+                +{FINE_DB} dB
+            </Button>
             <Slider
                 vertical
                 min={0}
@@ -98,17 +122,31 @@ function Fader({ w }: { w: WizardState }) {
                 step={1 / (FADER_STEPS - 1)}
                 value={pos}
                 disabled={w.fader === null}
-                tooltip={{ formatter: (v) => `${fmtDb(levelToDb(v ?? 0))} dB` }}
+                tooltip={{
+                    formatter: (v) => `${fmtDb(levelToDb(v ?? 0))} dB`,
+                }}
                 onChange={(v: number) => {
                     setDrag(v);
-                    send('levels:fader', levelToDb(v));
+                    sendFader(levelToDb(v));
                 }}
                 onChangeComplete={() => {
                     setDrag(null);
                     send('levels:faderDone');
                 }}
             />
-            <Text>{`${fmtDb(levelToDb(pos))} dB`}</Text>
+            <Button
+                size="small"
+                disabled={w.fader === null || w.busy}
+                onClick={() => nudge(-FINE_DB)}
+            >
+                {MINUS}
+                {FINE_DB} dB
+            </Button>
+            <Text>
+                {Number.isFinite(levelToDb(pos))
+                    ? `${fmtDb(levelToDb(pos))} dB`
+                    : 'Off'}
+            </Text>
         </div>
     );
 }
@@ -191,11 +229,6 @@ function StreamStep({ w }: { w: WizardState }) {
                     {
                         title: 'Input dBFS',
                         dataIndex: 'input',
-                        render: cell,
-                    },
-                    {
-                        title: 'Master dBFS',
-                        dataIndex: 'master',
                         render: cell,
                     },
                     {

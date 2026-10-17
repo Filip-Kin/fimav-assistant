@@ -90,6 +90,10 @@ export const TRUE_PEAK_MAX = -1;
 //    rounded down
 //  - too loud: the cut, to 0.1 dB
 // db is null with no loudness (and no peaking).
+// Rounding to 0.1 dB up or down without float noise turning 16.0 into 15.9
+// (an energy mean of equal blocks is not always exactly that value).
+const EPS = 1e-9;
+
 export function levelChange(
     lufs: number | null,
     peak: number | null
@@ -97,13 +101,13 @@ export function levelChange(
     const toTarget = lufs !== null ? LUFS_TARGET - lufs : null;
     if (peak !== null && peak > TRUE_PEAK_MAX) {
         const cut = Math.max(peak - TRUE_PEAK_MAX, -(toTarget ?? 0));
-        return { db: -Math.ceil(cut * 10) / 10, peaking: true };
+        return { db: -Math.ceil(cut * 10 - EPS) / 10, peaking: true };
     }
     if (toTarget === null) return { db: null, peaking: false };
     if (toTarget > 0) {
         const headroom = peak !== null ? TRUE_PEAK_MAX - peak : Infinity;
         return {
-            db: Math.floor(Math.min(toTarget, headroom) * 10) / 10,
+            db: Math.floor(Math.min(toTarget, headroom) * 10 + EPS) / 10,
             peaking: false,
         };
     }

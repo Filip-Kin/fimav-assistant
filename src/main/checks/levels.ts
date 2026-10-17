@@ -1,8 +1,10 @@
 /* eslint-disable max-classes-per-file */
 // The level wizard's maths (levelWizard.ts runs it against the mixer).
 //
-// The room (Master / LR) is set by ear in the wizard; the stream mix is then
-// worked out from what the X-Air meters heard:
+// The room (Master / LR) is set by ear in the wizard and never judged: the
+// venue's input may be line or mic level, XLR or 3.5 mm, so an LR dBFS says
+// nothing about how loud the room is. Nothing here reads the LR fader. The
+// stream mix is worked out from what the X-Air meters heard:
 //  - each source's input level while it sounded (input meter, pre-fader,
 //    with the wizard's preamp gain)
 //  - its Bus 1 send so every source is equally loud on Bus 1
@@ -293,14 +295,12 @@ export function planStreamMix(
 }
 
 // The change to the Bus 1 master that the real stream measurement asks for
-// (the residual after the plan), capped at MAX_MOVE_DB either way.
-export const MAX_MOVE_DB = 10;
-
+// (the residual after the plan). No cap on the size: the limits are the
+// physical ones, the true peak staying under -1 dBTP (levelChange) and the
+// fader's +10 dB (dbToLevel).
 export function residual(
     lufs: number | null,
     peak: number | null
 ): number | null {
-    const c = levelChange(lufs, Number.isFinite(peak ?? NaN) ? peak : null);
-    if (c.db === null) return null;
-    return Math.max(-MAX_MOVE_DB, Math.min(MAX_MOVE_DB, c.db));
+    return levelChange(lufs, Number.isFinite(peak ?? NaN) ? peak : null).db;
 }

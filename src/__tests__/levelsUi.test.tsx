@@ -61,7 +61,6 @@ const wizard = (over: Partial<WizardState> = {}): WizardState => ({
         }[id],
         status: 'listening',
         input: -21,
-        master: -40,
         bus: -20,
         stream: -14,
         sendLimited: null,
@@ -140,6 +139,8 @@ describe('vMix / X-Air audio section', () => {
         render(<AudioSection />);
         push({ ...base, wizard: wizard({ step: 'stream' }) });
         expect(screen.getByText('Bus 1 dBFS')).toBeInTheDocument();
+        // Master is never judged or worked out: no Master column.
+        expect(screen.queryByText('Master dBFS')).toBeNull();
         expect(screen.getByText('Stream LUFS')).toBeInTheDocument();
         expect(screen.queryByRole('cell', { name: 'DJ' })).toBeNull();
         expect(screen.getByText('Estimate')).toBeInTheDocument();

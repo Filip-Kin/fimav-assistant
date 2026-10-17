@@ -5,8 +5,9 @@
 //
 // Two lists of wall-clock spans (epoch ms):
 //  - heard: the mic meters were being read (gaps over METER_GAP_MS end one)
-//  - talk:  a mic was over TALK_DB, held HANGOVER_MS past its last packet so
-//           the gaps between words do not end the span
+//  - talk:  a mic was over TALK_DB on its pre-fader input meter (no fader,
+//           mute or send changes it), held HANGOVER_MS past its last packet
+//           so the gaps between words do not end the span
 // Kept in memory for KEEP_MS; a match measured after an app restart has no
 // mic levels and gets no verdict.
 

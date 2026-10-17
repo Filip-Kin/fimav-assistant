@@ -1,7 +1,8 @@
 /* eslint-disable max-classes-per-file */
-import Checks from '../main/checks/engine';
+import Checks, { loudnessVerdict } from '../main/checks/engine';
 import { decodeReply, levelToDb } from '../main/checks/xair';
 import { talkLog } from '../main/checks/talking';
+import { talkLoudness } from '../main/checks/loudness';
 import { parseStreamSettings } from '../main/checks/vmixSettings';
 import { setCaptionKey } from '../main/checks/captionsYoutube';
 import VmixService from '../services/VmixService';
@@ -994,14 +995,73 @@ describe('stream checks', () => {
         checks.noteTalking();
         expect(talkLog.talk).toEqual([]);
         expect(talkLog.heard).toEqual([[t, t]]);
-        // A muted mic is not on the stream.
-        talkLog.clear();
+        // Talking is read before the fader: a mic turned down, muted or off
+        // the stream bus is still someone talking.
         mixer.set('/ch/01/mix/on', 0);
+        mixer.set('/ch/01/mix/fader', 0);
+        mixer.set('/ch/01/mix/01/level', 0);
+        mixer.set('/bus/1/mix/fader', 0);
         checks.dirty.mixer = true;
         await tick(1);
+        talkLog.clear();
         checks.meters.latest = [-20, -90, -90, -90];
         checks.noteTalking();
-        expect(talkLog.talk).toEqual([]);
+        expect(talkLog.talk).toEqual([[t, t + 1000]]);
+    });
+
+    // Quiet because nobody talks is never "too quiet"; quiet while someone
+    // talks is, with the boost to make, whatever the faders say.
+    describe('quiet stream: nobody talking vs turned down', () => {
+        // 30 s of mic meter packets (50 ms) at `micDb` on ch 1, and the
+        // stream's ebur128 blocks at `streamLufs` over the same 30 s.
+        const run = async (micDb: number, streamLufs: number) => {
+            await tick(1);
+            talkLog.clear();
+            const T = 5_000_000;
+            for (let k = 0; k <= 600; k += 1) {
+                checks.meters.lastAt = T + k * 50;
+                checks.meters.latest = [micDb, -90, -90, -90];
+                checks.noteTalking();
+            }
+            const blocks = Array.from({ length: 300 }, (_, k) => ({
+                t: (k + 1) / 10,
+                m: streamLufs,
+            }));
+            const talk = talkLoudness(
+                blocks,
+                [{ wallStart: T, seconds: 30 }],
+                talkLog
+            );
+            return loudnessVerdict({ lufs: streamLufs, truePeak: -20, talk });
+        };
+
+        it('talking, Bus 1 nearly off: too quiet, +dB to -14', async () => {
+            mixer.set('/bus/1/mix/fader', 0.05);
+            mixer.set('/ch/01/mix/01/level', 0.05);
+            checks.dirty.mixer = true;
+            expect(await run(-18, -34)).toEqual({
+                state: 'warning',
+                detail: 'Too quiet, Stream audio +19.0 dB (-34.0 LUFS, peak -20.0 dBTP)',
+            });
+        });
+
+        it('talking, mic send turned down: the boost to -14', async () => {
+            mixer.set('/ch/01/mix/01/level', 0.1);
+            checks.dirty.mixer = true;
+            const v = await run(-18, -30);
+            expect(v.state).toBe('warning');
+            expect(v.detail).toMatch(/^Too quiet, Stream audio \+16\.0 dB/);
+        });
+
+        it('nobody talking, levels normal: no verdict', async () => {
+            // Match sounds keep the stream at -14 LUFS; mics idle.
+            expect(await run(-70, -14)).toEqual({
+                state: 'unknown',
+                detail: 'Not enough talking',
+            });
+            // A silent stream with nobody talking: still no verdict.
+            expect((await run(-70, -60)).state).toBe('unknown');
+        });
     });
 
     it('mic meters run while vMix records, not only in a match', async () => {

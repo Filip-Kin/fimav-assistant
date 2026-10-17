@@ -98,10 +98,13 @@ describe('ebur128 line and the change to -14 LUFS', () => {
         expect(levelChange(null, null)).toEqual({ db: null, peaking: false });
     });
 
-    it('caps the residual at 10 dB either way', () => {
+    it('no cap on the residual, only the peak limit', () => {
         expect(residual(-20, -10)).toBe(6);
-        expect(residual(-30, -20)).toBe(10);
-        expect(residual(-2, -3)).toBe(-10);
+        expect(residual(-30, -20)).toBe(16);
+        expect(residual(-40, -45)).toBe(26);
+        expect(residual(-2, -3)).toBe(-12);
+        // Headroom under -1 dBTP is the physical limit.
+        expect(residual(-30, -6)).toBe(5);
         expect(residual(null, null)).toBeNull();
     });
 });

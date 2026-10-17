@@ -1250,7 +1250,9 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         if (LEVEL_STEPS_ORDER.includes(step)) LevelWizard.Instance.go(step);
     });
     ipcMain.on('levels:fader', (_event, [db]) => {
+        // A number, or null for the fader at the bottom (off).
         if (typeof db === 'number') LevelWizard.Instance.fader(db);
+        else if (db === null) LevelWizard.Instance.fader(-Infinity);
     });
     ipcMain.on('levels:faderDone', () => {
         LevelWizard.Instance.faderDone();

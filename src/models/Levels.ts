@@ -25,11 +25,10 @@ export interface LevelRow {
     id: LevelSourceId;
     label: string;
     status: LevelStepStatus;
-    // Energy mean of the input meter while it sounded (dBFS), and the same
-    // level on Master (LR out) and on Bus 1 out (as planned once there is a
-    // plan), all X-Air meter dBFS.
+    // Energy mean of the input meter while it sounded (dBFS, pre-fader),
+    // and the level on Bus 1 out (as planned once there is a plan). No
+    // Master value: the venue input decides how loud the room is, not LR.
     input: number | null;
-    master: number | null;
     bus: number | null;
     // Predicted stream loudness after the plan (LUFS; meter dBFS when the
     // plan is an estimate).
@@ -84,7 +83,8 @@ export interface WizardState {
 export interface LevelState {
     mixer: boolean;
     streamBus: number;
-    // X-Air main LR out and stream bus out (with its master fader), dBFS.
+    // X-Air main LR out (information only, never judged) and stream bus out
+    // (with its master fader), dBFS.
     masterOut: number | null;
     streamOut: number | null;
     wizard: WizardState | null;

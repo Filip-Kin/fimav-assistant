@@ -300,4 +300,132 @@ describe('level wizard', () => {
         expect(mixer.get('/ch/03/mix/01/level')).toBe(0);
         expect(state().wizard).toBeNull();
     });
+
+    // Master is the operator's: no automatic path may write it.
+    describe('Master (LR) is never automatic', () => {
+        const lrWrites = () =>
+            writes.filter((x) => x.address === '/lr/mix/fader');
+
+        const measureAll = async () => {
+            await LevelWizard.Instance.start();
+            sound([0], -20, 6);
+            await LevelWizard.Instance.go('blue');
+            sound([1], -26, 6);
+            await LevelWizard.Instance.go('match');
+            sound([16, 17], -14, 4);
+            await LevelWizard.Instance.go('dj');
+            sound([2, 3], -12, 6);
+        };
+
+        it('Apply, Stream level and the plan do not write or read it', async () => {
+            await measureAll();
+            // The operator sets Master somewhere odd for the venue.
+            mixer.set('/lr/mix/fader', f(-72));
+            await LevelWizard.Instance.go('stream');
+            const plan1 = state().wizard!.plan;
+            // The stream plan does not depend on where Master is.
+            mixer.set('/lr/mix/fader', f(5));
+            (LevelWizard.Instance as any).values.set('/lr/mix/fader', f(5));
+            await LevelWizard.Instance.go('stream');
+            expect(state().wizard!.plan).toEqual(plan1);
+            mixer.set('/lr/mix/fader', f(-72));
+            (LevelWizard.Instance as any).values.set('/lr/mix/fader', f(-72));
+            writes.length = 0;
+            await LevelWizard.Instance.apply();
+            // Someone talks on the stream at -30 LUFS: Stream level.
+            const {live} = LevelWizard.Instance as any;
+            for (let k = 0; k < 40; k += 1) {
+                sound([0], -20, 0.1);
+                live.onBlock({ at: now, m: -30, peak: -25 });
+            }
+            expect(state().wizard!.verify.residual).toBe(16);
+            await LevelWizard.Instance.streamLevel();
+            expect(lrWrites()).toEqual([]);
+            expect(mixer.get('/lr/mix/fader')).toBe(f(-72));
+        });
+
+        it('the residual is applied whole, no 10 dB cap', async () => {
+            await measureAll();
+            await LevelWizard.Instance.go('stream');
+            await LevelWizard.Instance.apply();
+            const bus = levelToDb(mixer.get('/bus/1/mix/fader')!);
+            const {live} = LevelWizard.Instance as any;
+            for (let k = 0; k < 40; k += 1) {
+                sound([0], -20, 0.1);
+                live.onBlock({ at: now, m: -40, peak: -40 });
+            }
+            expect(state().wizard!.verify.residual).toBe(26);
+            await LevelWizard.Instance.streamLevel();
+            // +26 dB asked; the fader stops at its +10 dB.
+            expect(levelToDb(mixer.get('/bus/1/mix/fader')!)).toBeCloseTo(
+                Math.min(10, bus + 26),
+                1
+            );
+        });
+
+        it('an automatic write of Master is refused', async () => {
+            await LevelWizard.Instance.start();
+            writes.length = 0;
+            await expect(
+                (LevelWizard.Instance as any).write('Stream mix', [
+                    { address: '/lr/mix/fader', value: 1 },
+                ])
+            ).rejects.toThrow('Master is not automatic');
+            await expect(
+                (LevelWizard.Instance as any).send('192.168.25.13', [
+                    { address: '/lr/mix/fader', value: 1 },
+                ])
+            ).rejects.toThrow('Master is not automatic');
+            expect(lrWrites()).toEqual([]);
+        });
+
+        it('allowed: the -50 dB start, the operator fader down to off, undo', async () => {
+            jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+            try {
+                await LevelWizard.Instance.start();
+                expect(
+                    lrWrites().map((x) => levelToDb(x.value))[0]
+                ).toBeCloseTo(-50, 1);
+                LevelWizard.Instance.fader(-Infinity);
+                jest.advanceTimersByTime(50);
+                await LevelWizard.Instance.faderDone();
+                expect(mixer.get('/lr/mix/fader')).toBe(0);
+                LevelWizard.Instance.fader(-85);
+                jest.advanceTimersByTime(50);
+                await LevelWizard.Instance.faderDone();
+                expect(levelToDb(mixer.get('/lr/mix/fader')!)).toBeCloseTo(
+                    -85,
+                    0
+                );
+                await LevelWizard.Instance.undoLast();
+                expect(levelToDb(mixer.get('/lr/mix/fader')!)).toBeCloseTo(
+                    -50,
+                    1
+                );
+            } finally {
+                jest.useRealTimers();
+            }
+        });
+    });
+
+    it('check step: talking is the mic input, whatever its fader', async () => {
+        await LevelWizard.Instance.start();
+        await LevelWizard.Instance.go('check');
+        mixer.set('/ch/01/mix/fader', 0);
+        const {live} = LevelWizard.Instance as any;
+        // Nobody talking: stream blocks do not count.
+        for (let k = 0; k < 40; k += 1) {
+            sound([], -90, 0.1);
+            live.onBlock({ at: now + 5000, m: -14, peak: -10 });
+        }
+        expect(state().wizard!.verify.seconds).toBe(0);
+        expect(state().wizard!.verify.residual).toBeNull();
+        // Talking into a mic whose fader is down: counts.
+        for (let k = 0; k < 40; k += 1) {
+            sound([0], -20, 0.1);
+            live.onBlock({ at: now, m: -50, peak: -45 });
+        }
+        expect(state().wizard!.verify.lufs).toBeCloseTo(-50, 5);
+        expect(state().wizard!.verify.residual).toBe(36);
+    });
 });

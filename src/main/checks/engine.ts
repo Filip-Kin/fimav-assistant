@@ -294,9 +294,9 @@ export interface MixerState {
     reachable: boolean;
     streamBus: number;
     streamBusName: string;
-    // Stream bus master fader and main LR fader, dB.
+    // Stream bus master fader, dB. (The LR fader is not read: Master is the
+    // operator's, set by ear, and nothing is worked out from it.)
     streamBusFaderDb?: number;
-    lrFaderDb?: number;
     dj: MixerSource[];
     game: MixerSource[];
     mics: MixerSource[];
@@ -369,7 +369,7 @@ async function readMixer(host: string): Promise<MixerState> {
         `${s.path}/mix/${sendPad}/tap`,
     ]);
     const busFader = `/bus/${streamBus}/mix/fader`;
-    const mix = await queryXair(host, [...mixAddrs, busFader, '/lr/mix/fader']);
+    const mix = await queryXair(host, [...mixAddrs, busFader]);
     sources.forEach((s) => {
         const v = (k: string) => mix.get(`${s.path}/mix/${k}`);
         if (v('on') !== undefined) s.on = Number(v('on')) === 1;
@@ -386,7 +386,6 @@ async function readMixer(host: string): Promise<MixerState> {
         at: Date.now(),
         reachable: true,
         streamBusFaderDb: fdr(busFader),
-        lrFaderDb: fdr('/lr/mix/fader'),
         streamBus,
         streamBusName:
             name(`/bus/${streamBus}/config/name`) || `Bus ${streamBus}`,
@@ -1819,20 +1818,18 @@ export default class Checks extends EventEmitter {
     }
 
     // Whether someone is talking: a mic (the channels readMixer() takes as
-    // mics) over TALK_DB on its input meter, unmuted and sent to the stream
-    // bus. A muted mic or one off the stream bus is not on the stream.
+    // mics) over TALK_DB on its input meter. /meters/1 channel meters are
+    // pre-fader, so this is the voice at the mic, whatever its fader, mute,
+    // send or the bus masters are set to. Someone talking into a mic that is
+    // turned down, muted or off the stream bus is talking: the stream being
+    // quiet then is the problem the loudness check is there to find.
     private noteTalking() {
         const m = this.mixer;
         const levels = this.meters.latest;
         if (!m || !levels.length) return;
         const live = m.mics.some((s) => {
             const raw = levels[s.meter];
-            return (
-                raw !== undefined &&
-                raw >= TALK_DB &&
-                s.on !== false &&
-                (s.streamSendDb === undefined || s.streamSendDb > OFF_DB)
-            );
+            return raw !== undefined && raw >= TALK_DB;
         });
         talkLog.note(this.meters.lastAt, live);
     }
