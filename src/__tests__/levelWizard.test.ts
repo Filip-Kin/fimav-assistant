@@ -494,4 +494,81 @@ describe('level wizard', () => {
             ).toBe(1);
         });
     });
+
+    // Changes made on the mixer itself (desk, X-Air Edit), as /xremote
+    // pushes them: the engine's 'mixer-param' event.
+    describe('following the mixer', () => {
+        const desk = (address: string, value: number) => {
+            mixer.set(address, value);
+            checks.emit('mixer-param', address, value);
+        };
+        const measureAll = async () => {
+            await LevelWizard.Instance.start();
+            sound([0], -20, 6);
+            await LevelWizard.Instance.go('blue');
+            sound([1], -26, 6);
+            await LevelWizard.Instance.go('match');
+            sound([16, 17], -14, 4);
+            await LevelWizard.Instance.go('dj');
+            sound([2, 3], -12, 6);
+            await LevelWizard.Instance.go('stream');
+        };
+        const bus = (id: string) =>
+            state().wizard!.rows.find((r) => r.id === id)!.bus!;
+
+        it('a desk fader move shows at once and the plan follows it', async () => {
+            await measureAll();
+            const plan = state().wizard!.plan!;
+            const red = bus('red');
+            const fader = levelToDb(mixer.get('/ch/01/mix/fader')!);
+            desk('/ch/01/mix/fader', f(fader - 6));
+            // The plan is worked out again: same stream, red's send 6 dB up
+            // to make up for its fader (post-fader send).
+            const again = state().wizard!.plan!;
+            expect(again.lufs).toBeCloseTo(plan.lufs, 1);
+            expect(bus('red')).toBeCloseTo(red, 0);
+            // And a Bus 1 master moved on the desk.
+            desk('/bus/1/mix/fader', f(-3));
+            expect(state().wizard!.plan!.busFrom).toBeCloseTo(-3, 1);
+        });
+
+        it('after Apply, a desk move moves the source on Bus 1', async () => {
+            await measureAll();
+            await LevelWizard.Instance.apply();
+            const red = bus('red');
+            const fader = levelToDb(mixer.get('/ch/01/mix/fader')!);
+            desk('/ch/01/mix/fader', f(fader - 6));
+            expect(bus('red') - red).toBeCloseTo(-6, 0);
+        });
+
+        it("the mixer's echo of the wizard's own write is not the operator", async () => {
+            await LevelWizard.Instance.start();
+            // The -50 dB Master preset echoed back by /xremote.
+            desk('/lr/mix/fader', mixer.get('/lr/mix/fader')!);
+            await LevelWizard.Instance.close(true);
+            expect(levelToDb(mixer.get('/lr/mix/fader')!)).toBeCloseTo(-5, 1);
+        });
+
+        it('Cancel and Undo leave a value the operator moved on the desk', async () => {
+            await LevelWizard.Instance.start();
+            await LevelWizard.Instance.go('blue');
+            // After the wizard set them, the operator rides Master and ch 2.
+            desk('/lr/mix/fader', f(-30));
+            desk('/ch/02/mix/fader', f(-12));
+            await LevelWizard.Instance.undoLast();
+            // The blue step's undo: gain back, ch 2 fader left alone.
+            expect(mixer.get('/headamp/02/gain')).toBe(0.5);
+            expect(mixer.get('/ch/02/mix/fader')).toBe(f(-12));
+            await LevelWizard.Instance.close(true);
+            // Cancel: what the wizard still holds goes back...
+            expect(mixer.get('/headamp/01/gain')).toBe(0.5);
+            expect(levelToDb(mixer.get('/ch/01/mix/fader')!)).toBeCloseTo(
+                -8,
+                1
+            );
+            // ...the operator's Master and ch 2 stay.
+            expect(mixer.get('/lr/mix/fader')).toBe(f(-30));
+            expect(mixer.get('/ch/02/mix/fader')).toBe(f(-12));
+        });
+    });
 });

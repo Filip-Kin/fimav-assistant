@@ -1,5 +1,6 @@
 import dgram from 'dgram';
 import { queryXair, setXair, writeXair } from '../main/checks/xair';
+import XairWatch from '../main/checks/xairWatch';
 import { dbToLevel, FADER_STEPS } from '../utils/xairLaw';
 
 // A fake X-Air: answers a query (address, no arguments) with the value it
@@ -19,9 +20,15 @@ function str(buf: Buffer, at: number): [string, number] {
 function fakeXair(state: Map<string, { t: 'f' | 'i'; v: number }>) {
     const sock = dgram.createSocket('udp4');
     const log: string[] = [];
+    // Clients that asked for /xremote get every change pushed.
+    const remotes: dgram.RemoteInfo[] = [];
     sock.on('message', (msg, rinfo) => {
         const [address, a] = str(msg, 0);
         const [tags, b] = str(msg, a);
+        if (address === '/xremote') {
+            remotes.push(rinfo);
+            return;
+        }
         if (tags === ',') {
             const cur = state.get(address);
             if (!cur) return;
@@ -45,17 +52,35 @@ function fakeXair(state: Map<string, { t: 'f' | 'i'; v: number }>) {
         if (tags === ',i')
             state.set(address, { t: 'i', v: msg.readInt32BE(b) });
     });
-    return new Promise<{ port: number; close: () => void; log: string[] }>(
-        (resolve) => {
-            sock.bind(0, '127.0.0.1', () =>
-                resolve({
-                    port: sock.address().port,
-                    close: () => sock.close(),
-                    log,
-                })
-            );
-        }
-    );
+    // A change made on the desk: stored, and pushed to /xremote clients.
+    const deskMove = (address: string, value: number) => {
+        state.set(address, { t: 'f', v: value });
+        const val = Buffer.alloc(4);
+        val.writeFloatBE(value);
+        const m = Buffer.concat([
+            pad4(Buffer.from(address)),
+            pad4(Buffer.from(',f')),
+            val,
+        ]);
+        remotes.forEach((r) => sock.send(m, r.port, r.address));
+    };
+    return new Promise<{
+        port: number;
+        close: () => void;
+        log: string[];
+        remotes: dgram.RemoteInfo[];
+        deskMove: typeof deskMove;
+    }>((resolve) => {
+        sock.bind(0, '127.0.0.1', () =>
+            resolve({
+                port: sock.address().port,
+                close: () => sock.close(),
+                log,
+                remotes,
+                deskMove,
+            })
+        );
+    });
 }
 
 describe('X-Air OSC writes', () => {
@@ -107,6 +132,33 @@ describe('X-Air OSC writes', () => {
             expect(got.get('/ch/01/mix/fader')).toBeCloseTo(0.6, 6);
             expect(got.has('/ch/09/mix/fader')).toBe(false);
         } finally {
+            x.close();
+        }
+    });
+
+    it('a fader moved on the desk is pushed to the /xremote watch', async () => {
+        const x = await fakeXair(new Map());
+        const watch = new XairWatch();
+        const got: [string, string | number][] = [];
+        const changed = jest.fn();
+        watch.onParam = (a, v) => got.push([a, v]);
+        watch.onChange = changed;
+        try {
+            watch.start('127.0.0.1', x.port);
+            const until = async (ok: () => boolean) => {
+                for (let k = 0; k < 100 && !ok(); k += 1)
+                    // eslint-disable-next-line no-await-in-loop
+                    await new Promise((resolve) => {
+                        setTimeout(resolve, 10);
+                    });
+            };
+            await until(() => x.remotes.length > 0);
+            x.deskMove('/ch/01/mix/fader', 0.625);
+            await until(() => got.length > 0);
+            expect(got).toEqual([['/ch/01/mix/fader', 0.625]]);
+            expect(changed).toHaveBeenCalled();
+        } finally {
+            watch.stop();
             x.close();
         }
     });

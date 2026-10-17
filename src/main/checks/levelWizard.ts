@@ -162,6 +162,9 @@ export type LrWrite = 'preset' | 'operator' | 'restore';
 // Bus send tap: POST (4), after the channel fader.
 export const POST_TAP = 4;
 
+// Two mixer values are the same parameter step (the X-Air sends float32).
+const sameValue = (a: number, b: number) => Math.abs(a - b) < 1e-5;
+
 const FADER_TARGET = {
     red: 'Master',
     blue: 'Blue mic',
@@ -260,6 +263,31 @@ export default class LevelWizard extends EventEmitter {
 
     private vmixTimer: ReturnType<typeof setInterval> | null = null;
 
+    // What the wizard itself last wrote to each parameter. A parameter whose
+    // value has moved off this since (the desk, X-Air Edit, Companion) is
+    // the operator's again: Undo and Cancel leave it where they put it.
+    private written = new Map<string, number>();
+
+    // A parameter pushed by the mixer (/xremote): faders, sends, taps and
+    // the Bus 1 master moved anywhere show here at once, and the stream
+    // plan follows them.
+    private onParam = (address: string, value: string | number) => {
+        if (!this.open || !this.values.has(address)) return;
+        const v = Number(value);
+        if (!Number.isFinite(v)) return;
+        const mine = this.written.get(address);
+        this.values.set(address, v);
+        if (mine !== undefined && sameValue(v, mine)) return;
+        this.written.delete(address);
+        if (this.step === 'stream') this.makePlan();
+    };
+
+    private stillOurs(address: string) {
+        const w = this.written.get(address);
+        const v = this.values.get(address);
+        return w !== undefined && v !== undefined && sameValue(v, w);
+    }
+
     private onMeters = (levels: number[], at: number) =>
         this.meterPacket(levels, at);
 
@@ -282,10 +310,12 @@ export default class LevelWizard extends EventEmitter {
         Checks.Instance.wantMeters('levels', want);
         if (want && !this.timer) {
             Checks.Instance.on('meters', this.onMeters);
+            Checks.Instance.on('mixer-param', this.onParam);
             AutoAV.Instance.on('play', this.onPlay);
             this.timer = setInterval(() => this.publish(), 100);
         } else if (!want && this.timer) {
             Checks.Instance.off('meters', this.onMeters);
+            Checks.Instance.off('mixer-param', this.onParam);
             AutoAV.Instance.off('play', this.onPlay);
             clearInterval(this.timer);
             this.timer = null;
@@ -344,6 +374,7 @@ export default class LevelWizard extends EventEmitter {
         this.error = null;
         this.original.clear();
         this.values.clear();
+        this.written.clear();
         this.ints.clear();
     }
 
@@ -532,7 +563,10 @@ export default class LevelWizard extends EventEmitter {
         const value = dbToLevel(db, FADER_STEPS);
         // The operator's own fader (the only live write of Master).
         const writes = this.faderAddrs().map((a) => ({ address: a, value }));
-        writes.forEach((w) => this.values.set(w.address, w.value));
+        writes.forEach((w) => {
+            this.values.set(w.address, w.value);
+            this.written.set(w.address, w.value);
+        });
         writeXair(host, writes).catch(() => undefined);
     }
 
@@ -594,6 +628,7 @@ export default class LevelWizard extends EventEmitter {
             const v = got.get(w.address);
             if (v === undefined) throw new Error('X-Air did not confirm');
             this.values.set(w.address, Number(v));
+            this.written.set(w.address, Number(v));
         });
         await Checks.Instance.refresh();
     }
@@ -613,8 +648,10 @@ export default class LevelWizard extends EventEmitter {
             if (e === this.dragEntry) this.dragEntry = null;
             const host = mixerHost();
             if (!host) throw new Error('X-Air not answering');
-            log.info(`levels: undo ${e.label}`);
-            await this.send(host, neverDjOnStream(e.writes), 'restore');
+            // Not over a value the operator has set since.
+            const back = e.writes.filter((w) => this.stillOurs(w.address));
+            log.info(`levels: undo ${e.label}`, back);
+            await this.send(host, neverDjOnStream(back), 'restore');
             if (e.busAVolume !== undefined) await this.setBusA(e.busAVolume);
             if (this.step === 'stream') this.makePlan();
         });
@@ -628,8 +665,10 @@ export default class LevelWizard extends EventEmitter {
         const touched = new Set(
             this.undo.flatMap((e) => e.writes.map((w) => w.address))
         );
+        // Only values still as the wizard left them: a fader the operator
+        // moved on the desk since stays where they put it.
         const writes = [...touched]
-            .filter((a) => this.original.has(a))
+            .filter((a) => this.original.has(a) && this.stillOurs(a))
             .map((a) => ({
                 address: a,
                 value: this.original.get(a)!,

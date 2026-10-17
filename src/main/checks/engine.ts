@@ -622,6 +622,10 @@ export default class Checks extends EventEmitter {
         if (process.platform === 'win32') watchStreamSettings(changed());
         this.vmixEvents.start(VmixService.Instance.Host());
         this.mixerWatch.onChange = changed('mixer');
+        // A parameter changed on the mixer (desk, X-Air Edit, Companion):
+        // 'mixer-param' (address, value), for the level wizard.
+        this.mixerWatch.onParam = (address, value) =>
+            this.emit('mixer-param', address, value);
         this.meters.onData = () => {
             this.emit('meters', this.meters.latest, this.meters.lastAt);
             // Talking on the mics: every meter packet (about 50 ms).
