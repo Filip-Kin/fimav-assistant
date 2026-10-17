@@ -726,4 +726,29 @@ describe('level wizard', () => {
             expect(gainOf(4)).toBeCloseTo(30, 5);
         });
     });
+
+    it('check step: the same verdict, -20 LUFS peak -3.9 is no warning', async () => {
+        await LevelWizard.Instance.start();
+        await LevelWizard.Instance.go('check');
+        const { live } = LevelWizard.Instance as any;
+        for (let k = 0; k < 40; k += 1) {
+            sound([0], -20, 0.1);
+            live.onBlock({ at: now, m: -20, peak: -3.9 });
+        }
+        expect(state().wizard!.verify.lufs).toBeCloseTo(-20, 6);
+        expect(state().wizard!.verify).toMatchObject({
+            residual: 2.9,
+            state: 'ok',
+        });
+        // A fresh check: -26 LUFS, peaks -20: +12 dB, a warning.
+        await LevelWizard.Instance.go('check');
+        for (let k = 0; k < 40; k += 1) {
+            sound([0], -20, 0.1);
+            live.onBlock({ at: now, m: -26, peak: -20 });
+        }
+        expect(state().wizard!.verify).toMatchObject({
+            residual: 12,
+            state: 'warning',
+        });
+    });
 });

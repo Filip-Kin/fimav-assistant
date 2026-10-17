@@ -13,7 +13,7 @@ import { levelToDb, queryXair, XairMeters } from './xair';
 import { channelGain, GainControl, gainLevelToDb } from '../../utils/xairLaw';
 import XairWatch from './xairWatch';
 import { MIN_TALK_SECONDS, TALK_DB, talkLog } from './talking';
-import { LUFS_TARGET, levelChange } from './loudness';
+import { streamVerdict } from './loudness';
 import VmixEvents from './vmixEvents';
 import {
     readStreamSettings,
@@ -62,12 +62,13 @@ export type { CheckResult, CheckState } from '../../models/Checks';
 const IGNORE_MS = 6 * 60 * 60 * 1000;
 
 // Stream loudness while someone talks: YouTube turns anything over -14 LUFS
-// down to it and never turns a quieter stream up. Within 5 LU is fine;
-// outside that the warning gives the change to make, in dB.
+// down to it and never turns a quieter stream up. A change to make of up to
+// 5 dB (after the headroom cap below) is fine; over that the warning gives
+// the change, in dB.
 // Peaks over -1 dBTP are "Peaking", and a boost is never more than the
 // headroom left under -1 dBTP, so the advice never makes the stream peak.
-// (LUFS_TARGET, TRUE_PEAK_MAX and the change maths: loudness.ts.)
-const LUFS_TOLERANCE = 5;
+// (The target, the peak limit, the change maths and the 5 dB tolerance:
+// streamVerdict() in loudness.ts.)
 
 // A send or fader at or under this is treated as off.
 const OFF_DB = -40;
@@ -463,37 +464,26 @@ export function loudnessVerdict(
     ]
         .filter(Boolean)
         .join(', ');
-    // Change that brings talking to -14 LUFS (positive is up).
-    const toTarget = lufs !== null ? LUFS_TARGET - lufs : null;
-    const change = levelChange(lufs, peak);
+    const v = streamVerdict(lufs, peak);
 
-    if (change.peaking) {
+    if (v?.peaking) {
         return {
             state: 'warning',
-            detail: `Peaking, Stream audio ${dbChange(change.db!)} (${level})`,
+            detail: `Peaking, Stream audio ${dbChange(v.db!)} (${level})`,
         };
     }
     // No verdict on loudness without enough talking to judge.
     if (!talk?.heard) return { state: 'unknown', detail: 'No mic levels' };
     if (talk.seconds < MIN_TALK_SECONDS)
         return { state: 'unknown', detail: 'Not enough talking' };
-    if (toTarget === null)
-        return { state: 'warning', detail: 'No stream audio, mics live' };
-
-    if (toTarget > LUFS_TOLERANCE) {
-        const boost = change.db!;
+    if (!v) return { state: 'warning', detail: 'No stream audio, mics live' };
+    // Judged on the change shown (streamVerdict), not the gap to -14.
+    if (v.state === 'warning')
         return {
             state: 'warning',
-            detail:
-                boost > 0
-                    ? `Too quiet, Stream audio ${dbChange(boost)} (${level})`
-                    : `Too quiet, no headroom (${level})`,
-        };
-    }
-    if (-toTarget > LUFS_TOLERANCE)
-        return {
-            state: 'warning',
-            detail: `Too loud, Stream audio ${dbChange(change.db!)} (${level})`,
+            detail: `${
+                v.db! > 0 ? 'Too quiet' : 'Too loud'
+            }, Stream audio ${dbChange(v.db!)} (${level})`,
         };
     return { state: 'ok', detail: level };
 }

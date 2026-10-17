@@ -89,6 +89,9 @@ export interface WizardState {
         peak: number | null;
         seconds: number;
         residual: number | null;
+        // The stream loudness verdict on it (streamVerdict, the same as the
+        // match-video check): a change of up to 5 dB is ok.
+        state: 'ok' | 'warning' | null;
     };
     applied: boolean;
     undo: number;

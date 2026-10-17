@@ -21,7 +21,11 @@ import {
     stepStatus,
     StreamMeter,
 } from '../main/checks/levels';
-import { levelChange, parseEbur128Line } from '../main/checks/loudness';
+import {
+    levelChange,
+    parseEbur128Line,
+    streamVerdict,
+} from '../main/checks/loudness';
 
 jest.mock('electron-log', () => ({ warn: jest.fn(), info: jest.fn() }));
 jest.mock('../main/recordings/matchStore', () => ({ updateMatch: jest.fn() }));
@@ -127,6 +131,25 @@ describe('ebur128 line and the change to -14 LUFS', () => {
         // Peaking: the bigger of the peak cut and the loudness cut.
         expect(levelChange(-16, 0.5)).toEqual({ db: -1.5, peaking: true });
         expect(levelChange(null, null)).toEqual({ db: null, peaking: false });
+    });
+
+    it('the verdict is on the change shown, after the headroom cap', () => {
+        // BGRC Q27: -20.0 LUFS, peak -3.9 dBTP: +2.9 dB, no warning.
+        expect(streamVerdict(-20, -3.9)).toEqual({
+            state: 'ok',
+            db: 2.9,
+            peaking: false,
+        });
+        expect(streamVerdict(-25, -10)?.state).toBe('warning');
+        expect(streamVerdict(-9, -2)?.state).toBe('ok');
+        expect(streamVerdict(-8.9, -2)?.state).toBe('warning');
+        // Peaking is a warning whatever the size.
+        expect(streamVerdict(-14, -0.5)).toEqual({
+            state: 'warning',
+            db: -0.5,
+            peaking: true,
+        });
+        expect(streamVerdict(null, null)).toBeNull();
     });
 
     it('no cap on the residual, only the peak limit', () => {

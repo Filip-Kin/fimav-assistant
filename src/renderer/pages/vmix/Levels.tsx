@@ -362,7 +362,7 @@ function CheckStep({ w }: { w: WizardState }) {
                     {v.residual !== null && (
                         <Tag
                             color={
-                                Math.abs(v.residual) < 1 ? 'success' : 'warning'
+                                v.state === 'warning' ? 'warning' : 'success'
                             }
                         >
                             Residual {fmtChange(v.residual)} dB

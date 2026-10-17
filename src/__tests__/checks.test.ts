@@ -951,13 +951,29 @@ describe('stream checks', () => {
         rec({ lufs: -30, truePeak: -12, talk: talk(-22.24) });
         await tick(1);
         loud('Too quiet, Stream audio +8.2 dB (-22.2 LUFS, peak -12.0 dBTP)');
-        // ...but never more than the headroom under -1 dBTP.
+        // Judged on the change shown, after the headroom cap: a boost
+        // capped to 5 dB or less is no warning (BGRC Q27 on FIMVIDEO3:
+        // -20.0 LUFS, peak -3.9 dBTP, +2.9 dB was shown as "Too quiet").
+        rec({ lufs: -30, truePeak: -3.9, talk: talk(-20) });
+        await tick(1);
+        loud('-20.0 LUFS, peak -3.9 dBTP', 'ok');
         rec({ lufs: -30, truePeak: -4.24, talk: talk(-22.24) });
         await tick(1);
-        loud('Too quiet, Stream audio +3.2 dB (-22.2 LUFS, peak -4.2 dBTP)');
+        loud('-22.2 LUFS, peak -4.2 dBTP', 'ok');
         rec({ lufs: -30, truePeak: -1, talk: talk(-22.24) });
         await tick(1);
-        loud('Too quiet, no headroom (-22.2 LUFS, peak -1.0 dBTP)');
+        loud('-22.2 LUFS, peak -1.0 dBTP', 'ok');
+        // Capped, and still over 5 dB: a warning with the capped boost.
+        rec({ lufs: -30, truePeak: -7.5, talk: talk(-24) });
+        await tick(1);
+        loud('Too quiet, Stream audio +6.5 dB (-24.0 LUFS, peak -7.5 dBTP)');
+        // Exactly 5 dB is fine; just over is not.
+        rec({ lufs: -30, truePeak: -20, talk: talk(-19) });
+        await tick(1);
+        loud('-19.0 LUFS, peak -20.0 dBTP', 'ok');
+        rec({ lufs: -30, truePeak: -20, talk: talk(-19.1) });
+        await tick(1);
+        loud('Too quiet, Stream audio +5.1 dB (-19.1 LUFS, peak -20.0 dBTP)');
         // Too loud: the cut to -14.
         rec({ lufs: -8, truePeak: -1.5, talk: talk(-7.9) });
         await tick(1);

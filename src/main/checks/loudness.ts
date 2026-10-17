@@ -114,6 +114,32 @@ export function levelChange(
     return { db: Math.round(toTarget * 10) / 10, peaking: false };
 }
 
+// The stream loudness verdict, one place for the match-video check, the
+// Audio section (which shows that check) and the wizard's check step. It is
+// judged on the change the operator would actually make, the one shown
+// (levelChange: the boost is capped at the headroom under -1 dBTP), not on
+// the raw gap to -14 LUFS: -20 LUFS with peaks at -3.9 dBTP can only go up
+// +2.9 dB, and +2.9 dB is not worth a warning. Within 5 dB is ok; peaking
+// over -1 dBTP is always a warning.
+export const CHANGE_TOLERANCE_DB = 5;
+
+export function streamVerdict(
+    lufs: number | null,
+    peak: number | null
+): {
+    state: 'ok' | 'warning';
+    db: number | null;
+    peaking: boolean;
+} | null {
+    const change = levelChange(lufs, peak);
+    if (change.peaking) return { state: 'warning', ...change };
+    if (change.db === null) return null;
+    return {
+        state: Math.abs(change.db) <= CHANGE_TOLERANCE_DB ? 'ok' : 'warning',
+        ...change,
+    };
+}
+
 // BS.1770 gated loudness of a set of 400 ms block loudnesses, or null when
 // every block is under the absolute gate.
 export function gatedLoudness(ms: number[]): number | null {

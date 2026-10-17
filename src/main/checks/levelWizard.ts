@@ -34,6 +34,7 @@ import {
     StreamPlan,
 } from './levels';
 import LiveLoudness, { LiveBlock } from './liveLoudness';
+import { streamVerdict } from './loudness';
 import {
     GainControl,
     gainDbToLevel,
@@ -985,6 +986,7 @@ export default class LevelWizard extends EventEmitter {
                 peak,
                 seconds: this.verify.seconds,
                 residual: residual(lufs, peak),
+                state: streamVerdict(lufs, peak)?.state ?? null,
             };
         }
         const since = this.appliedAt;
@@ -1008,6 +1010,7 @@ export default class LevelWizard extends EventEmitter {
                     peak,
                     seconds: rec.loudness.talk.seconds,
                     residual: residual(lufs, peak),
+                    state: streamVerdict(lufs, peak)?.state ?? null,
                 };
             }
         }
@@ -1017,6 +1020,7 @@ export default class LevelWizard extends EventEmitter {
             peak: null,
             seconds: this.verify.seconds,
             residual: null,
+            state: null,
         };
     }
 
