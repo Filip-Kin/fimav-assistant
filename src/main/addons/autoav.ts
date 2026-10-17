@@ -283,10 +283,18 @@ export default class AutoAV {
                                     if (released)
                                         this.emitter.emit('match', released);
                                 }
+                                // The whole recording, from when vMix
+                                // started it.
                                 queueLoudness(
                                     saveFolder,
                                     recordId,
                                     filename,
+                                    [
+                                        {
+                                            wallStart: record.startedAt,
+                                            seconds: Infinity,
+                                        },
+                                    ],
                                     (r) => this.emitter.emit('match', r)
                                 );
                             }
@@ -1503,7 +1511,7 @@ export default class AutoAV {
                     // the cut where the original was.
                     fs.renameSync(mainPath, originalPath);
                     moved = true;
-                    await cutMatchVideo(originalPath, cutPath);
+                    const kept = await cutMatchVideo(originalPath, cutPath);
                     // Never rename onto an existing file.
                     if (fs.existsSync(mainPath)) {
                         throw new Error(
@@ -1522,8 +1530,16 @@ export default class AutoAV {
                         },
                     });
                     if (done) this.emitter.emit('match', done);
-                    queueLoudness(folder, recordId, mainPath, (r) =>
-                        this.emitter.emit('match', r)
+                    // The cut's pieces, at the time each was recorded.
+                    queueLoudness(
+                        folder,
+                        recordId,
+                        mainPath,
+                        kept.map((k) => ({
+                            wallStart: rec.startedAt + k.from * 1000,
+                            seconds: k.seconds,
+                        })),
+                        (r) => this.emitter.emit('match', r)
                     );
                     this.logRecording(
                         `Cut ${path.basename(

@@ -11,6 +11,7 @@ import { listMatches } from '../recordings/matchStore';
 import { getStore } from '../store';
 import { levelToDb, queryXair, XairMeters } from './xair';
 import XairWatch from './xairWatch';
+import { MIN_TALK_SECONDS, TALK_DB, talkLog } from './talking';
 import VmixEvents from './vmixEvents';
 import {
     readStreamSettings,
@@ -32,6 +33,7 @@ import {
     setCaptionKey,
 } from './captionsYoutube';
 import { CheckResult, CheckState, isAlerting } from '../../models/Checks';
+import { MatchRecord } from '../../models/MatchRecord';
 
 // Stream and audio checks for a live event. Every check reads state the cart
 // already has (the vMix API, vMix's stream logs, the X-Air over OSC, FMS or
@@ -42,6 +44,7 @@ import { CheckResult, CheckState, isAlerting } from '../../models/Checks';
 //    match start sound window (meters, 500 ms)
 //  - match state: FMS SignalR / FTC Live via AutoAV 'play'
 //  - X-Air: /xremote pushes setting changes; meters pushed during a match
+//    and while vMix records (the mic levels say when someone talks)
 //  - vMix stream/recording settings: its autosave file changing
 //  - hardware pings, Live Captions phase, match manifest: their own events
 // Timers only where a source cannot push: stream logs every 5 s while
@@ -56,10 +59,13 @@ export type { CheckResult, CheckState } from '../../models/Checks';
 
 const IGNORE_MS = 6 * 60 * 60 * 1000;
 
-// Loudness range for the stream (YouTube normalises to about -14 LUFS and
-// wants true peak at or under -1 dBTP; outside this range is a warning).
-const LUFS_LOW = -18;
-const LUFS_HIGH = -11;
+// Stream loudness while someone talks: YouTube turns anything over -14 LUFS
+// down to it and never turns a quieter stream up. Within 5 LU is fine;
+// outside that the warning gives the change to make, in dB.
+// Peaks over -1 dBTP are "Peaking", and a boost is never more than the
+// headroom left under -1 dBTP, so the advice never makes the stream peak.
+const LUFS_TARGET = -14;
+const LUFS_TOLERANCE = 5;
 const TRUE_PEAK_MAX = -1;
 
 // A send or fader at or under this is treated as off.
@@ -380,6 +386,71 @@ function percentile(xs: number[], p: number): number | null {
     return s[Math.min(s.length - 1, Math.floor(p * s.length))];
 }
 
+// A dB change as a label: "+3.2 dB" / "\u22122.1 dB".
+const dbChange = (db: number) =>
+    `${db >= 0 ? '+' : '\u2212'}${Math.abs(db).toFixed(1)} dB`;
+
+// The stream loudness verdict for one measured match video.
+// Peaks are the whole video's true peak: a fader change moves every peak in
+// it, talking or not. Loudness is the gated loudness while someone talked.
+export function loudnessVerdict(
+    loudness: NonNullable<MatchRecord['loudness']>
+): { state: CheckState; detail: string } {
+    const { talk } = loudness;
+    const peak =
+        loudness.truePeak !== null && Number.isFinite(loudness.truePeak)
+            ? loudness.truePeak
+            : null;
+    const lufs = talk?.heard && talk.lufs !== null ? talk.lufs : null;
+    const level = [
+        lufs !== null ? `${lufs.toFixed(1)} LUFS` : null,
+        peak !== null ? `peak ${peak.toFixed(1)} dBTP` : null,
+    ]
+        .filter(Boolean)
+        .join(', ');
+    // Change that brings talking to -14 LUFS (positive is up).
+    const toTarget = lufs !== null ? LUFS_TARGET - lufs : null;
+
+    if (peak !== null && peak > TRUE_PEAK_MAX) {
+        // The cut that brings the peak to -1 dBTP, or the loudness cut if
+        // that is bigger. Rounded up, so the peak ends at or under -1.
+        const cut = Math.max(peak - TRUE_PEAK_MAX, -(toTarget ?? 0));
+        return {
+            state: 'warning',
+            detail: `Peaking, Stream audio ${dbChange(
+                -Math.ceil(cut * 10) / 10
+            )} (${level})`,
+        };
+    }
+    // No verdict on loudness without enough talking to judge.
+    if (!talk?.heard) return { state: 'unknown', detail: 'No mic levels' };
+    if (talk.seconds < MIN_TALK_SECONDS)
+        return { state: 'unknown', detail: 'Not enough talking' };
+    if (toTarget === null)
+        return { state: 'warning', detail: 'No stream audio, mics live' };
+
+    if (toTarget > LUFS_TOLERANCE) {
+        // Never more than the headroom under -1 dBTP; rounded down.
+        const headroom = peak !== null ? TRUE_PEAK_MAX - peak : Infinity;
+        const boost = Math.floor(Math.min(toTarget, headroom) * 10) / 10;
+        return {
+            state: 'warning',
+            detail:
+                boost > 0
+                    ? `Too quiet, Stream audio ${dbChange(boost)} (${level})`
+                    : `Too quiet, no headroom (${level})`,
+        };
+    }
+    if (-toTarget > LUFS_TOLERANCE)
+        return {
+            state: 'warning',
+            detail: `Too loud, Stream audio ${dbChange(
+                Math.round(toTarget * 10) / 10
+            )} (${level})`,
+        };
+    return { state: 'ok', detail: level };
+}
+
 export default class Checks extends EventEmitter {
     private static instance: Checks;
 
@@ -540,6 +611,8 @@ export default class Checks extends EventEmitter {
         this.vmixEvents.start(VmixService.Instance.Host());
         this.mixerWatch.onChange = changed('mixer');
         this.meters.onData = () => {
+            // Talking on the mics: every meter packet (about 50 ms).
+            this.noteTalking();
             // Mic/match-sound balance: a sample per meter packet, at most
             // twice a second.
             const t = Date.now();
@@ -796,13 +869,22 @@ export default class Checks extends EventEmitter {
             this.mixer = await readMixer(host).catch(() => null);
         }
 
-        // Match start/end: buzzer window, meter subscription, balance.
+        // Match start/end: buzzer window, balance.
         const label = match?.label ?? null;
         if (label !== this.lastMatch) {
             if (this.lastMatch) this.endMatch();
             if (label) this.beginMatch(label, host);
             this.lastMatch = label;
         }
+        // X-Air meters while a match is on or vMix records: the balance
+        // and the talking the stream loudness check is judged on.
+        if (
+            host &&
+            this.mixer?.reachable &&
+            (label || (!!this.vmix && truthy(this.vmix.recording)))
+        )
+            this.meters.start(host);
+        else this.meters.stop();
 
         // One SoundVolumeView run a minute (it lists every audio device).
         if (process.platform === 'win32' && now - this.winAudioAt >= 60000) {
@@ -1128,19 +1210,9 @@ export default class Checks extends EventEmitter {
             this.set('stream-loudness', 'unknown', 'No measurement yet');
             return;
         }
-        const { lufs, truePeak } = rec.loudness;
         const name = rec.ftc?.shortName ?? `${rec.level} ${rec.matchNumber}`;
-        const text = `${name}: ${
-            Number.isFinite(lufs) ? lufs.toFixed(1) : '-inf'
-        } LUFS${
-            truePeak !== null && Number.isFinite(truePeak)
-                ? `, peak ${truePeak.toFixed(1)} dBTP`
-                : ''
-        }`;
-        let state: CheckState = 'ok';
-        if (lufs < LUFS_LOW || lufs > LUFS_HIGH) state = 'warning';
-        if (truePeak !== null && truePeak > TRUE_PEAK_MAX) state = 'warning';
-        this.set('stream-loudness', state, text);
+        const v = loudnessVerdict(rec.loudness);
+        this.set('stream-loudness', v.state, `${name}: ${v.detail}`);
     }
 
     private checkMixer() {
@@ -1631,13 +1703,11 @@ export default class Checks extends EventEmitter {
             streaming: !!this.vmix && truthy(this.vmix.streaming),
         };
         if (!host || !this.mixer?.reachable) return;
-        this.meters.start(host);
         // Sampled from the meter packets (meters.onData, set in start()).
         this.balance = { label, mic: [], game: [] };
     }
 
     private endMatch() {
-        this.meters.stop();
         const b = this.balance;
         this.balance = null;
         if (!b) return;
@@ -1705,6 +1775,25 @@ export default class Checks extends EventEmitter {
         const game = best(m.game);
         if (mic.length) b.mic.push(Math.max(...mic));
         if (game.length) b.game.push(Math.max(...game));
+    }
+
+    // Whether someone is talking: a mic (the channels readMixer() takes as
+    // mics) over TALK_DB on its input meter, unmuted and sent to the stream
+    // bus. A muted mic or one off the stream bus is not on the stream.
+    private noteTalking() {
+        const m = this.mixer;
+        const levels = this.meters.latest;
+        if (!m || !levels.length) return;
+        const live = m.mics.some((s) => {
+            const raw = levels[s.meter];
+            return (
+                raw !== undefined &&
+                raw >= TALK_DB &&
+                s.on !== false &&
+                (s.streamSendDb === undefined || s.streamSendDb > OFF_DB)
+            );
+        });
+        talkLog.note(this.meters.lastAt, live);
     }
 
     // #endregion

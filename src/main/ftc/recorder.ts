@@ -16,7 +16,7 @@ import {
     waitForFinishedVideo,
 } from '../cutMatch';
 import { getStore } from '../store';
-import { queueLoudness } from '../checks/loudness';
+import { queueLoudness, WallSegment } from '../checks/loudness';
 
 // FTC match recording. Every match video is the match itself plus its score
 // reveal, with the dead time between cut out. In-season and off-season are the
@@ -617,6 +617,8 @@ export default class FtcRecorder {
         if (!tl) return;
         const { folder } = tl;
         const pieces: { file: string; from: number; seconds: number }[] = [];
+        // When each piece was recorded, for the loudness check.
+        const segments: WallSegment[] = [];
         wins.forEach(([a, b]) => {
             tl.raws.forEach((raw) => {
                 if (!raw.path || raw.end === null) return;
@@ -630,6 +632,7 @@ export default class FtcRecorder {
                     from: (from - raw.start) / 1000,
                     seconds: (to - from) / 1000,
                 });
+                segments.push({ wallStart: from, seconds: (to - from) / 1000 });
             });
         });
 
@@ -672,7 +675,7 @@ export default class FtcRecorder {
                     processing: { state: 'done', outputPath: target },
                 });
                 if (done) this.host.record(done);
-                queueLoudness(folder, r.id, target, (rec) =>
+                queueLoudness(folder, r.id, target, segments, (rec) =>
                     this.host.record(rec)
                 );
                 this.host.log(

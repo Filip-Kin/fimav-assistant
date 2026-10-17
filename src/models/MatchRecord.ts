@@ -23,6 +23,18 @@ export interface MatchProcessing {
     error?: string;
 }
 
+// The video's loudness over the 400 ms blocks in which a mic was live
+// (src/main/checks/loudness.ts).
+export interface MatchTalkLoudness {
+    // The mic levels were read during this video at all.
+    heard: boolean;
+    // Seconds of talking in the video.
+    seconds: number;
+    // Gated loudness (LUFS) of those blocks; null under 3 s of talking, or
+    // when the video was silent the whole time someone talked.
+    lufs: number | null;
+}
+
 // Everything AutoAV knows about a match it recorded. Persisted to the
 // 'recordings' store and surfaced in the Auto AV tab.
 export interface MatchRecord {
@@ -51,8 +63,13 @@ export interface MatchRecord {
 
     // Loudness of the final video's audio (the stream's Bus A mix), measured
     // with ffmpeg's ebur128 once the video is final: integrated LUFS and true
-    // peak in dBTP.
-    loudness?: { lufs: number; truePeak: number | null };
+    // peak in dBTP, and the loudness while someone talked on the mics (absent
+    // on records measured before that existed).
+    loudness?: {
+        lufs: number;
+        truePeak: number | null;
+        talk?: MatchTalkLoudness;
+    };
 
     // FTC matches: FTC Live's short name and field. Their video is made by the
     // FTC recorder (src/main/ftc/recorder.ts), not cut from one recording.

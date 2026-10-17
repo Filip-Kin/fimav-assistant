@@ -19,6 +19,7 @@ import os from 'os';
 import path from 'path';
 import { EventEmitter } from 'events';
 import type { MatchRecord } from '../models/MatchRecord';
+import { queueLoudness } from '../main/checks/loudness';
 
 const SAMPLE = process.env.DCC_SAMPLE ?? '';
 const sleep = (ms: number) =>
@@ -141,10 +142,14 @@ jest.mock('../main/cutMatch', () => {
                     process.env.DCC_SAMPLE &&
                     fs.existsSync(process.env.DCC_SAMPLE)
                 ) {
-                    await real.default(src, out);
-                } else {
-                    fs.writeFileSync(out, 'cut');
+                    return await real.default(src, out);
                 }
+                fs.writeFileSync(out, 'cut');
+                // The match and results kept from a 300 s recording.
+                return [
+                    { from: 0, seconds: 166 },
+                    { from: 284, seconds: 16 },
+                ];
             } finally {
                 fs.readdirSync(root).forEach((n) => seenInRoot.add(n));
                 clearInterval(poll);
@@ -309,11 +314,36 @@ test('two matches back to back: both cut, both released', async () => {
     expect(cutCalls).toBe(2);
 });
 
+test('loudness is lined up with the time each kept piece was recorded', async () => {
+    (queueLoudness as jest.Mock).mockClear();
+    const { a } = newAutoAV();
+    const rec = await stopAndSettle(a, recordAMatch(7));
+    expect(rec.processing?.state).toBe('done');
+    expect(queueLoudness).toHaveBeenCalledWith(
+        rec.saveFolder,
+        rec.id,
+        rec.filePath,
+        [
+            { wallStart: rec.startedAt, seconds: 166 },
+            { wallStart: rec.startedAt + 284000, seconds: 16 },
+        ],
+        expect.any(Function)
+    );
+});
+
 test('auto-cut off: no processing state, ready at once, never cut', async () => {
     cfg['autoAv.autoCut'] = false;
     const { a, emitted } = newAutoAV();
     const rec = await stopAndSettle(a, recordAMatch(5));
     expect(cutCalls).toBe(0);
+    // The whole recording, from when vMix started it.
+    expect(queueLoudness).toHaveBeenLastCalledWith(
+        rec.saveFolder,
+        rec.id,
+        rec.filePath,
+        [{ wallStart: rec.startedAt, seconds: Infinity }],
+        expect.any(Function)
+    );
     expect(rec.processing).toBeUndefined();
     const filed = emitted.find((r) => r.status === 'recorded') as MatchRecord;
     expect(isReadyForUpload(filed)).toBe(true);

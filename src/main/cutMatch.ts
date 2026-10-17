@@ -52,12 +52,14 @@ export interface CutOptions {
 // match + a few seconds after the buzzer) and [last resultsKeep] (the winner
 // animation + results screen), stitched with a frame-accurate re-encode. This
 // mirrors the standalone cut-matches script (libx264 CRF20 + AAC 192k). Short
-// recordings that never had dead time are just re-encoded whole.
+// recordings that never had dead time are just re-encoded whole. Returns the
+// stretches of the source kept, in order (seconds), so the cut can be mapped
+// back to the time it was recorded.
 export default async function cutMatchVideo(
     source: string,
     outPath: string,
     opts: CutOptions = {}
-): Promise<void> {
+): Promise<{ from: number; seconds: number }[]> {
     const matchKeep = opts.matchKeep ?? 166;
     const resultsKeep = opts.resultsKeep ?? 16;
 
@@ -86,11 +88,17 @@ export default async function cutMatchVideo(
     ];
 
     let args: string[];
+    let kept: { from: number; seconds: number }[];
     if (dur <= matchKeep + resultsKeep) {
         // No dead time to cut; re-encode the whole thing.
         args = ['-y', '-v', 'error', '-i', source, ...enc, outPath];
+        kept = [{ from: 0, seconds: dur }];
     } else {
         const startB = (dur - resultsKeep).toFixed(3);
+        kept = [
+            { from: 0, seconds: matchKeep },
+            { from: dur - resultsKeep, seconds: resultsKeep },
+        ];
         const fc =
             `[0:v]trim=0:${matchKeep},setpts=PTS-STARTPTS[v0];` +
             `[0:a]atrim=0:${matchKeep},asetpts=PTS-STARTPTS[a0];` +
@@ -124,6 +132,7 @@ export default async function cutMatchVideo(
     if (!fs.existsSync(outPath)) {
         throw new Error('ffmpeg reported success but produced no output file');
     }
+    return kept;
 }
 
 // Wait until vMix has finished writing a recording. vMix writes the MP4

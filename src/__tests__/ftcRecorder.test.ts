@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import FtcRecorder from '../main/ftc/recorder';
 import { assembleClips, waitForFinishedVideo } from '../main/cutMatch';
+import { queueLoudness } from '../main/checks/loudness';
 import { listMatches } from '../main/recordings/matchStore';
 import { FtcUpdate } from '../models/Ftc';
 
@@ -107,6 +108,7 @@ beforeEach(() => {
     vmixFile = 0;
     logs.length = 0;
     (assembleClips as jest.Mock).mockClear();
+    (queueLoudness as jest.Mock).mockClear();
     recorder = new FtcRecorder({
         event: () => null,
         folder: () => shownFolder,
@@ -142,6 +144,15 @@ describe('FTC recorder', () => {
         const rec = listMatches(folder)[0];
         expect(rec.processing?.state).toBe('done');
         expect(rec.fileName).toBe('2026 Test - Q1.mp4');
+        // Loudness gets each piece's recording time, to line up the mics.
+        const segs = (queueLoudness as jest.Mock).mock.calls[0][3] as {
+            wallStart: number;
+            seconds: number;
+        }[];
+        expect(segs.map((x) => Math.round(x.seconds))).toEqual([163, 16]);
+        expect(Math.round((segs[1].wallStart - segs[0].wallStart) / 1000)).toBe(
+            200
+        );
     });
 
     it('next match starts first: one file runs on, late reveal joins Q1', async () => {

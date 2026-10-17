@@ -1,6 +1,7 @@
 /* eslint-disable max-classes-per-file */
 import Checks from '../main/checks/engine';
 import { decodeReply, levelToDb } from '../main/checks/xair';
+import { talkLog } from '../main/checks/talking';
 import { parseStreamSettings } from '../main/checks/vmixSettings';
 import { setCaptionKey } from '../main/checks/captionsYoutube';
 import VmixService from '../services/VmixService';
@@ -911,19 +912,108 @@ describe('stream checks', () => {
         expect(alerts).toEqual([]);
     });
 
-    it('loudness out of range on the last match', async () => {
-        matches = [
-            {
-                level: 'Qualification',
-                matchNumber: 14,
-                loudness: { lufs: -24.3, truePeak: -3 },
-            },
-        ];
-        await tick(1);
-        expect(get('stream-loudness')).toMatchObject({
-            state: 'warning',
-            detail: 'Qualification 14: -24.3 LUFS, peak -3.0 dBTP',
+    it('loudness is judged only while someone talked', async () => {
+        const rec = (loudness: any) => {
+            matches = [{ level: 'Qualification', matchNumber: 14, loudness }];
+            checks.dirty.loudness = true;
+        };
+        const talk = (lufs: number | null, seconds = 40) => ({
+            heard: true,
+            seconds,
+            lufs,
         });
+        const loud = (detail: string, state = 'warning') =>
+            expect(get('stream-loudness')).toMatchObject({
+                state,
+                detail: `Qualification 14: ${detail}`,
+            });
+        // Measured before talking was tracked, or no mic levels read.
+        rec({ lufs: -24.3, truePeak: -3 });
+        await tick(1);
+        loud('No mic levels', 'unknown');
+        // A silent stream with nobody talking: no verdict, not too quiet.
+        rec({
+            lufs: -40,
+            truePeak: -20,
+            talk: { heard: true, seconds: 1.2, lufs: null },
+        });
+        await tick(1);
+        loud('Not enough talking', 'unknown');
+        // Within 5 LU of -14 is fine, whatever the whole match reads.
+        rec({ lufs: -30, truePeak: -2, talk: talk(-18.6) });
+        await tick(1);
+        loud('-18.6 LUFS, peak -2.0 dBTP', 'ok');
+        rec({ lufs: -10, truePeak: -1.5, talk: talk(-9.5) });
+        await tick(1);
+        loud('-9.5 LUFS, peak -1.5 dBTP', 'ok');
+        // Too quiet: the boost to -14.
+        rec({ lufs: -30, truePeak: -12, talk: talk(-22.24) });
+        await tick(1);
+        loud('Too quiet, Stream audio +8.2 dB (-22.2 LUFS, peak -12.0 dBTP)');
+        // ...but never more than the headroom under -1 dBTP.
+        rec({ lufs: -30, truePeak: -4.24, talk: talk(-22.24) });
+        await tick(1);
+        loud('Too quiet, Stream audio +3.2 dB (-22.2 LUFS, peak -4.2 dBTP)');
+        rec({ lufs: -30, truePeak: -1, talk: talk(-22.24) });
+        await tick(1);
+        loud('Too quiet, no headroom (-22.2 LUFS, peak -1.0 dBTP)');
+        // Too loud: the cut to -14.
+        rec({ lufs: -8, truePeak: -1.5, talk: talk(-7.9) });
+        await tick(1);
+        loud('Too loud, Stream audio \u22126.1 dB (-7.9 LUFS, peak -1.5 dBTP)');
+        // Peaking: the cut that brings the peak to -1 dBTP...
+        rec({ lufs: -16, truePeak: 0.33, talk: talk(-15) });
+        await tick(1);
+        loud('Peaking, Stream audio \u22121.4 dB (-15.0 LUFS, peak 0.3 dBTP)');
+        // ...or the loudness cut when that is bigger.
+        rec({ lufs: -8, truePeak: -0.5, talk: talk(-8) });
+        await tick(1);
+        loud('Peaking, Stream audio \u22126.0 dB (-8.0 LUFS, peak -0.5 dBTP)');
+        // Peaking needs no talking: a fader moves every peak.
+        rec({ lufs: -30, truePeak: 0.2 });
+        await tick(1);
+        loud('Peaking, Stream audio \u22121.2 dB (peak 0.2 dBTP)');
+        // Mics live and the stream silent.
+        rec({ lufs: -70, truePeak: null, talk: talk(null) });
+        await tick(1);
+        loud('No stream audio, mics live');
+    });
+
+    it('talking is a live mic on the stream bus', async () => {
+        await tick(1);
+        talkLog.clear();
+        const t = Date.now();
+        checks.meters.lastAt = t;
+        // Ch 1 (a mic) at -20 dBFS.
+        checks.meters.latest = [-20, -90, -90, -90];
+        checks.noteTalking();
+        expect(talkLog.talk).toEqual([[t, t + 1000]]);
+        // Ch 3 (DJ) loud, mics idle: not talking, but the mics were read.
+        talkLog.clear();
+        checks.meters.latest = [-70, -70, -5, -5];
+        checks.noteTalking();
+        expect(talkLog.talk).toEqual([]);
+        expect(talkLog.heard).toEqual([[t, t]]);
+        // A muted mic is not on the stream.
+        talkLog.clear();
+        mixer.set('/ch/01/mix/on', 0);
+        checks.dirty.mixer = true;
+        await tick(1);
+        checks.meters.latest = [-20, -90, -90, -90];
+        checks.noteTalking();
+        expect(talkLog.talk).toEqual([]);
+    });
+
+    it('mic meters run while vMix records, not only in a match', async () => {
+        const start = jest.spyOn(checks.meters, 'start');
+        const stop = jest.spyOn(checks.meters, 'stop');
+        vmix = fimVmix({ recording: 'True' });
+        await tick(1);
+        expect(start).toHaveBeenCalledWith('192.168.25.13');
+        vmix = fimVmix({ recording: 'False' });
+        stop.mockClear();
+        await tick(1);
+        expect(stop).toHaveBeenCalled();
     });
 
     it('no sound at match start', async () => {
