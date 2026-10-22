@@ -127,11 +127,6 @@ const createWindow = async () => {
         mainWindow.focus();
     });
 
-    mainWindow.on('minimize', (event: any) => {
-        event.preventDefault();
-        mainWindow?.minimize();
-    });
-
     mainWindow.on('close', (event) => {
         if (!appIsQuitting) {
             event.preventDefault();
