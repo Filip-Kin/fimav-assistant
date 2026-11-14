@@ -65,6 +65,14 @@ export type ActionFieldType = 'vmixInput' | 'number' | 'select';
 export interface ActionField {
     key: string;
     label: string;
+    // A 'vmixInput' field is stored as the input's vMix key (GUID), never its
+    // title: the studiocoast-vmix module's own input resolver (data.ts's
+    // getInput, confirmed against the installed v4.2.0) takes a number,
+    // title or key in the same option, and the key is the only one of those
+    // that survives a PowerPoint input's title changing on every slide
+    // ("... - Slide8"). Filip, from a live event where a saved button had
+    // gone dead the moment the slide moved on: "We should definitely be
+    // using the guids."
     type: ActionFieldType;
     options?: { value: string; label: string }[];
     // Companion stores some numbers as strings (wait time); keep its type.
@@ -625,6 +633,60 @@ export function matchActionDef(
             d.definitionId === definitionId &&
             Object.entries(d.fixed ?? {}).every(([k, v]) => options[k] === v)
     );
+}
+
+// A vMix input for the picker: the key to store, title and number to show.
+// `bitfocus:getVmixInputs` returns a list of these (main/bitfocus.ts's
+// vmixInputOptions) instead of plain title strings, so the editor can tell a
+// PowerPoint input apart from its own stale title.
+export interface VmixInputOption {
+    key: string;
+    number: number;
+    title: string;
+}
+
+// vMix appends " - SlideN" to a PowerPoint input's title as the presenter
+// advances it (confirmed live: "2026-27 FTC Sponsor Recognition
+// Powerpoint.pptx - Slide8"); strip it so a title saved mid-presentation
+// still lines up with the same input today.
+const stripSlideSuffix = (title: string) => title.replace(/ - Slide\d+$/, '');
+
+// The current vMix input a saved 'vmixInput' field value refers to, or
+// undefined if nothing matches: a key (the only thing this editor saves from
+// here on) always matches itself; an older build's title, or a title typed
+// straight into the picker, matches by title or number; a title saved while
+// a PowerPoint was on some other slide matches once the slide suffix is
+// ignored on both sides. Used both to flag an unknown input in the picker
+// (ActionRow/FeedbackRow) and to migrate an old title to a key on save
+// (resolveVmixInputValue).
+export function matchVmixInput(
+    value: string,
+    inputs: VmixInputOption[]
+): VmixInputOption | undefined {
+    if (!value) return undefined;
+    return (
+        inputs.find(
+            (i) =>
+                i.key === value ||
+                i.title === value ||
+                String(i.number) === value
+        ) ??
+        inputs.find(
+            (i) => stripSlideSuffix(i.title) === stripSlideSuffix(value)
+        )
+    );
+}
+
+// A saved action/feedback option value, resolved to the matching input's key
+// so the next Save writes a key instead of carrying a stale title forward.
+// No match (vMix has nothing by that name/number/key right now) leaves the
+// value exactly as saved, so the picker keeps flagging it red instead of
+// quietly pointing at the wrong input.
+export function resolveVmixInputValue(
+    value: string,
+    inputs: VmixInputOption[]
+): string {
+    return matchVmixInput(value, inputs)?.key ?? value;
 }
 
 // #endregion
