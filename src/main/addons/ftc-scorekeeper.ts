@@ -48,6 +48,12 @@ export default class FtcScorekeeper extends EventEmitter {
 
     private stopped = true;
 
+    // Matches (number:field) whose SHOW_MATCH arrived. FTC Live sends
+    // SHOW_MATCH before a qualification starts, but in playoffs it goes
+    // straight from SHOW_PREVIEW to MATCH_START (seen at the Chelsea
+    // Qualifier, 2026-11-14), so the Show Match button never fired there.
+    private shownMatches = new Set<string>();
+
     private status: FtcScorekeeperStatus = {
         address: '',
         connected: false,
@@ -200,25 +206,42 @@ export default class FtcScorekeeper extends EventEmitter {
         };
         this.setStatus({ lastUpdate: update });
         this.emit('update', update);
-        this.pressTrigger(update);
+        this.pressTriggers(update);
+    }
+
+    // Press the Companion buttons for this update. A MATCH_START with no
+    // SHOW_MATCH before it (playoffs) first presses the Show Match button,
+    // so the match screen comes up as it does in qualifications.
+    private async pressTriggers(update: FtcUpdate) {
+        const key = `${update.number}:${update.field}`;
+        if (update.type === 'SHOW_MATCH') this.shownMatches.add(key);
+        if (update.type === 'MATCH_START' && !this.shownMatches.has(key)) {
+            await FtcScorekeeper.pressTrigger({
+                ...update,
+                type: 'SHOW_MATCH',
+            });
+        }
+        if (update.type === 'MATCH_START') this.shownMatches.delete(key);
+        await FtcScorekeeper.pressTrigger(update);
     }
 
     // Press the Companion button mapped to this update, if FTC automations are
-    // on. Fire and forget: a missing Companion never affects the stream.
-    // eslint-disable-next-line class-methods-use-this
-    private pressTrigger(update: FtcUpdate) {
+    // on. Never throws: a missing Companion never affects the stream.
+    private static async pressTrigger(update: FtcUpdate): Promise<void> {
         if (!getStore().get('ftc.automations', true)) return;
         const triggers = getStore().get('ftc.triggers', {}) as FtcTriggerMap;
         const loc = triggers[`${update.type}:${update.field}`];
         if (!loc) return;
-        fetch(
-            `${companionUrl()}/api/location/${loc.page}/${loc.row}/${
-                loc.column
-            }/press`,
-            { method: 'POST', signal: AbortSignal.timeout(3000) }
-        ).catch((e) =>
-            logger.warn(`Companion press for ${update.type} failed`, e.message)
-        );
+        try {
+            await fetch(
+                `${companionUrl()}/api/location/${loc.page}/${loc.row}/${
+                    loc.column
+                }/press`,
+                { method: 'POST', signal: AbortSignal.timeout(3000) }
+            );
+        } catch (e: any) {
+            logger.warn(`Companion press for ${update.type} failed`, e.message);
+        }
     }
 
     // Look for a scorekeeper on its own: 10 s after startup (FMS gets a
