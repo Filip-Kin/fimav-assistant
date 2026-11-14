@@ -64,8 +64,8 @@ export default class AudienceDisplayAddon {
 
     public static readonly URL = `http://127.0.0.1:${AudienceDisplayAddon.PORT}`;
 
-    private killExisting() {
-        killByNameAndPort(
+    private async killExisting(): Promise<void> {
+        await killByNameAndPort(
             'audience-display',
             AudienceDisplayAddon.PORT,
             this.logs.out
@@ -108,7 +108,7 @@ export default class AudienceDisplayAddon {
     }
 
     private async doStart(): Promise<boolean> {
-        this.killExisting();
+        await this.killExisting();
 
         // The custom display runs at FRC off-season events when Settings
         // picks it over the official FMS display.
@@ -163,7 +163,8 @@ export default class AudienceDisplayAddon {
     // instance.
     private async launch(exePath: string): Promise<boolean> {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
-            this.killExisting();
+            // eslint-disable-next-line no-await-in-loop
+            await this.killExisting();
 
             // The exe unpacks its UI into ./.temp relative to its working
             // directory, so run it from the userData dir, where the exe lives.
@@ -223,13 +224,13 @@ export default class AudienceDisplayAddon {
             );
         }
 
-        this.killExisting();
+        await this.killExisting();
         return false;
     }
 
     public stop(): Promise<boolean> {
         return this.queue.run(async () => {
-            this.killExisting();
+            await this.killExisting();
             this.phase.set('stopped');
             return true;
         });

@@ -1458,12 +1458,32 @@ export default class Checks extends EventEmitter {
             this.set('windows-audio', 'warning', 'X-Air driver missing');
             return;
         }
-        const id = d.control_id || d.name;
+        // Not control_id ("BEHRINGER X-AIR\Device\OUT 1-2\Render", the full
+        // Command-Line Friendly ID): SoundVolumeView's /SetDefault exits 0
+        // and the X-Air stays not-default against it, confirmed live
+        // 2026-11-14. The setup wizard's own /SetDefault call (HWCheck.ts,
+        // the one actually known to work) has always passed the bare name.
+        const id = d.name;
         const volume = parseInt(String(d.volume_percent).replace('%', ''), 10);
         if (d.default !== 'Render') {
-            this.set('windows-audio', 'critical', 'X-Air OUT 1-2 not default', {
+            // Warning, not critical: recoverable with one click mid-event,
+            // and match-sounds (a separate check) is what actually catches
+            // the audible symptom if this is the cause of it.
+            this.set('windows-audio', 'warning', 'X-Air OUT 1-2 not default', {
                 label: 'Set as default',
-                run: () => setDefaultAudioDevice(id, 'all'),
+                run: async () => {
+                    const ok = await setDefaultAudioDevice(id, 'all');
+                    if (!ok) throw new Error('SoundVolumeView did not exit');
+                    // SoundVolumeView gives no reliable exit code or output
+                    // for a /SetDefault that silently matched nothing: read
+                    // the device back and fail explicitly rather than
+                    // report success on faith.
+                    const after = (
+                        await fetchAndParseAudioDevices(log).catch(() => [])
+                    ).find(isXairOut);
+                    if (after?.default !== 'Render')
+                        throw new Error('X-Air OUT 1-2 still not default');
+                },
             });
         } else if (d.muted) {
             this.set('windows-audio', 'critical', 'X-Air OUT 1-2 muted', {

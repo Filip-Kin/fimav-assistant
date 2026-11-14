@@ -725,14 +725,18 @@ describe('stream checks', () => {
             audioDevices = [xairOut({ default: '' })];
             await tick(1);
             expect(get('windows-audio')).toMatchObject({
-                state: 'critical',
+                state: 'warning',
                 detail: 'X-Air OUT 1-2 not default',
                 fix: 'Set as default',
             });
             audioDevices = [xairOut({ volume_percent: '62.0%' })];
             await checks.fix('windows-audio');
+            // Not control_id ("BEHRINGER X-AIR\Device\OUT 1-2\Render"):
+            // SoundVolumeView's /SetDefault against that never actually
+            // changed the default device, confirmed live 2026-11-14. The
+            // bare name is what the setup wizard has always used.
             expect(setDefaultAudioDevice).toHaveBeenCalledWith(
-                'BEHRINGER X-AIR\\Device\\OUT 1-2\\Render',
+                'OUT 1-2',
                 'all'
             );
             // Re-read straight after the fix.
@@ -758,6 +762,26 @@ describe('stream checks', () => {
                 state: 'unknown',
                 detail: 'SoundVolumeView not answering',
             });
+        } finally {
+            Object.defineProperty(process, 'platform', platform);
+        }
+    });
+
+    // 2026-11-14: SoundVolumeView gives no reliable exit code or output for
+    // a /SetDefault that matched nothing, so the fix must not report success
+    // on the process exiting alone - it has to read the device back.
+    it("Set as default fails loudly when the device didn't actually change", async () => {
+        const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        try {
+            audioDevices = [xairOut({ default: '' })];
+            await tick(1);
+            // setDefaultAudioDevice exits cleanly (its default mock resolves
+            // true) but audioDevices is left unchanged, as if SoundVolumeView
+            // silently no-oped.
+            await expect(checks.fix('windows-audio')).rejects.toThrow(
+                'X-Air OUT 1-2 still not default'
+            );
         } finally {
             Object.defineProperty(process, 'platform', platform);
         }
