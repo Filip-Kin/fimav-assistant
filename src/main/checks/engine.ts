@@ -165,6 +165,15 @@ const DEFS: Def[] = [
         label: 'Recording during match',
     },
     {
+        id: 'recording-folder',
+        group: 'Recording',
+        hint:
+            "FTC's own recorder (cut from vMix's continuous recording by " +
+            'match time) needs a folder to write into; FRC does not - FMS ' +
+            "starts vMix's recorder directly.",
+        label: 'Recording folder',
+    },
+    {
         id: 'recording-bus',
         group: 'Recording',
         label: 'Recording audio source',
@@ -988,6 +997,7 @@ export default class Checks extends EventEmitter {
         this.checkStreamOutput();
         this.checkRecordingBus();
         this.checkRecording(v, match, recording);
+        this.checkRecordingFolder();
         this.checkStreamAudio(v, match, streaming);
         this.checkLoudness();
         this.checkMixer();
@@ -1215,6 +1225,27 @@ export default class Checks extends EventEmitter {
             this.set('recording-match', 'unknown', 'No match');
         } else {
             this.set('recording-match', 'ok', 'Recording');
+        }
+    }
+
+    // Auto AV running with no save folder: FTC's own recorder (ftc/
+    // recorder.ts, cutting matches out of vMix's continuous recording by
+    // time) can't write a match at all without one ("No event folder; FTC
+    // match not recorded", FIMVIDEO3, 2026-11-14 - a cart that had never
+    // started a vMix recording by hand had no fallback folder either).
+    // FRC's recording isn't gated on this: FMS starts vMix's own recorder
+    // directly (startRecording in autoav.ts) whether or not a folder is
+    // set, so this only warns at FTC, where a null folder really blocks it.
+    private checkRecordingFolder() {
+        const st = AutoAV.Instance.getStatus();
+        if (!st.running) {
+            this.set('recording-folder', 'unknown', 'Auto AV not running');
+        } else if (!AutoAV.Instance.isFtc()) {
+            this.set('recording-folder', 'unknown', 'Not used at FRC');
+        } else if (!st.saveFolder) {
+            this.set('recording-folder', 'warning', 'No save folder');
+        } else {
+            this.set('recording-folder', 'ok', 'Set');
         }
     }
 

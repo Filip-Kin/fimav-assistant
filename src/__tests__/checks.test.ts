@@ -28,6 +28,10 @@ let uploaderUsed = false;
 // AutoAV's program and season: FRC off-season unless a test says so.
 let ftc = false;
 let offSeason = true;
+// AutoAV's own on/off switch and effective save folder (null = no folder,
+// the FTC-recording-blocked case).
+let autoAvRunning = true;
+let autoAvSaveFolder: string | null = '/event';
 let upPhase = 'running';
 const upEvents = {
     connected: false,
@@ -105,7 +109,10 @@ jest.mock('../main/addons/autoav', () => ({
             runsUploader: () => uploaderUsed,
             isFtc: () => ftc,
             isOffSeason: () => offSeason,
-            getStatus: () => ({ saveFolder: '/event' }),
+            getStatus: () => ({
+                running: autoAvRunning,
+                saveFolder: autoAvSaveFolder,
+            }),
         },
     },
 }));
@@ -324,6 +331,8 @@ beforeEach(() => {
     uploaderUsed = false;
     ftc = false;
     offSeason = true;
+    autoAvRunning = true;
+    autoAvSaveFolder = '/event';
     upPhase = 'running';
     upEvents.connected = false;
     upEvents.latest.clear();
@@ -349,6 +358,7 @@ beforeEach(() => {
         'stream-bus',
         'stream-output',
         'recording-match',
+        'recording-folder',
         'recording-bus',
         'stream-audio',
         'stream-loudness',
@@ -879,6 +889,41 @@ describe('stream checks', () => {
         expect(get('uploader')).toMatchObject({
             state: 'warning',
             detail: 'YouTube sign-in needed',
+        });
+    });
+
+    // FIMVIDEO3, 2026-11-14: every FTC match logged "No event folder; FTC
+    // match not recorded" with no warning anywhere in the UI.
+    it('no save folder blocks FTC recording, but not FRC', async () => {
+        ftc = true;
+        autoAvSaveFolder = null;
+        await tick(1);
+        expect(get('recording-folder')).toMatchObject({
+            state: 'warning',
+            detail: 'No save folder',
+            fix: null,
+        });
+        autoAvSaveFolder = '/event/2026mimarc';
+        await tick(1);
+        expect(get('recording-folder')).toMatchObject({
+            state: 'ok',
+            detail: 'Set',
+        });
+        // FRC starts vMix's own recorder directly (startRecording in
+        // autoav.ts); it never needed the folder to record, only to file
+        // the match afterwards (the 'uploader' check covers that gap).
+        ftc = false;
+        autoAvSaveFolder = null;
+        await tick(1);
+        expect(get('recording-folder')).toMatchObject({
+            state: 'unknown',
+            detail: 'Not used at FRC',
+        });
+        autoAvRunning = false;
+        await tick(1);
+        expect(get('recording-folder')).toMatchObject({
+            state: 'unknown',
+            detail: 'Auto AV not running',
         });
     });
 
