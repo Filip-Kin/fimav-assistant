@@ -2,9 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import log from 'electron-log';
 import VmixService from '../../services/VmixService';
+import FtcScorekeeper from '../addons/ftc-scorekeeper';
 import Event from '../../models/Event';
 import { TournamentLevel } from '../../models/FMSMatchState';
-import { MatchRecord } from '../../models/MatchRecord';
+import { MatchRecord, MatchTeam } from '../../models/MatchRecord';
 import { FtcUpdate } from '../../models/Ftc';
 import { matchFileName } from '../../utils/recording';
 import { upsertMatch, updateMatch, getMatch } from '../recordings/matchStore';
@@ -371,9 +372,69 @@ export default class FtcRecorder {
                 });
             }
         }
+        // Team numbers are not in the push stream at all; fetch them, but
+        // never hold up recording on it (fire and forget, same as the
+        // Bitfocus press trigger). Skipped for a test match: it is not part
+        // of the official schedule and this endpoint has no match of that
+        // number to find.
+        if (run.level !== 'Match Test') {
+            this.fetchTeams(run.number)
+                .then((teams) => {
+                    if (!teams) return undefined;
+                    const updated = updateMatch(tl.folder, run.id, {
+                        teams,
+                    });
+                    if (updated) this.host.record(updated);
+                    return undefined;
+                })
+                .catch((e) =>
+                    logger.warn(`Could not save teams for ${run.shortName}`, e)
+                );
+        }
         this.host.log(`Scores posted for ${run.shortName}`);
         await this.ensureRecording(now);
         this.schedule();
+    }
+
+    // Team numbers for one match from FTC Live's REST API - the push stream
+    // never carries them. One request per real match, well inside FTC
+    // Live's 30-per-5-minutes-per-event limit (shared by every app at the
+    // event; see the file header).
+    // eslint-disable-next-line class-methods-use-this
+    private async fetchTeams(
+        number: number
+    ): Promise<{ red: MatchTeam[]; blue: MatchTeam[] } | null> {
+        const { address, eventCode } = FtcScorekeeper.Instance.getStatus();
+        if (!address || !eventCode) return null;
+        try {
+            const res = await fetch(
+                `http://${address}/api/v1/events/${eventCode}/matches/${number}/`,
+                { signal: AbortSignal.timeout(4000) }
+            );
+            if (!res.ok) return null;
+            const detail: any = await res.json();
+            const brief = detail?.matchBrief;
+            // ApiV1QualsAlliance (team1/team2) or ApiV1ElimsAlliance
+            // (captain/pick1/pick2) - which one a response actually has
+            // says more reliably than our own Level guess.
+            const allianceTeams = (alliance: any): MatchTeam[] => {
+                if (!alliance) return [];
+                const numbers: number[] =
+                    'team1' in alliance
+                        ? [alliance.team1, alliance.team2]
+                        : [alliance.captain, alliance.pick1, alliance.pick2];
+                return numbers
+                    .filter((n) => typeof n === 'number' && n > 0)
+                    .map((teamNumber) => ({ teamNumber, card: 'None' }));
+            };
+            return {
+                red: allianceTeams(brief?.red),
+                blue: allianceTeams(brief?.blue),
+            };
+        } catch (e) {
+            logger.warn(`Could not fetch teams for match ${number}`, e);
+            return null;
+        }
     }
 
     private async onAbort(u: FtcUpdate, now: number) {
