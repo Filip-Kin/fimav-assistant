@@ -159,7 +159,7 @@ jest.mock('../main/cutMatch', () => {
 });
 
 // eslint-disable-next-line import/first
-import AutoAV from '../main/addons/autoav';
+import AutoAV, { globSafePattern } from '../main/addons/autoav';
 // eslint-disable-next-line import/first
 import isReadyForUpload from '../main/recordings/uploadReady';
 // eslint-disable-next-line import/first
@@ -821,6 +821,25 @@ test('an error after the match is filed keeps its good record (it still uploads)
     expect(rec.status).toBe('recorded');
     expect(rec.filePath).toBeTruthy();
     expect(fs.existsSync(rec.filePath as string)).toBe(true);
+});
+
+// 2026-11-14, FIMVIDEO3: glob (v7, no windowsPathsNoEscape) reads a
+// backslash as its own escape char, so a user.config glob built with
+// path.join's '\' never matched on Windows and this always returned null.
+describe('globSafePattern', () => {
+    it('turns path.join-style backslashes into glob-safe forward slashes', () => {
+        expect(
+            globSafePattern(
+                'C:\\Users\\FIM\\AppData\\Local\\vMix\\vMix*\\*\\user.config'
+            )
+        ).toBe('C:/Users/FIM/AppData/Local/vMix/vMix*/*/user.config');
+    });
+
+    it('leaves an already-posix path alone', () => {
+        expect(globSafePattern('/home/fim/vMix/vMix*/*/user.config')).toBe(
+            '/home/fim/vMix/vMix*/*/user.config'
+        );
+    });
 });
 
 // The uploader runs at off-season events only, FRC or FTC.

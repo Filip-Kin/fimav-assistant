@@ -30,6 +30,7 @@ import AddonControlRow from '../../components/AddonControlRow';
 import {
     ACTION_DEFS,
     ActionDef,
+    ActionField,
     CompanionAction,
     CompanionButton,
     CompanionLayout,
@@ -41,7 +42,10 @@ import {
     FmsAutomationConfig,
     matchActionDef,
     matchFeedbackDef,
+    matchVmixInput,
     migrateLegacyOverlayOptions,
+    resolveVmixInputValue,
+    VmixInputOption,
 } from '../../../models/Bitfocus';
 import {
     FTC_UPDATE_LABELS,
@@ -82,6 +86,11 @@ const defFor = (a: CompanionAction) =>
 
 const defFeedbackFor = (f: CompanionAction) =>
     f.hasExpression ? undefined : matchFeedbackDef(f.definitionId, f.options);
+
+// How a vMix input is shown to the operator in the picker: the number
+// disambiguates two inputs that happen to share a title, same style as the
+// vMix tab's own input dropdowns.
+const vmixInputLabel = (i: VmixInputOption) => `${i.number}. ${i.title}`;
 
 // A button the editor can change: a normal button whose press actions and
 // feedbacks are all in the catalog. Anything else is edited in Companion.
@@ -191,7 +200,7 @@ function ActionRow({
 }: {
     action: EditAction;
     groups: ActionGroup[];
-    vmixInputs: string[];
+    vmixInputs: VmixInputOption[];
     onChange: (_a: EditAction) => void;
     onRemove: () => void;
 }) {
@@ -224,12 +233,16 @@ function ActionRow({
             {def?.fields.map((f) => {
                 const v = action.options[f.key];
                 if (f.type === 'vmixInput') {
-                    // Red, with a tooltip, when vMix has no input by that
-                    // name (only once vMix has answered with its inputs).
+                    // The saved value may be a key already, or (not yet
+                    // saved under this build, or saved while a PowerPoint was
+                    // on a different slide) a title to resolve against
+                    // vMix's current inputs - see matchVmixInput. Red, with a
+                    // tooltip, when nothing matches (only once vMix has
+                    // answered with its inputs).
+                    const match = matchVmixInput(v as string, vmixInputs);
                     const missing =
-                        !!v &&
-                        vmixInputs.length > 0 &&
-                        !vmixInputs.includes(v as string);
+                        !!v && vmixInputs.length > 0 && !match;
+                    const display = match ? vmixInputLabel(match) : (v as string) ?? '';
                     const text = (filterText[f.key] ?? '').toLowerCase();
                     return (
                         <Tooltip
@@ -240,7 +253,7 @@ function ActionRow({
                                 style={{ flex: 1, minWidth: 0 }}
                                 status={missing ? 'error' : undefined}
                                 placeholder={f.label}
-                                value={(v as string) ?? ''}
+                                value={display}
                                 filterOption={false}
                                 onSearch={(x) =>
                                     setFilterText((prev) => ({
@@ -250,11 +263,21 @@ function ActionRow({
                                 }
                                 options={vmixInputs
                                     .filter((i) =>
-                                        i.toLowerCase().includes(text)
+                                        vmixInputLabel(i)
+                                            .toLowerCase()
+                                            .includes(text)
                                     )
-                                    .map((i) => ({ value: i }))}
+                                    .map((i) => ({ value: vmixInputLabel(i) }))}
                                 onChange={(x) => {
-                                    setOpt(f.key, x);
+                                    // A picked option's text is one of the
+                                    // labels above; resolve it back to that
+                                    // input's key. Anything else (free typing
+                                    // that never picked a suggestion) is
+                                    // stored as typed, same as before.
+                                    const picked = vmixInputs.find(
+                                        (i) => vmixInputLabel(i) === x
+                                    );
+                                    setOpt(f.key, picked ? picked.key : x);
                                     setFilterText((prev) => ({
                                         ...prev,
                                         [f.key]: '',
@@ -337,7 +360,7 @@ function FeedbackRow({
 }: {
     feedback: EditFeedback;
     groups: ActionGroup[];
-    vmixInputs: string[];
+    vmixInputs: VmixInputOption[];
     onChange: (_f: EditFeedback) => void;
     onRemove: () => void;
 }) {
@@ -364,10 +387,13 @@ function FeedbackRow({
             {def?.fields.map((f) => {
                 const v = feedback.options[f.key];
                 if (f.type === 'vmixInput') {
+                    // See ActionRow's comment: the saved value may be a key
+                    // or an old/stale title, resolved against vMix's current
+                    // inputs.
+                    const match = matchVmixInput(v as string, vmixInputs);
                     const missing =
-                        !!v &&
-                        vmixInputs.length > 0 &&
-                        !vmixInputs.includes(v as string);
+                        !!v && vmixInputs.length > 0 && !match;
+                    const display = match ? vmixInputLabel(match) : (v as string) ?? '';
                     const text = (filterText[f.key] ?? '').toLowerCase();
                     return (
                         <Tooltip
@@ -378,7 +404,7 @@ function FeedbackRow({
                                 style={{ flex: 1, minWidth: 0 }}
                                 status={missing ? 'error' : undefined}
                                 placeholder={f.label}
-                                value={(v as string) ?? ''}
+                                value={display}
                                 filterOption={false}
                                 onSearch={(x) =>
                                     setFilterText((prev) => ({
@@ -388,11 +414,16 @@ function FeedbackRow({
                                 }
                                 options={vmixInputs
                                     .filter((i) =>
-                                        i.toLowerCase().includes(text)
+                                        vmixInputLabel(i)
+                                            .toLowerCase()
+                                            .includes(text)
                                     )
-                                    .map((i) => ({ value: i }))}
+                                    .map((i) => ({ value: vmixInputLabel(i) }))}
                                 onChange={(x) => {
-                                    setOpt(f.key, x);
+                                    const picked = vmixInputs.find(
+                                        (i) => vmixInputLabel(i) === x
+                                    );
+                                    setOpt(f.key, picked ? picked.key : x);
                                     setFilterText((prev) => ({
                                         ...prev,
                                         [f.key]: '',
@@ -462,7 +493,7 @@ function ButtonEditor({
     cell: { row: number; column: number } | null;
     button: CompanionButton | undefined;
     layout: CompanionLayout | null;
-    vmixInputs: string[];
+    vmixInputs: VmixInputOption[];
     // null while the chosen audience display has not answered
     triggerOptions: TriggerOption[] | null;
     savedTriggers: TriggerId[];
@@ -949,7 +980,7 @@ export default function Bitfocus() {
         null
     );
     const [saving, setSaving] = useState<string | null>(null);
-    const [vmixInputs, setVmixInputs] = useState<string[]>([]);
+    const [vmixInputs, setVmixInputs] = useState<VmixInputOption[]>([]);
     // `${row}/${column}` -> Companion's rendered PNG for that cell, or null
     // once Companion has answered but has nothing to draw.
     const [previewImages, setPreviewImages] = useState<
@@ -1134,6 +1165,17 @@ export default function Bitfocus() {
         ? page?.buttons[`${cell.row}/${cell.column}`]
         : undefined;
 
+    // A field's saved value, migrated if it is a 'vmixInput' field and vMix
+    // has an input matching it right now: an older build's title, or one
+    // whose PowerPoint has since moved slides, becomes that input's key.
+    // Never rewrites a button the operator did not save - this only runs
+    // when Save is actually pressed - and leaves a value nothing matches
+    // exactly as it was.
+    const resolveFieldValue = (f: ActionField, raw: unknown): unknown =>
+        f.type === 'vmixInput' && typeof raw === 'string'
+            ? resolveVmixInputValue(raw, vmixInputs)
+            : raw;
+
     const saveButton = (
         text: string,
         actions: EditAction[],
@@ -1154,7 +1196,10 @@ export default function Bitfocus() {
                     ...Object.fromEntries(
                         def.fields
                             .filter((f) => a.options[f.key] !== undefined)
-                            .map((f) => [f.key, a.options[f.key]])
+                            .map((f) => [
+                                f.key,
+                                resolveFieldValue(f, a.options[f.key]),
+                            ])
                     ),
                     ...def.fixed,
                 },
@@ -1166,7 +1211,10 @@ export default function Bitfocus() {
                 ...Object.fromEntries(
                     def.fields
                         .filter((fl) => f.options[fl.key] !== undefined)
-                        .map((fl) => [fl.key, f.options[fl.key]])
+                        .map((fl) => [
+                            fl.key,
+                            resolveFieldValue(fl, f.options[fl.key]),
+                        ])
                 ),
                 ...def.fixed,
             };

@@ -165,6 +165,15 @@ const DEFS: Def[] = [
         label: 'Recording during match',
     },
     {
+        id: 'recording-folder',
+        group: 'Recording',
+        hint:
+            "FTC's own recorder (cut from vMix's continuous recording by " +
+            'match time) needs a folder to write into; FRC does not - FMS ' +
+            "starts vMix's recorder directly.",
+        label: 'Recording folder',
+    },
+    {
         id: 'recording-bus',
         group: 'Recording',
         label: 'Recording audio source',
@@ -988,6 +997,7 @@ export default class Checks extends EventEmitter {
         this.checkStreamOutput();
         this.checkRecordingBus();
         this.checkRecording(v, match, recording);
+        this.checkRecordingFolder();
         this.checkStreamAudio(v, match, streaming);
         this.checkLoudness();
         this.checkMixer();
@@ -1218,6 +1228,27 @@ export default class Checks extends EventEmitter {
         }
     }
 
+    // Auto AV running with no save folder: FTC's own recorder (ftc/
+    // recorder.ts, cutting matches out of vMix's continuous recording by
+    // time) can't write a match at all without one ("No event folder; FTC
+    // match not recorded", FIMVIDEO3, 2026-11-14 - a cart that had never
+    // started a vMix recording by hand had no fallback folder either).
+    // FRC's recording isn't gated on this: FMS starts vMix's own recorder
+    // directly (startRecording in autoav.ts) whether or not a folder is
+    // set, so this only warns at FTC, where a null folder really blocks it.
+    private checkRecordingFolder() {
+        const st = AutoAV.Instance.getStatus();
+        if (!st.running) {
+            this.set('recording-folder', 'unknown', 'Auto AV not running');
+        } else if (!AutoAV.Instance.isFtc()) {
+            this.set('recording-folder', 'unknown', 'Not used at FRC');
+        } else if (!st.saveFolder) {
+            this.set('recording-folder', 'warning', 'No save folder');
+        } else {
+            this.set('recording-folder', 'ok', 'Set');
+        }
+    }
+
     private checkStreamAudio(
         v: any,
         match: { label: string } | null,
@@ -1427,12 +1458,32 @@ export default class Checks extends EventEmitter {
             this.set('windows-audio', 'warning', 'X-Air driver missing');
             return;
         }
-        const id = d.control_id || d.name;
+        // Not control_id ("BEHRINGER X-AIR\Device\OUT 1-2\Render", the full
+        // Command-Line Friendly ID): SoundVolumeView's /SetDefault exits 0
+        // and the X-Air stays not-default against it, confirmed live
+        // 2026-11-14. The setup wizard's own /SetDefault call (HWCheck.ts,
+        // the one actually known to work) has always passed the bare name.
+        const id = d.name;
         const volume = parseInt(String(d.volume_percent).replace('%', ''), 10);
         if (d.default !== 'Render') {
-            this.set('windows-audio', 'critical', 'X-Air OUT 1-2 not default', {
+            // Warning, not critical: recoverable with one click mid-event,
+            // and match-sounds (a separate check) is what actually catches
+            // the audible symptom if this is the cause of it.
+            this.set('windows-audio', 'warning', 'X-Air OUT 1-2 not default', {
                 label: 'Set as default',
-                run: () => setDefaultAudioDevice(id, 'all'),
+                run: async () => {
+                    const ok = await setDefaultAudioDevice(id, 'all');
+                    if (!ok) throw new Error('SoundVolumeView did not exit');
+                    // SoundVolumeView gives no reliable exit code or output
+                    // for a /SetDefault that silently matched nothing: read
+                    // the device back and fail explicitly rather than
+                    // report success on faith.
+                    const after = (
+                        await fetchAndParseAudioDevices(log).catch(() => [])
+                    ).find(isXairOut);
+                    if (after?.default !== 'Render')
+                        throw new Error('X-Air OUT 1-2 still not default');
+                },
             });
         } else if (d.muted) {
             this.set('windows-audio', 'critical', 'X-Air OUT 1-2 muted', {

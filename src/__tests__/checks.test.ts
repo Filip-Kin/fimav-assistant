@@ -28,6 +28,10 @@ let uploaderUsed = false;
 // AutoAV's program and season: FRC off-season unless a test says so.
 let ftc = false;
 let offSeason = true;
+// AutoAV's own on/off switch and effective save folder (null = no folder,
+// the FTC-recording-blocked case).
+let autoAvRunning = true;
+let autoAvSaveFolder: string | null = '/event';
 let upPhase = 'running';
 const upEvents = {
     connected: false,
@@ -105,7 +109,10 @@ jest.mock('../main/addons/autoav', () => ({
             runsUploader: () => uploaderUsed,
             isFtc: () => ftc,
             isOffSeason: () => offSeason,
-            getStatus: () => ({ saveFolder: '/event' }),
+            getStatus: () => ({
+                running: autoAvRunning,
+                saveFolder: autoAvSaveFolder,
+            }),
         },
     },
 }));
@@ -324,6 +331,8 @@ beforeEach(() => {
     uploaderUsed = false;
     ftc = false;
     offSeason = true;
+    autoAvRunning = true;
+    autoAvSaveFolder = '/event';
     upPhase = 'running';
     upEvents.connected = false;
     upEvents.latest.clear();
@@ -349,6 +358,7 @@ beforeEach(() => {
         'stream-bus',
         'stream-output',
         'recording-match',
+        'recording-folder',
         'recording-bus',
         'stream-audio',
         'stream-loudness',
@@ -715,14 +725,18 @@ describe('stream checks', () => {
             audioDevices = [xairOut({ default: '' })];
             await tick(1);
             expect(get('windows-audio')).toMatchObject({
-                state: 'critical',
+                state: 'warning',
                 detail: 'X-Air OUT 1-2 not default',
                 fix: 'Set as default',
             });
             audioDevices = [xairOut({ volume_percent: '62.0%' })];
             await checks.fix('windows-audio');
+            // Not control_id ("BEHRINGER X-AIR\Device\OUT 1-2\Render"):
+            // SoundVolumeView's /SetDefault against that never actually
+            // changed the default device, confirmed live 2026-11-14. The
+            // bare name is what the setup wizard has always used.
             expect(setDefaultAudioDevice).toHaveBeenCalledWith(
-                'BEHRINGER X-AIR\\Device\\OUT 1-2\\Render',
+                'OUT 1-2',
                 'all'
             );
             // Re-read straight after the fix.
@@ -748,6 +762,26 @@ describe('stream checks', () => {
                 state: 'unknown',
                 detail: 'SoundVolumeView not answering',
             });
+        } finally {
+            Object.defineProperty(process, 'platform', platform);
+        }
+    });
+
+    // 2026-11-14: SoundVolumeView gives no reliable exit code or output for
+    // a /SetDefault that matched nothing, so the fix must not report success
+    // on the process exiting alone - it has to read the device back.
+    it("Set as default fails loudly when the device didn't actually change", async () => {
+        const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        try {
+            audioDevices = [xairOut({ default: '' })];
+            await tick(1);
+            // setDefaultAudioDevice exits cleanly (its default mock resolves
+            // true) but audioDevices is left unchanged, as if SoundVolumeView
+            // silently no-oped.
+            await expect(checks.fix('windows-audio')).rejects.toThrow(
+                'X-Air OUT 1-2 still not default'
+            );
         } finally {
             Object.defineProperty(process, 'platform', platform);
         }
@@ -879,6 +913,41 @@ describe('stream checks', () => {
         expect(get('uploader')).toMatchObject({
             state: 'warning',
             detail: 'YouTube sign-in needed',
+        });
+    });
+
+    // FIMVIDEO3, 2026-11-14: every FTC match logged "No event folder; FTC
+    // match not recorded" with no warning anywhere in the UI.
+    it('no save folder blocks FTC recording, but not FRC', async () => {
+        ftc = true;
+        autoAvSaveFolder = null;
+        await tick(1);
+        expect(get('recording-folder')).toMatchObject({
+            state: 'warning',
+            detail: 'No save folder',
+            fix: null,
+        });
+        autoAvSaveFolder = '/event/2026mimarc';
+        await tick(1);
+        expect(get('recording-folder')).toMatchObject({
+            state: 'ok',
+            detail: 'Set',
+        });
+        // FRC starts vMix's own recorder directly (startRecording in
+        // autoav.ts); it never needed the folder to record, only to file
+        // the match afterwards (the 'uploader' check covers that gap).
+        ftc = false;
+        autoAvSaveFolder = null;
+        await tick(1);
+        expect(get('recording-folder')).toMatchObject({
+            state: 'unknown',
+            detail: 'Not used at FRC',
+        });
+        autoAvRunning = false;
+        await tick(1);
+        expect(get('recording-folder')).toMatchObject({
+            state: 'unknown',
+            detail: 'Auto AV not running',
         });
     });
 
@@ -1200,7 +1269,7 @@ describe('vMix autosave', () => {
         'yt-key'
     )}</Destination0><AudioChannel>10</AudioChannel><AudioChannel1>0</AudioChannel1><Source>1</Source></StreamingSetting>
 </StreamingSettings>
-<RecordingSettings><AudioChannel>10</AudioChannel><Channel>1</Channel></RecordingSettings>
+<RecordingSettings><AudioChannel>10</AudioChannel><Channel>1</Channel><Filename>C:\\Users\\FIM\\Documents\\vMixStorage\\capture.80</Filename></RecordingSettings>
 <RecordingSettings2><Channel>0</Channel></RecordingSettings2>
 <OutputsExternal><Overlay7>1</Overlay7></OutputsExternal>
 <OutputsExternal2><Overlay0>1</Overlay0><Overlay7>0</Overlay7></OutputsExternal2></XML>`;
@@ -1213,7 +1282,29 @@ describe('vMix autosave', () => {
             youtubeKey: 'yt-key',
             recordOutput: 2,
             recordAudioBus: 'Bus A',
+            recordFolder: 'C:\\Users\\FIM\\Documents\\vMixStorage',
         });
+    });
+
+    // 2026-11-14, FIMVIDEO3: vMix 29 has no user.config; recorder 1's
+    // Filename in last.vmix is the only place its record folder exists
+    // while vMix isn't actively recording.
+    it('is null with no Filename (older autosave, or recorder 1 never configured)', () => {
+        const noFilename = xml.replace(
+            /<Filename>.*?<\/Filename>/,
+            ''
+        );
+        expect(parseStreamSettings(noFilename)?.recordFolder).toBeNull();
+    });
+
+    it('decodes an escaped Filename the same way Destination is decoded', () => {
+        const escaped = xml.replace(
+            '<Filename>C:\\Users\\FIM\\Documents\\vMixStorage\\capture.80</Filename>',
+            '<Filename>&lt;C:\\Users\\FIM\\Documents\\vMixStorage\\capture.80&gt;</Filename>'
+        );
+        expect(parseStreamSettings(escaped)?.recordFolder).toBe(
+            '<C:\\Users\\FIM\\Documents\\vMixStorage'
+        );
     });
 });
 

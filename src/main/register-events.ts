@@ -50,6 +50,7 @@ import {
     saveCustomAd,
     saveFmsAutomation,
     stopButtonPreviews,
+    vmixInputOptions,
     watchButtonPreviews,
 } from './bitfocus';
 
@@ -810,7 +811,7 @@ export default function registerAllEvents(window: BrowserWindow | null) {
 
     ipcMain.on('bitfocus:getVmixInputs', (event) =>
         bitfocusReply(event, 'vmixInputs', async () =>
-            (await VmixService.Instance.GetInputs()).map((i) => i.title)
+            vmixInputOptions(await VmixService.Instance.GetInputs())
         )
     );
 

@@ -57,8 +57,12 @@ export default class LiveCaptions {
     // actually bind. This is why the blank screen kept coming back - a leftover
     // instance held 3000, the new one hit EADDRINUSE, and live-captions swallows
     // that exception and sits there serving nothing.
-    private killExisting() {
-        killByNameAndPort('live-captions', LiveCaptions.PORT, this.logs.out);
+    private async killExisting(): Promise<void> {
+        await killByNameAndPort(
+            'live-captions',
+            LiveCaptions.PORT,
+            this.logs.out
+        );
         this.running = false;
         this.process = null;
     }
@@ -101,7 +105,7 @@ export default class LiveCaptions {
     }
 
     private async doStart(): Promise<boolean> {
-        this.killExisting();
+        await this.killExisting();
 
         this.phase.set('updating');
 
@@ -151,7 +155,7 @@ export default class LiveCaptions {
     // Exit handlers are identity-guarded, so the kill firing exit is harmless.
     public stop(): Promise<boolean> {
         return this.queue.run(async () => {
-            this.killExisting();
+            await this.killExisting();
             this.phase.set('stopped');
             return true;
         });
@@ -163,7 +167,8 @@ export default class LiveCaptions {
     private async startLiveCaptions(exePath: string): Promise<boolean> {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
             // Always start from a clean slate: no tracked process, port free.
-            this.killExisting();
+            // eslint-disable-next-line no-await-in-loop
+            await this.killExisting();
 
             // Start the live-captions process directly (NO shell wrapper).
             // shell:true meant `this.process` was a cmd.exe wrapper, so kill()
@@ -222,7 +227,7 @@ export default class LiveCaptions {
 
         // Both attempts failed; leave it stopped and honest so the tab shows a
         // Start button and the log carries the reason.
-        this.killExisting();
+        await this.killExisting();
         return false;
     }
 

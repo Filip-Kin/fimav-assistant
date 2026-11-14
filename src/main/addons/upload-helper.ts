@@ -74,8 +74,8 @@ export default class YoutubeUploaderAddon {
     // name and whatever is LISTENING on port 8807 - the same belt-and-
     // suspenders sweep LiveCaptions uses, so a wedged prior instance can't keep
     // the port and block the next start.
-    private killExisting() {
-        killByNameAndPort(
+    private async killExisting(): Promise<void> {
+        await killByNameAndPort(
             'youtube-tba-upload',
             YoutubeUploaderAddon.PORT,
             this.logs.out
@@ -139,7 +139,7 @@ export default class YoutubeUploaderAddon {
     }
 
     private async doStart(): Promise<boolean> {
-        this.killExisting();
+        await this.killExisting();
 
         // Match-video uploads: FRC off-season, when turned on in Settings.
         if (!AutoAV.Instance.runsUploader()) {
@@ -225,7 +225,8 @@ export default class YoutubeUploaderAddon {
         }
 
         for (let attempt = 1; attempt <= 2; attempt += 1) {
-            this.killExisting();
+            // eslint-disable-next-line no-await-in-loop
+            await this.killExisting();
 
             // Start directly (NO shell wrapper) so this.process is the real exe
             // and kill() takes it down rather than a cmd.exe shell.
@@ -294,7 +295,7 @@ export default class YoutubeUploaderAddon {
             );
         }
 
-        this.killExisting();
+        await this.killExisting();
         return false;
     }
 
@@ -326,7 +327,7 @@ export default class YoutubeUploaderAddon {
         } catch {
             // not reachable / already down - the sweep below handles it
         }
-        this.killExisting();
+        await this.killExisting();
         return true;
     }
 

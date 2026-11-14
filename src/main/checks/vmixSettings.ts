@@ -11,7 +11,10 @@ import path from 'path';
 //     <Source>        stream video source: 0 = Output 1, 1 = Output 2
 //     <Destination0..2> streams 1-3, escaped XML holding <URL> and <Stream>
 //   <RecordingSettings> (recorder 1) <Channel>: 0 = Output 1, 1 = Output 2;
-//     <AudioChannel> as for the stream
+//     <AudioChannel> as for the stream; <Filename> the file recorder 1
+//     writes (or last wrote) - a plain child, not escaped like Destination
+//     above, but decoded the same way anyway in case a future vMix build
+//     wraps it
 //   <OutputsExternal2> (Output 2) <Overlay0>..<Overlay15>: 1 = overlay
 //     channel 1..16 shown on that output.
 
@@ -26,6 +29,10 @@ export interface VmixStreamSettings {
     recordOutput: number | null;
     // Recorder 1's audio source, named as audioBus
     recordAudioBus: string | null;
+    // Directory of recorder 1's configured Filename - vMix's record
+    // destination even while idle, unlike the Web API (which only reports
+    // one while actively recording)
+    recordFolder: string | null;
     // Stream key of the first YouTube destination
     youtubeKey: string | null;
 }
@@ -82,6 +89,19 @@ function recordOutput(xml: string): number | null {
     return ch === null || ch === undefined ? null : ch + 1;
 }
 
+// Recorder 1's Filename, as a directory: split by hand rather than with
+// path.win32/path (last.vmix paths are always Windows paths, but this also
+// runs under Jest on Linux, where path.dirname would use '/' and never find
+// vMix's '\').
+function recordFolderOf(recordingSettingsBody: string): string | null {
+    const m = /<Filename>([^<]*)<\/Filename>/.exec(recordingSettingsBody);
+    if (!m) return null;
+    const file = m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+    if (!file) return null;
+    const i = Math.max(file.lastIndexOf('\\'), file.lastIndexOf('/'));
+    return i > 0 ? file.slice(0, i) : file;
+}
+
 export function parseStreamSettings(xml: string): VmixStreamSettings | null {
     const entry = selectedStream(xml);
     if (!entry) return null;
@@ -94,6 +114,7 @@ export function parseStreamSettings(xml: string): VmixStreamSettings | null {
         youtubeKey: youtubeKey(entry),
         recordOutput: recordOutput(xml),
         recordAudioBus: rec ? busName(field(rec[1], 'AudioChannel')) : null,
+        recordFolder: rec ? recordFolderOf(rec[1]) : null,
     };
 }
 

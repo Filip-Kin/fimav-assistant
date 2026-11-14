@@ -18,6 +18,7 @@ import {
     FmsAutomationConfig,
     matchActionDef,
     matchFeedbackDef,
+    VmixInputOption,
 } from '../models/Bitfocus';
 import { getStore } from './store';
 
@@ -51,6 +52,21 @@ export function companionUrl(): string {
 
 // The custom audience display is run by AudienceDisplayAddon on this machine.
 export const CUSTOM_AD_URL = 'http://127.0.0.1:3001';
+
+// The vMix input picker's own shape (key, number, title), dropping the input
+// `type` VmixService.GetInputs() also carries. `bitfocus:getVmixInputs` used
+// to return a plain title list; a PowerPoint input's title includes its
+// current slide and changes on every one, so a button saved against that
+// title stops matching the moment the slide moves on. The key never changes.
+export function vmixInputOptions(
+    inputs: { key: string; number: number; title: string }[]
+): VmixInputOption[] {
+    return inputs.map((i) => ({
+        key: i.key,
+        number: i.number,
+        title: i.title,
+    }));
+}
 
 // #region Companion read
 
