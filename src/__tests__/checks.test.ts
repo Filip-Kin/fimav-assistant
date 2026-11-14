@@ -1200,7 +1200,7 @@ describe('vMix autosave', () => {
         'yt-key'
     )}</Destination0><AudioChannel>10</AudioChannel><AudioChannel1>0</AudioChannel1><Source>1</Source></StreamingSetting>
 </StreamingSettings>
-<RecordingSettings><AudioChannel>10</AudioChannel><Channel>1</Channel></RecordingSettings>
+<RecordingSettings><AudioChannel>10</AudioChannel><Channel>1</Channel><Filename>C:\\Users\\FIM\\Documents\\vMixStorage\\capture.80</Filename></RecordingSettings>
 <RecordingSettings2><Channel>0</Channel></RecordingSettings2>
 <OutputsExternal><Overlay7>1</Overlay7></OutputsExternal>
 <OutputsExternal2><Overlay0>1</Overlay0><Overlay7>0</Overlay7></OutputsExternal2></XML>`;
@@ -1213,7 +1213,29 @@ describe('vMix autosave', () => {
             youtubeKey: 'yt-key',
             recordOutput: 2,
             recordAudioBus: 'Bus A',
+            recordFolder: 'C:\\Users\\FIM\\Documents\\vMixStorage',
         });
+    });
+
+    // 2026-11-14, FIMVIDEO3: vMix 29 has no user.config; recorder 1's
+    // Filename in last.vmix is the only place its record folder exists
+    // while vMix isn't actively recording.
+    it('is null with no Filename (older autosave, or recorder 1 never configured)', () => {
+        const noFilename = xml.replace(
+            /<Filename>.*?<\/Filename>/,
+            ''
+        );
+        expect(parseStreamSettings(noFilename)?.recordFolder).toBeNull();
+    });
+
+    it('decodes an escaped Filename the same way Destination is decoded', () => {
+        const escaped = xml.replace(
+            '<Filename>C:\\Users\\FIM\\Documents\\vMixStorage\\capture.80</Filename>',
+            '<Filename>&lt;C:\\Users\\FIM\\Documents\\vMixStorage\\capture.80&gt;</Filename>'
+        );
+        expect(parseStreamSettings(escaped)?.recordFolder).toBe(
+            '<C:\\Users\\FIM\\Documents\\vMixStorage'
+        );
     });
 });
 

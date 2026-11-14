@@ -36,6 +36,17 @@ import cutMatchVideo, { enqueueCut } from '../cutMatch';
 import { queueLoudness } from '../checks/loudness';
 import { getStore } from '../store';
 import { invokeExpectResponse, invokeLog } from '../window_components/signalR';
+import { readStreamSettings } from '../checks/vmixSettings';
+
+// glob 7 (the version here; no windowsPathsNoEscape option) treats '\' as
+// its own escape character, not a path separator, so a pattern built with
+// path.join's backslashes never matches on Windows. Glob always accepts '/',
+// including after a drive letter, so normalize to it. Exported so the
+// Windows-only case (path.join only emits '\' when process.platform is
+// win32) can be checked without faking vMix's config folder on a Linux box.
+export function globSafePattern(p: string): string {
+    return p.replace(/\\/g, '/');
+}
 
 // Events AutoAV emits to the renderer: a human status line, a structured
 // status snapshot, a single match-record upsert, and the full match list for
@@ -1242,15 +1253,20 @@ export default class AutoAV {
         this.emitter.emit('eventChanged', { program, code, name });
     }
 
-    // Read vMix's configured recording folder from its .NET user.config (the
-    // Web API only reports it while actively recording). Safe heuristic: a
-    // setting whose NAME contains "record" whose value is an existing directory.
+    // Read vMix's configured recording folder from its .NET user.config
+    // (older vMix only; vMix 29 has no such file - readStreamSettings()'s
+    // last.vmix read, used first in pollVmix, covers it). The Web API only
+    // reports the folder while actively recording. Safe heuristic: a setting
+    // whose NAME contains "record" whose value is an existing directory.
     // Returns null rather than a wrong guess.
     private static readVmixConfigRecordFolder(): string | null {
         try {
             const base = path.join(process.env.LOCALAPPDATA || '', 'vMix');
+            const pattern = globSafePattern(
+                path.join(base, 'vMix*', '*', 'user.config')
+            );
             const files = glob
-                .sync(path.join(base, 'vMix*', '*', 'user.config'))
+                .sync(pattern)
                 .map((f) => ({ f, m: fs.statSync(f).mtimeMs }))
                 .sort((a, b) => b.m - a.m);
             let found: string | null = null;
@@ -1280,8 +1296,9 @@ export default class AutoAV {
             reachable = !!parsed?.vmix;
             recording = parsed?.vmix?.recording?.['#text'] === 'True';
             // vMix reports the record destination as recording.filename1, but
-            // only while actively recording. When idle, fall back to reading its
-            // config file.
+            // only while actively recording. When idle, fall back to its
+            // autosave (last.vmix always has recorder 1's configured
+            // Filename, vMix 29 included), then to the older user.config.
             const file =
                 parsed?.vmix?.recording?.filename1 ??
                 parsed?.vmix?.recording?.filename;
@@ -1292,7 +1309,9 @@ export default class AutoAV {
                 );
                 recordFolder = i > 0 ? file.slice(0, i) : file;
             } else if (!recordFolder) {
-                recordFolder = AutoAV.readVmixConfigRecordFolder();
+                recordFolder =
+                    readStreamSettings()?.recordFolder ??
+                    AutoAV.readVmixConfigRecordFolder();
             }
         } catch {
             reachable = false;
