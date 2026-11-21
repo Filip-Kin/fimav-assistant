@@ -48,6 +48,18 @@ export interface FtcScorekeeperStatus {
     error: string | null;
     // Scorekeepers the last scan found (manual or automatic).
     found: string[];
+    // Codes of the non-archived events listed while no event is pinned in
+    // settings. More than one means the pick was a guess.
+    activeEvents: string[];
+}
+
+// One row of the event dropdown: an event the scorekeeper lists. status and
+// start are null when FTC Live would not give the event's details.
+export interface FtcEventOption {
+    code: string;
+    name: string;
+    status: string | null;
+    start: number | null;
 }
 
 // Bitfocus triggers: "<updateType>:<field>" -> Companion button location.

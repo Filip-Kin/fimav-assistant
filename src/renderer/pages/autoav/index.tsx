@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+    Alert,
     Button,
     Card,
     Empty,
@@ -22,6 +23,7 @@ import {
     FolderOpenOutlined,
     ScissorOutlined,
 } from '@ant-design/icons';
+import { FtcEventOption, FtcScorekeeperStatus } from 'models/Ftc';
 import { AutoAVStatus } from 'models/AutoAVStatus';
 import { MatchRecord, MatchTeam } from 'models/MatchRecord';
 import AddonControlRow from '../../components/AddonControlRow';
@@ -217,19 +219,39 @@ function SettingsDialog({
     // runs this long after the match starts.
     const [matchSeconds, setMatchSeconds] = useState(158);
     const [tailSeconds, setTailSeconds] = useState(5);
+    // Event the scorekeeper is pinned to ('' = automatic) and its event list.
+    const [eventCode, setEventCode] = useState('');
+    const [events, setEvents] = useState<FtcEventOption[]>([]);
+    const [eventsError, setEventsError] = useState<string | null>(null);
 
     useEffect(() => {
         if (!open || !ftc || !window.electron) return undefined;
         const { ipcRenderer } = window.electron;
-        const off = ipcRenderer.on(
+        const offSettings = ipcRenderer.on(
             'ftc:settings',
-            (f: { matchSeconds: number; tailSeconds: number }) => {
+            (f: {
+                matchSeconds: number;
+                tailSeconds: number;
+                eventCode: string;
+            }) => {
                 setMatchSeconds(f.matchSeconds);
                 setTailSeconds(f.tailSeconds);
+                setEventCode(f.eventCode);
+            }
+        );
+        const offEvents = ipcRenderer.on(
+            'ftc:events',
+            (r: { events: FtcEventOption[]; error?: string }) => {
+                setEvents(r.events);
+                setEventsError(r.error ?? null);
             }
         );
         ipcRenderer.sendMessage('ftc:getState', []);
-        return off;
+        ipcRenderer.sendMessage('ftc:listEvents', []);
+        return () => {
+            offSettings();
+            offEvents();
+        };
     }, [open, ftc]);
 
     // Load current settings whenever the dialog opens.
@@ -267,12 +289,12 @@ function SettingsDialog({
         ]);
         if (ftc) {
             window.electron?.ipcRenderer.sendMessage('ftc:saveSettings', [
-                { matchSeconds, tailSeconds },
+                { matchSeconds, tailSeconds, eventCode },
             ]);
         }
         message.success('Saved');
         onClose();
-    }, [form, onClose, ftc, matchSeconds, tailSeconds]);
+    }, [form, onClose, ftc, matchSeconds, tailSeconds, eventCode]);
 
     return (
         <Modal
@@ -290,6 +312,35 @@ function SettingsDialog({
                 disabled={loading}
                 style={{ marginTop: 12 }}
             >
+                {ftc && (
+                    <Form.Item
+                        label="Scorekeeper event"
+                        validateStatus={eventsError ? 'warning' : undefined}
+                        help={
+                            eventsError ? 'Event list unavailable' : undefined
+                        }
+                    >
+                        <Select
+                            value={eventCode}
+                            onChange={setEventCode}
+                            options={[
+                                { value: '', label: 'Automatic' },
+                                ...events.map((e) => ({
+                                    value: e.code,
+                                    label: `${e.name} (${e.code})${
+                                        e.status ? ` · ${e.status}` : ''
+                                    }`,
+                                })),
+                                // A saved code the scorekeeper no longer lists
+                                ...(eventCode &&
+                                !events.some((e) => e.code === eventCode)
+                                    ? [{ value: eventCode, label: eventCode }]
+                                    : []),
+                            ]}
+                        />
+                    </Form.Item>
+                )}
+
                 <Form.Item label="Event name" name="eventNameOverride">
                     <Input placeholder="FMS event name" />
                 </Form.Item>
@@ -368,6 +419,7 @@ export default function AutoAVPage() {
     const [status, setStatus] = useState<AutoAVStatus | null>(null);
     const [matches, setMatches] = useState<MatchRecord[]>([]);
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [activeEvents, setActiveEvents] = useState<string[]>([]);
     const { busy: addonBusy, begin } = useLifecycleBusy(!!status?.running);
 
     useEffect(() => {
@@ -386,9 +438,15 @@ export default function AutoAVPage() {
             setMatches((prev) => mergeMatch(prev, rec))
         );
 
+        const offFtc = ipcRenderer.on('ftc:status', (s: FtcScorekeeperStatus) =>
+            setActiveEvents(s.activeEvents ?? [])
+        );
+
         ipcRenderer.sendMessage('autoav:getState', []);
+        ipcRenderer.sendMessage('ftc:getState', []);
 
         return () => {
+            offFtc();
             offStatus();
             offMatches();
             offMatch();
@@ -494,6 +552,23 @@ export default function AutoAVPage() {
                 onSettings={() => setSettingsOpen(true)}
                 busy={addonBusy}
             />
+            {ftc && activeEvents.length > 1 && (
+                <Alert
+                    type="warning"
+                    showIcon
+                    message={`Multiple active events: ${activeEvents.join(
+                        ', '
+                    )}`}
+                    action={
+                        <Button
+                            size="small"
+                            onClick={() => setSettingsOpen(true)}
+                        >
+                            Select event
+                        </Button>
+                    }
+                />
+            )}
             <div className="autoav-page">
                 <div className="autoav-cards">
                     <Card size="small" title="Status">

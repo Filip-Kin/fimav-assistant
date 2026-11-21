@@ -47,6 +47,10 @@ const pick = async (codes: string[], wanted = '') => {
     return r.code as string;
 };
 
+const active = async (codes: string[], wanted = '') =>
+    (await (FtcScorekeeper as any).pickEvent('http://x', codes, wanted))
+        .active as string[];
+
 describe('FTC Live event selection', () => {
     it('skips an archived event listed first and takes the live one', async () => {
         serve(EVENTS);
@@ -105,5 +109,31 @@ describe('FTC Live event selection', () => {
     it('an empty list is an error', async () => {
         serve(EVENTS);
         await expect(pick([])).rejects.toThrow('No event');
+    });
+
+    it('reports every non-archived event so the UI can warn', async () => {
+        serve({
+            ...EVENTS,
+            usmirhq: { status: 'Qualifications', start: 5 * DAY, end: 6 * DAY },
+        });
+        expect(await active(CODES)).toEqual(['usmirhq', 'usmihoq2']);
+    });
+
+    it('reports one active event when the rest are archived', async () => {
+        serve(EVENTS);
+        expect(await active(CODES)).toEqual(['usmihoq2']);
+    });
+
+    it('does not count an event whose details failed', async () => {
+        serve({ ...EVENTS, usmirhq: 500 });
+        expect(await active(CODES)).toEqual(['usmihoq2']);
+    });
+
+    it('reports nothing when ftc.eventCode pins an event', async () => {
+        serve({
+            ...EVENTS,
+            usmirhq: { status: 'Qualifications', start: 5 * DAY, end: 6 * DAY },
+        });
+        expect(await active(CODES, 'usmihoq2')).toEqual([]);
     });
 });

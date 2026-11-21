@@ -898,6 +898,20 @@ export default function registerAllEvents(window: BrowserWindow | null) {
         return !st.fmsConnected && !st.ftcConnected;
     });
 
+    // The scorekeeper's event list for the event dropdown in Auto AV settings.
+    ipcMain.on('ftc:listEvents', async (event) => {
+        const address = store.get('ftc.address', '').trim();
+        try {
+            if (!address) throw new Error('No scorekeeper address');
+            event.reply('ftc:events', {
+                events: await FtcScorekeeper.listEvents(address),
+            });
+        } catch (e) {
+            log.warn('FTC event list failed', e);
+            event.reply('ftc:events', { events: [], error: String(e) });
+        }
+    });
+
     ipcMain.on('ftc:scan', async (event) => {
         event.reply('ftc:scanResult', await FtcScorekeeper.Instance.scan());
     });

@@ -7,6 +7,7 @@ import { companionUrl } from '../bitfocus';
 import {
     FTC_UPDATE_TYPES,
     FtcScorekeeperStatus,
+    FtcEventOption,
     FtcTriggerMap,
     FtcUpdate,
     FtcUpdateType,
@@ -75,6 +76,7 @@ export default class FtcScorekeeper extends EventEmitter {
         lastUpdate: null,
         error: null,
         found: [],
+        activeEvents: [],
     };
 
     private scanning: Promise<string[]> | null = null;
@@ -137,6 +139,28 @@ export default class FtcScorekeeper extends EventEmitter {
         }
     }
 
+    // The events the scorekeeper lists, for the event dropdown in settings.
+    // Throws when the scorekeeper does not answer.
+    static async listEvents(address: string): Promise<FtcEventOption[]> {
+        const base = `http://${address}`;
+        const res = await fetch(`${base}/api/v1/events/`, {
+            signal: AbortSignal.timeout(4000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const { eventCodes } = (await res.json()) as { eventCodes?: string[] };
+        return Promise.all(
+            (eventCodes ?? []).map(async (code) => {
+                const ev = await FtcScorekeeper.fetchEvent(base, code);
+                return {
+                    code,
+                    name: ev?.name ?? code,
+                    status: ev?.status ?? null,
+                    start: ev?.start ?? null,
+                };
+            })
+        );
+    }
+
     // FTC Live keeps archived events in its list, so list order is not a
     // choice. Order: the ftc.eventCode setting when listed; else the newest
     // start among events that are not Archived (a failed details request
@@ -146,12 +170,13 @@ export default class FtcScorekeeper extends EventEmitter {
         base: string,
         eventCodes: string[],
         wanted: string
-    ): Promise<{ code: string; ev: FtcEventDetails }> {
+    ): Promise<{ code: string; ev: FtcEventDetails; active: string[] }> {
         if (!eventCodes.length) throw new Error('No event on the scorekeeper');
         if (wanted && eventCodes.includes(wanted)) {
             return {
                 code: wanted,
                 ev: (await FtcScorekeeper.fetchEvent(base, wanted)) ?? {},
+                active: [],
             };
         }
         const details = await Promise.all(
@@ -186,7 +211,10 @@ export default class FtcScorekeeper extends EventEmitter {
                     .join(', ')}; picked ${pick.code}: ${why}`
             );
         }
-        return { code: pick.code, ev: pick.ev };
+        // Events a person has to choose between: listed, details known, not
+        // archived. Only meaningful when no event is pinned (see above).
+        const active = live.filter((e) => e.known).map((e) => e.code);
+        return { code: pick.code, ev: pick.ev, active };
     }
 
     private async connect(address: string) {
@@ -200,7 +228,7 @@ export default class FtcScorekeeper extends EventEmitter {
                 eventCodes?: string[];
             };
             const wanted = getStore().get('ftc.eventCode', '').trim();
-            const { code, ev } = await FtcScorekeeper.pickEvent(
+            const { code, ev, active } = await FtcScorekeeper.pickEvent(
                 base,
                 eventCodes ?? [],
                 wanted
@@ -211,6 +239,7 @@ export default class FtcScorekeeper extends EventEmitter {
                 eventName: ev.name ?? code,
                 eventType: ev.type ?? null,
                 fieldCount: Math.max(1, ev.fieldCount ?? 1),
+                activeEvents: active,
                 error: null,
             });
 
