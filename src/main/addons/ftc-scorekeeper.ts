@@ -39,6 +39,17 @@ const PORTS = [80, 8080, 28080];
 
 const logger = log.scope('ftc');
 
+// What GET /api/v1/events/{code}/ returns that event selection uses.
+// start and end are ms since the epoch.
+type FtcEventDetails = {
+    name?: string;
+    type?: string;
+    fieldCount?: number;
+    status?: string;
+    start?: number;
+    end?: number;
+};
+
 export default class FtcScorekeeper extends EventEmitter {
     private static instance: FtcScorekeeper;
 
@@ -110,6 +121,74 @@ export default class FtcScorekeeper extends EventEmitter {
         this.reconnectTimer = setTimeout(() => this.connect(address), 5000);
     }
 
+    // Event details are a nicety: FTC Live answers 500 here until the event
+    // has teams and a schedule, so a failure gives null, never an error.
+    private static async fetchEvent(
+        base: string,
+        code: string
+    ): Promise<FtcEventDetails | null> {
+        try {
+            const r = await fetch(`${base}/api/v1/events/${code}/`, {
+                signal: AbortSignal.timeout(4000),
+            });
+            return r.ok ? ((await r.json()) as FtcEventDetails) : null;
+        } catch {
+            return null;
+        }
+    }
+
+    // FTC Live keeps archived events in its list, so list order is not a
+    // choice. Order: the ftc.eventCode setting when listed; else the newest
+    // start among events that are not Archived (a failed details request
+    // counts as unknown status); else the newest of any status; else list
+    // order.
+    private static async pickEvent(
+        base: string,
+        eventCodes: string[],
+        wanted: string
+    ): Promise<{ code: string; ev: FtcEventDetails }> {
+        if (!eventCodes.length) throw new Error('No event on the scorekeeper');
+        if (wanted && eventCodes.includes(wanted)) {
+            return {
+                code: wanted,
+                ev: (await FtcScorekeeper.fetchEvent(base, wanted)) ?? {},
+            };
+        }
+        const details = await Promise.all(
+            eventCodes.map((c) => FtcScorekeeper.fetchEvent(base, c))
+        );
+        const all = eventCodes.map((code, i) => ({
+            code,
+            ev: details[i] ?? {},
+            known: details[i] !== null,
+        }));
+        const start = (e: { ev: FtcEventDetails }) =>
+            typeof e.ev.start === 'number' ? e.ev.start : -Infinity;
+        // Array.sort is stable, so equal starts keep list order.
+        const newest = (list: typeof all) =>
+            [...list].sort((a, b) => start(b) - start(a))[0];
+        const live = all.filter(
+            (e) => String(e.ev.status ?? '').toLowerCase() !== 'archived'
+        );
+        let pick = all[0];
+        let why = 'list order';
+        if (live.length) {
+            pick = newest(live);
+            why = 'newest start among events that are not archived';
+        } else if (all.some((e) => e.known)) {
+            pick = newest(all);
+            why = 'every event archived, newest start';
+        }
+        if (all.length > 1) {
+            logger.info(
+                `FTC Live lists ${all
+                    .map((e) => `${e.code} (${e.ev.status ?? 'unknown'})`)
+                    .join(', ')}; picked ${pick.code}: ${why}`
+            );
+        }
+        return { code: pick.code, ev: pick.ev };
+    }
+
     private async connect(address: string) {
         try {
             const base = `http://${address}`;
@@ -121,23 +200,11 @@ export default class FtcScorekeeper extends EventEmitter {
                 eventCodes?: string[];
             };
             const wanted = getStore().get('ftc.eventCode', '').trim();
-            const code =
-                wanted && eventCodes?.includes(wanted)
-                    ? wanted
-                    : eventCodes?.[0];
-            if (!code) throw new Error('No event on the scorekeeper');
-
-            // Event details are a nicety: FTC Live answers 500 here until the
-            // event has teams and a schedule, so a failure is not fatal.
-            let ev: { name?: string; type?: string; fieldCount?: number } = {};
-            try {
-                const r = await fetch(`${base}/api/v1/events/${code}/`, {
-                    signal: AbortSignal.timeout(4000),
-                });
-                if (r.ok) ev = await r.json();
-            } catch {
-                // keep the defaults
-            }
+            const { code, ev } = await FtcScorekeeper.pickEvent(
+                base,
+                eventCodes ?? [],
+                wanted
+            );
             if (this.stopped) return;
             this.setStatus({
                 eventCode: code,
